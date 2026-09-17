@@ -1,0 +1,139 @@
+{
+  "summary": {
+    "tool": "security_review",
+    "target": "@deepseek-ai/schemastery",
+    "source": "npm",
+    "name": "@deepseek-ai/schemastery",
+    "version": "3.18.2",
+    "verdict": "BLOCK",
+    "verdictLabel": "建议阻断（未经用户明确批准不得安装）",
+    "score": 9,
+    "blockerCount": 0,
+    "counts": {
+      "high": 3,
+      "medium": 0,
+      "low": 0,
+      "info": 0
+    },
+    "depStats": {
+      "total": 2,
+      "checked": 2,
+      "missing": 0,
+      "typosquat": 0,
+      "low": 0,
+      "unused": 0
+    },
+    "topFindings": [
+      {
+        "rule": "R-EVAL",
+        "level": "high",
+        "file": "package/lib/index.cjs",
+        "line": 42,
+        "detail": "动态求值（eval / 动态 Function / vm 执行）"
+      },
+      {
+        "rule": "R-EVAL",
+        "level": "high",
+        "file": "package/lib/index.mjs",
+        "line": 42,
+        "detail": "动态求值（eval / 动态 Function / vm 执行）"
+      },
+      {
+        "rule": "R-EVAL",
+        "level": "high",
+        "file": "package/src/index.ts",
+        "line": 261,
+        "detail": "动态求值（eval / 动态 Function / vm 执行）"
+      }
+    ],
+    "reportPath": null,
+    "verdictPath": null,
+    "scannedAt": "2026-09-12T03:15:05.298Z",
+    "durationMs": 1570
+  },
+  "meta": {
+    "target": "@deepseek-ai/schemastery",
+    "source": "npm",
+    "name": "@deepseek-ai/schemastery",
+    "version": "3.18.2",
+    "requestedVersion": "3.18.2",
+    "description": "Type driven schema validator",
+    "repository": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "maintainers": [
+      "imccyu",
+      "tianyicui-deepseek"
+    ],
+    "created": "2026-08-10T19:01:54.498Z",
+    "modified": "2026-08-30T13:14:16.882Z",
+    "versionsCount": 4,
+    "tarballUrl": "https://registry.npmjs.org/@deepseek-ai/schemastery/-/schemastery-3.18.2.tgz"
+  },
+  "findings": [
+    {
+      "rule": "R-EVAL",
+      "level": "high",
+      "blocker": false,
+      "file": "package/lib/index.cjs",
+      "line": 42,
+      "snippet": "schema.callback = new Function(\"return \" + schema.callback)();",
+      "detail": "动态求值（eval / 动态 Function / vm 执行）"
+    },
+    {
+      "rule": "R-EVAL",
+      "level": "high",
+      "blocker": false,
+      "file": "package/lib/index.mjs",
+      "line": 42,
+      "snippet": "schema.callback = new Function(\"return \" + schema.callback)();",
+      "detail": "动态求值（eval / 动态 Function / vm 执行）"
+    },
+    {
+      "rule": "R-EVAL",
+      "level": "high",
+      "blocker": false,
+      "file": "package/src/index.ts",
+      "line": 261,
+      "snippet": "schema.callback = new Function('return ' + schema.callback)()",
+      "detail": "动态求值（eval / 动态 Function / vm 执行）"
+    }
+  ],
+  "scripts": [],
+  "depRows": [
+    {
+      "name": "@standard-schema/spec",
+      "spec": "^1.1.0",
+      "kind": "dep",
+      "exists": true,
+      "downloads": 81677657,
+      "note": "",
+      "similarTo": null
+    },
+    {
+      "name": "@deepseek-ai/cosmokit",
+      "spec": "^1.8.3",
+      "kind": "dep",
+      "exists": true,
+      "downloads": 545443,
+      "note": "",
+      "similarTo": null
+    }
+  ],
+  "depStats": {
+    "total": 2,
+    "checked": 2,
+    "missing": 0,
+    "typosquat": 0,
+    "low": 0,
+    "unused": 0
+  },
+  "urls": [
+    {
+      "url": "https://github.com/deepseek-ai/deepseek-harness.git",
+      "file": "package/package.json",
+      "line": 10
+    }
+  ],
+  "binaries": [],
+  "keys": [],
+  "tarWarnings": []
+}

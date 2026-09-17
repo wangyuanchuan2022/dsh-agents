@@ -1,0 +1,41 @@
+# dsh-agents bundle patch：往 profile 的插件花名册里插一行宿主插件。
+# 三个工具（agent_roles / agent_taskbook / agent_spawn）由 lib/index.js 注册；
+# 插件没有浏览器半边（无 WebUI），所以不需要 dsh.client 清单。
+#
+# 安装：dsh plugin --profile <name> add <path-or-git-url>
+# （bundle patch 会自动应用；不要在 profile patch 里重复插这一行——重复 id 会让 loader 崩）
+- insert:
+    - id: dsh-agents
+      name: dsh-agents
+      config:
+        # ── 档位路由表（角色复杂度 → provider + model）──────────────────────
+        # 三档语义：LOW=检索/文档类窄任务，MEDIUM=实现/调试/测试类主力，
+        # HIGH=需求分析/规划/架构/评审类长链条推理。别名 haiku/sonnet/opus 同义。
+        # 默认值按本机 settings.yaml 的已配置 provider 选定；改档只改这里，不必改代码。
+        tiers:
+          LOW:
+            provider: deepseek
+            model: deepseek-flash
+          MEDIUM:
+            provider: glm-pro
+            model: glm-5.3-flash
+          HIGH:
+            provider: deepseek
+            model: deepseek-v4-pro
+        # ── 按角色覆盖档位（可选）───────────────────────────────────────────
+        # 例：让 executor 也用高档模型（角色 id 见 agent_roles 的 list）：
+        # roleOverrides:
+        #   executor:
+        #     provider: deepseek
+        #     model: deepseek-v4-pro
+        # ── 角色会话的 Agent 预设 ──────────────────────────────────────────
+        # 不填 = 走 DSH 默认预设（settings.yaml 的 agent-presets.default，当前 standard）。
+        # defaultPreset: standard
+        # ── 任务书澄清模式缺省值 ───────────────────────────────────────────
+        # interactive=缺参数按 subagent-clarify 协议问组织者；
+        # autonomous=禁提问，按缺省决策表取值（适合无人值守批量派活）。
+        clarifyMode: interactive
+        # 未显式给 evidencePath 时，产出落到 <cwd>/<agentOutSubdir>/<角色id>-<时间戳>.md
+        agentOutSubdir: agent-out
+        # 紧急刹车：false = 禁用 agent_spawn（agent_roles/agent_taskbook 仍可用）
+        allowSpawn: true

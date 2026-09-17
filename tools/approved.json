@@ -1,0 +1,26 @@
+{
+  "approved": [
+    "explore",
+    "analyst",
+    "planner",
+    "architect",
+    "debugger",
+    "executor",
+    "verifier",
+    "tracer",
+    "code-reviewer",
+    "security-reviewer",
+    "critic",
+    "code-simplifier",
+    "test-engineer",
+    "designer",
+    "writer",
+    "qa-tester",
+    "git-master",
+    "document-specialist",
+    "scientist"
+  ],
+  "approvedAt": "2026-09-12",
+  "approvedBy": "user (全部通过)",
+  "source": "review/trans/<id>.md（中文版正文 = 「## 译文」小节）"
+}

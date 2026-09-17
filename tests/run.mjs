@@ -1,0 +1,744 @@
+/**
+ * dsh-agents 直跑测试（node tests/run.mjs）——不用 node --test：
+ * DSH 沙箱内 node 的 pipe 子进程捕获会 EPERM，测试必须单进程直跑。
+ *
+ * 覆盖两层：
+ *  ① 纯逻辑：角色注册表 / 档位路由 / 任务书合成 / 派活前置三问 / 配置校验；
+ *  ② 契约与流程（假宿主）：工具定义是否满足 DSH 硬约束（parameters 单一
+ *     type + 顶层 required、output.schema + render），以及 agent_spawn 从
+ *     组任务书到 agents.create + followup + attach 的完整链路。
+ */
+import assert from 'node:assert/strict'
+import { ROLES, getRole, roleIds, normalizeTier, filterRoles } from '../lib/roles.js'
+import {
+  DEFAULT_TIERS, TIER_INTENT, resolveTierTable, resolveRoleOverrides, resolveRoute, resolveProviderForModel, filterUsableCatalog,
+} from '../lib/routing.js'
+import { composeTaskbook, preflight, stamp, dedupeEvidencePath } from '../lib/taskbook.js'
+import { loadPersona, listPersonaFiles, splitFrontmatter } from '../lib/persona.js'
+import { listPresets } from '../lib/spawn.js'
+import { resolveConfig, apply } from '../lib/index.js'
+import { createTiersApi } from '../lib/settings.js'
+import { CONFIG_ENDPOINT, createConfigHandler } from '../lib/http-config.js'
+import { mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
+
+let passed = 0
+const failures = []
+/** 跑一个断言块，记录失败但继续（一次拿到全部问题）。 */
+function test(title, fn) {
+  try {
+    fn()
+    passed += 1
+  } catch (error) {
+    failures.push(`${title}: ${error.message}`)
+  }
+}
+async function testAsync(title, fn) {
+  try {
+    await fn()
+    passed += 1
+  } catch (error) {
+    failures.push(`${title}: ${error.message}`)
+  }
+}
+
+// ── 假宿主 ────────────────────────────────────────────────────────────────
+/** 构造一个最小 cordis ctx（记录注册的工具、伪造 agents 服务）。
+ * inject 模拟宿主语义：依赖服务都在 ctx 上时同步回调，否则不回调（等挂载）。 */
+function fakeCtx(overrides = {}) {
+  const tools = new Map()
+  const created = []
+  const ctx = {
+    tools: { register: (def) => { tools.set(def.name, def); return () => tools.delete(def.name) } },
+    agents: {
+      create: async (options) => {
+        created.push(options)
+        return { agent: { followup: (msg) => created.push({ followup: msg }) }, dispose: () => {} }
+      },
+    },
+    effect: (fn) => { fn() },
+    inject: (deps, cb) => { if (deps.every((d) => ctx[d] !== undefined)) cb(ctx) },
+    get: (name) => overrides[name],
+  }
+  Object.assign(ctx, overrides)
+  return { ctx, tools, created }
+}
+
+// ── ① 角色注册表 ──────────────────────────────────────────────────────────
+test('角色共 19 个且 id 唯一', () => {
+  assert.equal(ROLES.length, 19)
+  assert.equal(new Set(roleIds()).size, 19)
+  for (const role of ROLES) assert.match(role.id, /^[a-z][a-z0-9-]*$/, `id 不合法：${role.id}`)
+})
+
+test('档位分布与 OMC 原文一致（opus 7 / sonnet 10 / haiku 2）', () => {
+  const byTier = (t) => ROLES.filter((r) => r.tier === t).length
+  assert.equal(byTier('HIGH'), 7, 'HIGH(opus) 数量')
+  assert.equal(byTier('MEDIUM'), 10, 'MEDIUM(sonnet) 数量')
+  assert.equal(byTier('LOW'), 2, 'LOW(haiku) 数量')
+})
+
+test('档位别名与泳道过滤', () => {
+  assert.equal(normalizeTier('haiku'), 'LOW')
+  assert.equal(normalizeTier('SONNET'), 'MEDIUM')
+  assert.equal(normalizeTier('opus'), 'HIGH')
+  assert.equal(normalizeTier('nope'), null)
+  assert.deepEqual(filterRoles({ lane: 'review' }).map((r) => r.id).sort(), ['code-reviewer', 'code-simplifier', 'critic', 'security-reviewer'])
+  assert.deepEqual(filterRoles({ tier: 'haiku' }).map((r) => r.id).sort(), ['explore', 'writer'])
+  assert.equal(filterRoles({ lane: 'build', tier: 'HIGH' }).length, 3) // analyst/planner/architect
+})
+
+test('只读角色集合与 OMC disallowedTools 一致', () => {
+  const readonly = ROLES.filter((r) => r.readonly).map((r) => r.id).sort()
+  assert.deepEqual(readonly, [
+    'analyst', 'architect', 'code-reviewer', 'critic', 'document-specialist',
+    'explore', 'scientist', 'security-reviewer', 'verifier',
+  ])
+})
+
+// ── ② 档位路由 ────────────────────────────────────────────────────────────
+test('档位表缺省回落内置默认、部分覆盖生效', () => {
+  const table = resolveTierTable({ HIGH: { provider: 'glm-pro', model: 'glm-5.3' } })
+  assert.deepEqual(table.HIGH, { provider: 'glm-pro', model: 'glm-5.3' })
+  assert.deepEqual(table.LOW, DEFAULT_TIERS.LOW)
+  assert.deepEqual(table.MEDIUM, DEFAULT_TIERS.MEDIUM)
+})
+
+test('档位表：未知档位键与半个路由都大声失败', () => {
+  assert.throws(() => resolveTierTable({ ULTRA: { provider: 'x', model: 'y' } }), /未知档位/)
+  assert.throws(() => resolveTierTable({ LOW: { provider: 'x' } }), /必须是非空字符串/)
+})
+
+test('角色覆盖表：未知角色报错', () => {
+  assert.throws(
+    () => resolveRoleOverrides({ nosuchrole: { provider: 'a', model: 'b' } }, (id) => getRole(id) !== undefined),
+    /未知角色/,
+  )
+  const ok = resolveRoleOverrides({ executor: { provider: 'deepseek', model: 'deepseek-v4-pro' } }, (id) => getRole(id) !== undefined)
+  assert.deepEqual(ok.executor, { provider: 'deepseek', model: 'deepseek-v4-pro' })
+})
+
+test('路由解析：角色默认档 / 显式档 / 显式路由 / 角色覆盖优先级', () => {
+  const table = resolveTierTable(undefined)
+  const executor = getRole('executor')
+  const base = resolveRoute({ role: executor, tierTable: table })
+  assert.equal(base.tier, 'MEDIUM')
+  assert.deepEqual([base.provider, base.model], [DEFAULT_TIERS.MEDIUM.provider, DEFAULT_TIERS.MEDIUM.model])
+  assert.equal(base.source, 'tier-default')
+  assert.equal(base.overridden, false)
+
+  const raised = resolveRoute({ role: executor, tierTable: table, tier: 'opus' })
+  assert.equal(raised.tier, 'HIGH')
+  assert.equal(raised.source, 'explicit-tier')
+  assert.equal(raised.overridden, true)
+  assert.equal(raised.roleTier, 'MEDIUM')
+
+  const explicit = resolveRoute({ role: executor, tierTable: table, provider: 'glm-pro', model: 'glm-5.3' })
+  assert.equal(explicit.source, 'explicit-route')
+  assert.deepEqual([explicit.provider, explicit.model], ['glm-pro', 'glm-5.3'])
+
+  const half = resolveRoute({ role: executor, tierTable: table, model: 'glm-5.3' })
+  assert.equal(half.source, 'explicit-route')
+  assert.equal(half.provider, null, '只给 model 时 provider 留空，由调用方按名解析')
+  assert.equal(half.model, 'glm-5.3')
+
+  const overrides = resolveRoleOverrides({ executor: { provider: 'deepseek', model: 'deepseek-v4-pro' } }, (id) => getRole(id) !== undefined)
+  const byRole = resolveRoute({ role: executor, tierTable: table, roleOverrides: overrides })
+  assert.equal(byRole.source, 'role-override')
+  assert.equal(byRole.model, 'deepseek-v4-pro')
+
+  const tierWins = resolveRoute({ role: executor, tierTable: table, roleOverrides: overrides, tier: 'LOW' })
+  assert.equal(tierWins.source, 'explicit-tier', '显式档位优先于角色覆盖表')
+  assert.equal(tierWins.tier, 'LOW')
+
+  assert.throws(() => resolveRoute({ role: executor, tierTable: table, tier: 'ULTRA' }), /未知档位/)
+})
+
+test('缺宿主 llm/settings 时按模型名解析安全返回 undefined', async () => {
+  assert.equal(await resolveProviderForModel({}, 'deepseek-flash'), undefined)
+  assert.equal(await resolveProviderForModel({ llm: {}, settings: {} }, 'deepseek-flash'), undefined)
+})
+
+test('可用目录过滤：留有模型的；按适配器名单过滤；名单不可得时不误杀', () => {
+  const full = {
+    'glm-pro': ['glm-5.3-flash'],          // 有适配器有模型 → 留
+    'deepseek': [],                        // 没配模型 → 剔
+    'anthropic': ['claude-x'],             // 无适配器 → 剔
+    'ghost': 'not-array',                  // 脏数据 → 剔
+  }
+  const filtered = filterUsableCatalog(full, ['glm-pro'])
+  assert.deepEqual(filtered, { 'glm-pro': ['glm-5.3-flash'] })
+  // 适配器名单拿不到（null）= 只剔无模型项，保留其余（降级不误杀）
+  assert.deepEqual(filterUsableCatalog(full, null), { 'glm-pro': ['glm-5.3-flash'], anthropic: ['claude-x'] })
+  assert.deepEqual(filterUsableCatalog(undefined, ['x']), {})
+})
+
+// ── ③ 任务书合成 ──────────────────────────────────────────────────────────
+test('任务书含七节 + 工具映射，且钉死档位与模型', () => {
+  const role = getRole('code-reviewer')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const persona = loadPersona(role)
+  const text = composeTaskbook({
+    role, persona, route, tierIntent: TIER_INTENT[route.tier], task: '审查 dsh-agents 的 lib/spawn.js',
+    clarifyMode: 'interactive', evidencePath: 'D:\\tmp\\review.md', organizer: 'session-abc', cwd: 'D:\\tmp',
+  })
+  for (const section of ['## 一、角色卡', '## 二、职责与边界', '## 三、人格细则', '## 四、本次任务', '## 五、交付与验收', '## 六、澄清模式', '## 七、汇报与回收核对', '## 八、Claude Code → DSH 工具映射']) {
+    assert.ok(text.includes(section), `缺小节 ${section}`)
+  }
+  assert.ok(text.includes('**HIGH**'))
+  assert.ok(text.includes(DEFAULT_TIERS.HIGH.model))
+  assert.ok(text.includes('**只读顾问**'), '只读角色必须标注只读边界')
+  assert.ok(text.includes('双条件，缺一即未完成'))
+  assert.ok(text.includes('D:\\tmp\\review.md'))
+  assert.ok(text.includes('session-abc'))
+  assert.ok(text.includes('lsp_diagnostics'), '工具映射表须列出 Claude 专属工具')
+  assert.ok(text.includes('de_broadcast'))
+  assert.ok(text.includes('subagent-clarify'), 'interactive 模式须指向澄清协议技能')
+})
+
+test('autonomous 模式：禁提问 + 缺省决策表（内置兜底 / 调用方覆盖）', () => {
+  const role = getRole('explore')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const persona = loadPersona(role)
+  const auto = composeTaskbook({ role, persona, route, task: '找 X', clarifyMode: 'autonomous' })
+  assert.ok(auto.includes('autonomous（禁提问）'))
+  assert.ok(auto.includes('缺省决策表'))
+  assert.ok(auto.includes('严禁编造事实'))
+  assert.ok(!auto.includes('subagent-clarify'))
+  const custom = composeTaskbook({ role, persona, route, task: '找 X', clarifyMode: 'autonomous', defaults: '| 缺项 | 默认 |\n|---|---|\n| 路径 | /x |' })
+  assert.ok(custom.includes('| 路径 | /x |'))
+})
+
+test('可写角色不标只读', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const text = composeTaskbook({ role, persona: loadPersona(role), route, task: '实现 X' })
+  assert.ok(text.includes('可写实施'))
+  assert.ok(!text.includes('**只读顾问**'))
+})
+
+test('泳道默认交付要求随泳道变化', () => {
+  const review = getRole('critic')
+  const build = getRole('executor')
+  const table = resolveTierTable(undefined)
+  const reviewText = composeTaskbook({ role: review, persona: loadPersona(review), route: resolveRoute({ role: review, tierTable: table }), task: 't' })
+  const buildText = composeTaskbook({ role: build, persona: loadPersona(build), route: resolveRoute({ role: build, tierTable: table }), task: 't' })
+  assert.ok(reviewText.includes('报告落盘'))
+  assert.ok(reviewText.includes('P0/P1/P2'))
+  assert.ok(buildText.includes('证据'))
+})
+
+// ── ④ 派活前置三问 ────────────────────────────────────────────────────────
+test('三问恒为 3 条；副作用动作命中告警；越档有理由位', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const plain = preflight({ role, task: '读 lib/index.js 并总结', route })
+  assert.equal(plain.questions.length, 3)
+  assert.equal(plain.warnings.length, 0)
+
+  const risky = preflight({ role, task: '把改动 git push 到远端并部署', route })
+  assert.ok(risky.warnings.some((w) => w.includes('fail-closed')))
+
+  const raised = preflight({ role, task: 'x', route: { ...route, overridden: true, tier: 'HIGH', roleTier: 'MEDIUM' } })
+  assert.ok(raised.warnings.some((w) => w.includes('越档')))
+})
+
+// ── ⑤ 配置校验 ────────────────────────────────────────────────────────────
+test('配置校验：非法值大声失败，合法值规范化', () => {
+  const ok = resolveConfig({ clarifyMode: 'autonomous', defaultPreset: 'standard', agentOutSubdir: 'out' })
+  assert.equal(ok.clarifyMode, 'autonomous')
+  assert.equal(ok.defaultPreset, 'standard')
+  assert.equal(ok.allowSpawn, true)
+  assert.deepEqual(ok.tiers.HIGH, DEFAULT_TIERS.HIGH)
+  assert.throws(() => resolveConfig({ clarifyMode: 'sometimes' }), /clarifyMode/)
+  assert.throws(() => resolveConfig({ defaultPreset: 'Bad_Id' }), /defaultPreset/)
+  assert.throws(() => resolveConfig({ agentOutSubdir: 'a/b' }), /agentOutSubdir/)
+  assert.throws(() => resolveConfig({ roleOverrides: { ghost: { provider: 'a', model: 'b' } } }), /未知角色/)
+  assert.equal(resolveConfig({ allowSpawn: false }).allowSpawn, false)
+})
+
+// ── ⑥ 人格加载 ────────────────────────────────────────────────────────────
+test('人格未安装时退化为摘要模式且不报错', () => {
+  const role = getRole('executor')
+  const persona = loadPersona(role)
+  assert.equal(typeof persona.text, 'string')
+  assert.ok(persona.text.length > 0)
+  if (!persona.installed) {
+    assert.equal(persona.hash, null)
+    assert.ok(persona.text.includes('人格文件未安装'))
+  }
+  assert.ok(Array.isArray(listPersonaFiles()))
+})
+
+test('时间戳格式（A4：秒精度，防同分钟默认路径撞车）', () => {
+  assert.match(stamp(new Date(2026, 8, 12, 9, 5, 7)), /^20260912-090507$/)
+})
+
+test('splitFrontmatter 循环剥块：连续两段 frontmatter 全部剥除（A-P0-1 回归门）', () => {
+  const raw = [
+    '---', 'role: executor', 'name: Executor', 'tier: MEDIUM', '---', '',
+    '---', 'name: executor', 'model: sonnet', 'level: 2', 'disallowedTools: Write, Edit', '---', '',
+    '<Agent_Prompt>', '  正文开始', '</Agent_Prompt>', '',
+  ].join('\n')
+  const { meta, body } = splitFrontmatter(raw)
+  assert.equal(body, '<Agent_Prompt>\n  正文开始\n</Agent_Prompt>')
+  assert.ok(!body.includes('name:'), '正文不得残留任何 frontmatter 行（19 份双模型声明的根因）')
+  assert.ok(!/\bmodel:/.test(body))
+  assert.ok(!body.includes('disallowedTools'))
+  assert.equal(meta.role, 'executor', '首块（安装器溯源字段）优先生效')
+  assert.equal(meta.name, 'Executor', '首块值不被第二块覆盖')
+  assert.equal(meta.tier, 'MEDIUM')
+})
+
+test('splitFrontmatter：单块剥除与无 frontmatter 原样返回', () => {
+  const single = '---\nrole: x\n---\n\n正文A\n---\n正文B（正文内水平线保留）'
+  const { body } = splitFrontmatter(single)
+  assert.ok(body.startsWith('正文A'))
+  assert.ok(body.includes('正文B'))
+  const plain = '没有 frontmatter 的文本'
+  assert.equal(splitFrontmatter(plain).body, plain)
+})
+
+test('dedupeEvidencePath：目标已存在则追加 -<HHmmss>，同路径两次生成不撞名（A4）', () => {
+  const now = new Date(2026, 8, 13, 10, 20, 30)
+  const existing = new Set([
+    'D:\\w\\agent-out\\executor-20260913-1020.md',
+    'D:\\w\\agent-out\\no-ext',
+  ])
+  const exists = (p) => existing.has(p)
+  const first = dedupeEvidencePath('D:\\w\\agent-out\\executor-20260913-1020.md', exists, now)
+  assert.equal(first, 'D:\\w\\agent-out\\executor-20260913-1020-102030.md', '追加 -<HHmmss> 后缀且保留扩展名')
+  existing.add(first)
+  const second = dedupeEvidencePath(first, exists, new Date(2026, 8, 13, 10, 20, 31))
+  assert.notEqual(second, first, '同一路径两次生成不得撞名')
+  assert.match(second, /-102031\.md$/)
+  assert.equal(dedupeEvidencePath('D:\\w\\agent-out\\fresh.md', exists, now), 'D:\\w\\agent-out\\fresh.md', '不存在时不加后缀')
+  assert.equal(dedupeEvidencePath('D:\\w\\agent-out\\no-ext', exists, now), 'D:\\w\\agent-out\\no-ext-102030', '无扩展名路径直接追加')
+  assert.equal(dedupeEvidencePath('', exists, now), '')
+})
+
+// ── ⑦ 工具契约 + 完整派活链路（假宿主） ───────────────────────────────────
+await testAsync('apply 注册三个工具且满足 DSH 定义契约', async () => {
+  const { ctx, tools } = fakeCtx()
+  apply(ctx, {})
+  assert.deepEqual([...tools.keys()].sort(), ['agent_roles', 'agent_spawn', 'agent_taskbook'])
+  for (const [name, def] of tools) {
+    assert.equal(typeof def.description, 'string', `${name} 缺 description`)
+    assert.equal(def.parameters.type, 'object', `${name} parameters 必须是单一 type=object`)
+    assert.ok(Array.isArray(def.parameters.required) && def.parameters.required.length > 0, `${name} 缺顶层 required`)
+    assert.ok(def.parameters.properties && typeof def.parameters.properties === 'object', `${name} 缺 properties`)
+    assert.equal(typeof def.output?.schema, 'object', `${name} 缺 output.schema`)
+    assert.equal(typeof def.output?.render, 'function', `${name} 缺 output.render`)
+    assert.equal(typeof def.execute, 'function', `${name} 缺 execute`)
+    const rendered = def.output.render({}, { ok: true, now: Date.now() })
+    assert.ok(Array.isArray(rendered) && rendered[0].type === 'text' && typeof rendered[0].text === 'string', `${name} render 必须返回文本块数组`)
+  }
+})
+
+await testAsync('agent_roles：list / show / tiers 三个动作', async () => {
+  const { ctx, tools } = fakeCtx()
+  apply(ctx, {})
+  const list = await tools.get('agent_roles').execute({ action: 'list', lane: 'review' })
+  assert.equal(list.ok, true)
+  assert.equal(list.roles.length, 4)
+  assert.equal(typeof list.now, 'number')
+
+  const show = await tools.get('agent_roles').execute({ action: 'show', role: 'critic' })
+  assert.equal(show.role.tier, 'HIGH')
+  assert.ok(show.role.personaInstalled === true || show.role.personaInstalled === false)
+
+  const bad = await tools.get('agent_roles').execute({ action: 'show', role: 'nope' })
+  assert.equal(bad.ok, false)
+  assert.ok(bad.message.includes('未知角色'))
+
+  const tiers = await tools.get('agent_roles').execute({ action: 'tiers' })
+  assert.deepEqual(tiers.tiers.HIGH, DEFAULT_TIERS.HIGH)
+  assert.equal((await tools.get('agent_roles').execute({ action: 'xyz' })).ok, false)
+})
+
+await testAsync('agent_taskbook：出全文与三问，未知角色/空任务被拒', async () => {
+  const { ctx, tools } = fakeCtx()
+  apply(ctx, {})
+  const tool = tools.get('agent_taskbook')
+  const good = await tool.execute({ role: 'verifier', task: '核对 lib/spawn.js 的完成声明', tier: 'HIGH', tierReason: 'x' })
+  assert.equal(good.ok, true)
+  assert.equal(good.tier, 'HIGH')
+  assert.ok(good.taskbook.includes('Verifier'))
+  assert.equal(good.preflight.length, 3)
+  assert.ok(good.evidencePath === null || typeof good.evidencePath === 'string')
+
+  assert.equal((await tool.execute({ role: 'ghost', task: 'x' })).ok, false)
+  assert.equal((await tool.execute({ role: 'verifier', task: '   ' })).ok, false)
+  assert.equal((await tool.execute({ role: 'verifier', task: 'x', clarifyMode: 'nope' })).ok, false)
+})
+
+await testAsync('agent_spawn：dryRun 不创建；正式派活走 create+followup 并回显档位', async () => {
+  const { ctx, tools, created } = fakeCtx({ workspaceRegistry: undefined })
+  apply(ctx, {})
+  const tool = tools.get('agent_spawn')
+
+  const dry = await tool.execute({ role: 'explore', task: '找 X', dryRun: true })
+  assert.equal(dry.ok, true)
+  assert.equal(dry.dryRun, true)
+  assert.equal(created.length, 0, 'dryRun 不得创建会话')
+  assert.equal(dry.tier, 'LOW')
+  assert.equal(dry.provider, DEFAULT_TIERS.LOW.provider)
+
+  const requester = {
+    options: { provider: 'glm-pro', model: 'glm-5.3-flash' },
+    session: { header: { cwd: 'D:\\tools\\deepsek_harness' }, requestHeader: () => ({ config: { provider: 'glm-pro', model: 'glm-5.3-flash' } }) },
+  }
+  const real = await tool.execute({ role: 'executor', task: '实现 X' }, { agent: requester })
+  assert.equal(real.ok, true)
+  assert.match(real.sessionId, /^session-[0-9a-f-]{36}$/)
+  assert.equal(real.tier, 'MEDIUM')
+  assert.equal(real.provider, DEFAULT_TIERS.MEDIUM.provider)
+  assert.equal(real.model, DEFAULT_TIERS.MEDIUM.model)
+  assert.ok(real.evidencePath.includes('agent-out'), '默认产出路径应落在 agent-out 下')
+
+  const createCall = created[0]
+  assert.equal(createCall.sessionId, real.sessionId)
+  assert.deepEqual(createCall.agentOptions, { provider: DEFAULT_TIERS.MEDIUM.provider, model: DEFAULT_TIERS.MEDIUM.model })
+  assert.equal(createCall.meta.cwd, 'D:\\tools\\deepsek_harness')
+  assert.equal(createCall.seed[0].seq, 0, 'seed 事件 seq 必须从 0 开始')
+  const followup = created.find((entry) => entry.followup)
+  assert.ok(followup, '必须 followup 派发任务书')
+  assert.ok(followup.followup.content[0].text.includes('角色任务书'), '首条消息应是角色任务书')
+  assert.equal(followup.followup.source.kind, 'user')
+})
+
+await testAsync('agent_spawn：越档记理由、allowSpawn=false 拦停、预设校验', async () => {
+  const { ctx, tools, created } = fakeCtx()
+  apply(ctx, { allowSpawn: false })
+  const denied = await tools.get('agent_spawn').execute({ role: 'executor', task: 'x' })
+  assert.equal(denied.ok, false)
+  assert.ok(denied.message.includes('allowSpawn'))
+
+  const { ctx: ctx2, tools: tools2, created: created2 } = fakeCtx()
+  apply(ctx2, {})
+  const spawned = await tools2.get('agent_spawn').execute({ role: 'executor', task: 'x', tier: 'HIGH', tierReason: '跨模块重构' })
+  assert.equal(spawned.ok, true)
+  assert.ok(spawned.warnings.some((w) => w.includes('越档') && w.includes('跨模块重构')))
+  assert.equal(created2.length >= 2, true)
+
+  const badPreset = await tools2.get('agent_spawn').execute({ role: 'executor', task: 'x', agentPreset: 'Not_A_Preset' })
+  assert.equal(badPreset.ok, false)
+  assert.ok(badPreset.message.includes('格式不合法'))
+})
+
+await testAsync('内置预设 root 反推：从进程入口向上找到 config/agent-presets', async () => {
+  // npm 全局安装时内置预设不在 <dsh home>/source/... 下，只能从 dsh 入口反推；
+  // 用假 fixture 复现该布局，避免测试依赖本机安装位置。
+  const fixture = fileURLToPath(new URL('./.fixture/', import.meta.url))
+  mkdirSync(join(fixture, 'bin'), { recursive: true })
+  mkdirSync(join(fixture, 'config', 'agent-presets', 'standard'), { recursive: true })
+  const saved = process.argv[1]
+  process.argv[1] = join(fixture, 'bin', 'dsh.js')
+  try {
+    assert.ok(listPresets().includes('standard'), '应能从进程入口反推内置预设 root')
+  } finally {
+    process.argv[1] = saved
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+// ── settings 接线：三档模型运行时配置（设置页同源） ───────────────────────
+/** 最小 settings 服务假体：base 分层 + user 层深合并（register/update/replace）。 */
+function fakeSettings() {
+  let user = {}
+  const deepMerge = (b, u) => {
+    const out = Array.isArray(b) ? [...(b ?? [])] : { ...(b ?? {}) }
+    for (const [k, v] of Object.entries(u ?? {})) {
+      out[k] = v !== null && typeof v === 'object' && !Array.isArray(v) ? deepMerge(out[k], v) : v
+    }
+    return out
+  }
+  return {
+    register: (ns, schema, opts = {}) => ({
+      get: () => deepMerge(opts.base ?? {}, user),
+      // ⚠️ 对照宿主 SettingsProvider 真契约：scope.update(patch)/scope.replace(section)
+      //（ns 已闭包绑定）；此前假体写成 (ns, patch) 掩盖了「两参调用」真 bug。
+      update: async (patch) => {
+        if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) throw new TypeError(`settings update for "${ns}" must be a plain object`)
+        user = deepMerge(user, patch)
+      },
+      replace: async (section) => {
+        if (section === null || typeof section !== 'object' || Array.isArray(section)) throw new TypeError(`settings replace for "${ns}" must be a plain object`)
+        user = section ?? {}
+      },
+    }),
+  }
+}
+const settle = () => new Promise((resolve) => setImmediate(resolve))
+
+await testAsync('settings 接线：无 settings 服务时回落 cordis 配置，set 不可用', async () => {
+  const { ctx, tools } = fakeCtx()
+  apply(ctx, { tiers: { HIGH: { provider: 'prov-x', model: 'model-x' } } })
+  await settle()
+  const r = await tools.get('agent_roles').execute({ action: 'tiers' })
+  assert.equal(r.ok, true)
+  assert.equal(r.tiers.HIGH.provider, 'prov-x')
+  assert.equal(r.tiers.LOW.provider, DEFAULT_TIERS.LOW.provider)
+  assert.equal(r.tierSources.HIGH, 'cordis 配置')
+  assert.equal(r.tierSources.LOW, 'cordis 配置', 'resolveConfig 已把内置默认填进基底，来源显示为 cordis 配置')
+  const s = await tools.get('agent_roles').execute({ action: 'set', tier: 'MEDIUM', provider: 'p', model: 'm' })
+  assert.equal(s.ok, false)
+  assert.ok(s.message.includes('设置服务不可用'))
+})
+
+await testAsync('settings 接线：set 即时改档 + tierSources 标注 + reset 回落', async () => {
+  const { ctx, tools } = fakeCtx({ settings: fakeSettings() })
+  apply(ctx, { tiers: { HIGH: { provider: 'prov-x', model: 'model-x' } } })
+  await settle()
+  const before = await tools.get('agent_roles').execute({ action: 'tiers' })
+  assert.equal(before.tierSources.HIGH, 'cordis 配置基底')
+  assert.equal(before.tierSources.LOW, 'cordis 配置基底')
+
+  const set = await tools.get('agent_roles').execute({ action: 'set', tier: 'medium', provider: 'glm-pro', model: 'glm-5.3' })
+  assert.equal(set.ok, true, set.message)
+  assert.equal(set.tiers.MEDIUM.provider, 'glm-pro')
+  assert.equal(set.tiers.MEDIUM.model, 'glm-5.3')
+  assert.equal(set.tierSources.MEDIUM, '设置（用户层覆盖）')
+  assert.equal(set.tiers.HIGH.provider, 'prov-x', '未设置的档位不受影响')
+
+  const badTier = await tools.get('agent_roles').execute({ action: 'set', tier: 'ULTRA', provider: 'p', model: 'm' })
+  assert.equal(badTier.ok, false)
+  const half = await tools.get('agent_roles').execute({ action: 'set', tier: 'LOW', provider: 'p' })
+  assert.equal(half.ok, false)
+
+  const reset = await tools.get('agent_roles').execute({ action: 'reset' })
+  assert.equal(reset.ok, true)
+  assert.equal(reset.tiers.MEDIUM.provider, DEFAULT_TIERS.MEDIUM.provider)
+  assert.equal(reset.tiers.HIGH.provider, 'prov-x', 'reset 回落 cordis 基底而非内置默认')
+})
+
+await testAsync('settings 接线：taskbook/spawn 的档位跟随设置实时变化', async () => {
+  const { ctx, tools } = fakeCtx({ settings: fakeSettings() })
+  apply(ctx, {})
+  await settle()
+  const tb = await tools.get('agent_taskbook').execute({ role: 'executor', task: 'x' })
+  assert.equal(tb.tier, 'MEDIUM')
+  assert.equal(tb.provider, DEFAULT_TIERS.MEDIUM.provider)
+  const set = await tools.get('agent_roles').execute({ action: 'set', tier: 'MEDIUM', provider: 'other-prov', model: 'other-model' })
+  assert.equal(set.ok, true)
+  const dry = await tools.get('agent_spawn').execute({ role: 'executor', task: 'x', dryRun: true })
+  assert.equal(dry.provider, 'other-prov')
+  assert.equal(dry.model, 'other-model')
+})
+
+await testAsync('workspace 挂接：服务经深度解析可达时 spawn 自动挂分组（ctx.get 字符串不可用的回归门）', async () => {
+  const attached = []
+  const fakeWs = { id: 'ws-1', title: 'deepsek_harness', attachSession: async (sid) => { attached.push(sid) } }
+  const registry = {
+    resolveByPath: async (p) => (String(p).endsWith('deepsek_harness') ? fakeWs : undefined),
+    create: async () => fakeWs,
+  }
+  const { ctx, tools } = fakeCtx({ workspaceRegistry: registry })
+  apply(ctx, {})
+  const r = await tools.get('agent_spawn').execute(
+    { role: 'explore', task: '找 X', cwd: 'D:\\tools\\deepsek_harness' },
+    { agent: null },
+  )
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.attach?.ok, true, 'attach 必须成功：workspaceRegistry 经 ctx 属性深度解析可达')
+  assert.equal(attached.length, 1, 'attachSession 应被调用一次')
+})
+
+await testAsync('workspace 挂接（2026-09-14 时机勘误）：apply 时服务未就绪、用时才就绪也能挂上（惰性解析回归门）', async () => {
+  const attached = []
+  const fakeWs = { id: 'ws-real', title: 'deepsek_harness', attachSession: async (sid) => { attached.push(sid) } }
+  const registry = {
+    resolveByPath: async (p) => (String(p).endsWith('deepsek_harness') ? fakeWs : undefined),
+    create: async () => fakeWs,
+  }
+  // 还原宿主真实时序（真根因回归门）：WorkspaceRegistry 是异步启动的 Service，
+  // 本插件 apply 时它尚未就绪（undefined），真正 spawn 时才就绪。构造器一次性
+  // 解析的旧实现会把 undefined 永久缓存 → 本用例必红；惰性 getter 用时解析 → 绿。
+  // （服务名勘误勘误：'workspace' 只是 storage domain 名，见 dsh-workspace
+  // lib/index.js:225 defineDomain；真服务名是 :309 super(ctx, "workspaceRegistry")。）
+  const { ctx, tools } = fakeCtx({ workspaceRegistry: undefined })
+  apply(ctx, {})
+  ctx.workspaceRegistry = registry // 服务后到：宿主 Service 异步 init 完成
+  const r = await tools.get('agent_spawn').execute(
+    { role: 'explore', task: '找 X', cwd: 'D:\\tools\\deepsek_harness' },
+    { agent: null },
+  )
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.attach?.ok, true, 'attach 必须成功：用时解析应在 spawn 时拿到已就绪的服务')
+  assert.equal(r.attach.workspaceId, 'ws-real', '应命中 workspaceRegistry 名下注册的服务')
+  assert.equal(attached.length, 1, 'attachSession 应被调用一次')
+})
+
+// ── 宿主 schema 子集守卫：additionalProperties 必须是布尔 ─────────────────
+// 宿主 dsh-tools 的 assertSupportedJsonSchema 只接受 additionalProperties: boolean；
+// 对象形式（additionalProperties: { type: 'string' }）会让整个插件树启动失败
+// （2026-09-12 实证：tierSources 曾以此炸掉 profile boot）。此测试永久拦截该类问题。
+await testAsync('宿主 schema 子集守卫：全部工具的 additionalProperties 均为布尔', async () => {
+  const { ctx, tools } = fakeCtx()
+  apply(ctx, {})
+  assert.equal(tools.size >= 3, true, `应注册至少 3 个工具，实际 ${tools.size}`)
+  const walk = (node, path, violations) => {
+    if (node === null || typeof node !== 'object') return
+    if ('additionalProperties' in node && typeof node.additionalProperties !== 'boolean') {
+      violations.push(`${path}.additionalProperties = ${JSON.stringify(node.additionalProperties)}`)
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'properties' && value !== null && typeof value === 'object') {
+        for (const [propName, propSchema] of Object.entries(value)) walk(propSchema, `${path}.properties.${propName}`, violations)
+      } else if (['items', 'additionalProperties'].includes(key) && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        if (typeof value.type === 'string' || value.properties || value.items || value.oneOf) walk(value, `${path}.${key}`, violations)
+      } else if (key === 'oneOf' && Array.isArray(value)) {
+        value.forEach((sub, i) => walk(sub, `${path}.oneOf[${i}]`, violations))
+      }
+    }
+  }
+  for (const [name, def] of tools) {
+    const violations = []
+    walk(def.parameters, `${name}.parameters`, violations)
+    walk(def.output?.schema, `${name}.output.schema`, violations)
+    assert.deepEqual(violations, [], `${name} 存在不被宿主支持的 schema 片段`)
+  }
+})
+
+// ── 设置卡数据端点（lib/http-config.js，浏览器半的读写面） ────────────────
+function fakeReq({ method = 'GET', body = undefined, remote = '127.0.0.1', origin = null, host = '127.0.0.1:3080' } = {}) {
+  const chunks = body === undefined ? [] : [Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))]
+  const headers = { host }
+  if (origin) headers.origin = origin
+  return {
+    method,
+    socket: { remoteAddress: remote },
+    headers,
+    [Symbol.asyncIterator]: async function* () { for (const c of chunks) yield c },
+  }
+}
+function fakeRes() {
+  const res = { statusCode: 0, headers: null, bodyText: '' }
+  res.writeHead = (status, headers) => { res.statusCode = status; res.headers = headers }
+  res.end = (payload) => { res.bodyText = payload }
+  res.json = () => JSON.parse(res.bodyText)
+  return res
+}
+
+async function testEndpoint(title, fn) {
+  const { ctx } = fakeCtx({ settings: fakeSettings() })
+  const tiersApi = createTiersApi(ctx, resolveTierTable({ HIGH: { provider: 'prov-x', model: 'model-x' } }))
+  const catalogRef = { data: { 'prov-x': ['model-a', 'model-b'] } }
+  const handler = createConfigHandler({ tiersApi, loadCatalog: async () => catalogRef.data })
+  try {
+    await fn(handler, catalogRef)
+    passed += 1
+  } catch (error) {
+    failures.push(`${title}: ${error.message}`)
+  }
+}
+
+await testEndpoint('端点 GET：回 tiers/base/sources/settingsAvailable/catalog 全量状态', async (handler) => {
+  const res = fakeRes()
+  await handler(fakeReq(), res)
+  assert.equal(res.statusCode, 200)
+  const body = res.json()
+  assert.equal(body.ok, true)
+  assert.equal(body.settingsAvailable, true)
+  assert.equal(body.tiers.HIGH.provider, 'prov-x')
+  assert.equal(body.base.HIGH.provider, 'prov-x')
+  assert.equal(body.sources.LOW, 'cordis 配置基底')
+  assert.deepEqual(body.catalog['prov-x'], ['model-a', 'model-b'], '模型目录须随 GET 下发（设置卡下拉同源数据）')
+})
+
+await testEndpoint('端点 PATCH：改档 → 状态即时更新；回位与全清两条路都通', async (handler) => {
+  const set = fakeRes()
+  await handler(fakeReq({ method: 'PATCH', body: { tier: 'MEDIUM', provider: 'glm-pro', model: 'glm-5.3' } }), set)
+  assert.equal(set.statusCode, 200)
+  const after = set.json()
+  assert.equal(after.tiers.MEDIUM.provider, 'glm-pro')
+  assert.equal(after.sources.MEDIUM, '设置（用户层覆盖）')
+
+  const resetOne = fakeRes()
+  await handler(fakeReq({ method: 'PATCH', body: { reset: 'medium' } }), resetOne)
+  assert.equal(resetOne.json().tiers.MEDIUM.provider, DEFAULT_TIERS.MEDIUM.provider)
+
+  const setLow = fakeRes()
+  await handler(fakeReq({ method: 'PATCH', body: { tier: 'LOW', provider: 'p1', model: 'm1' } }), setLow)
+  assert.equal(setLow.json().tiers.LOW.provider, 'p1')
+  const resetAll = fakeRes()
+  await handler(fakeReq({ method: 'PATCH', body: { resetAll: true } }), resetAll)
+  const final = resetAll.json()
+  assert.equal(final.tiers.LOW.provider, DEFAULT_TIERS.LOW.provider)
+  assert.equal(final.sources.LOW, 'cordis 配置基底')
+})
+
+await testEndpoint('端点 PATCH：非法形状/未知档位大声 400，不写坏状态', async (handler) => {
+  const cases = [
+    { body: { tier: 'ULTRA', provider: 'p', model: 'm' } },
+    { body: { tier: 'LOW', provider: '', model: 'm' } },
+    { body: { foo: 1 } },
+    { body: [1, 2] },
+    { body: 'not json' },
+  ]
+  for (const c of cases) {
+    const res = fakeRes()
+    await handler(fakeReq({ method: 'PATCH', body: c.body }), res)
+    assert.equal(res.statusCode, 400, `应 400：${JSON.stringify(c.body)}`)
+    assert.ok(typeof res.json().error === 'string' && res.json().error !== '')
+  }
+  const check = fakeRes()
+  await handler(fakeReq(), check)
+  assert.equal(check.json().tiers.HIGH.provider, 'prov-x', '失败的 PATCH 不得改状态')
+})
+
+await testEndpoint('端点防护：非回环 403；Origin 与 Host 不一致 403；其他方法 405', async (handler) => {
+  const remote = fakeRes()
+  await handler(fakeReq({ remote: '192.168.1.9' }), remote)
+  assert.equal(remote.statusCode, 403)
+  const evil = fakeRes()
+  await handler(fakeReq({ origin: 'http://evil.example:3080' }), evil)
+  assert.equal(evil.statusCode, 403)
+  const put = fakeRes()
+  await handler(fakeReq({ method: 'PUT' }), put)
+  assert.equal(put.statusCode, 405)
+})
+
+await testEndpoint('端点：settings 缺席时 PATCH 报可读错误（degrade 而非 500 崩）', async (handler) => {
+  const { ctx } = fakeCtx()
+  const tiersApi = createTiersApi(ctx, resolveTierTable(undefined))
+  const bare = createConfigHandler({ tiersApi })
+  const res = fakeRes()
+  await bare(fakeReq({ method: 'PATCH', body: { tier: 'LOW', provider: 'p', model: 'm' } }), res)
+  assert.equal(res.statusCode, 400)
+  assert.ok(res.json().error.includes('设置服务不可用'))
+  const get = fakeRes()
+  await bare(fakeReq(), get)
+  assert.equal(get.statusCode, 200)
+  assert.equal(get.json().settingsAvailable, false, 'GET 仍可读（回落 cordis 配置）')
+})
+
+// ── 浏览器半（lib/client.js）：模块加载器工厂格式 + 设置卡注册 ─────────────
+test('client 半：__ModuleLoader__ 工厂格式、无 import、注册 settings.plugin.item 卡', () => {
+  const src = readFileSync(fileURLToPath(new URL('../lib/client.js', import.meta.url)), 'utf8')
+  assert.ok(src.startsWith("window.__ModuleLoader__.load({ id: 'dsh-agents', factory:"), '必须是懒 CJS 工厂格式（宿主 bundle 纯度门）')
+  assert.ok(src.includes("require('react')"), 'React 经宿主 seed 模块 require')
+  assert.ok(!/\bimport\s[\s"'{]/.test(src), '浏览器半不得有 import 语句')
+  assert.ok(src.includes("name: 'settings.plugin.item'"), '必须注册进设置页插件卡槽位')
+  assert.ok(src.includes("key: 'dsh-agents'"), '卡 key 必须等于 settings 命名空间')
+  assert.ok(src.includes("inject: ['slots']"))
+  assert.ok(src.includes(CONFIG_ENDPOINT), '卡片数据面必须指向插件端点')
+  assert.ok(src.includes("createElement('select'"), 'provider/model 必须用下拉（与输入框模型选择同源）')
+  assert.doesNotThrow(() => new Function(src), 'client.js 语法必须可编译')
+})
+
+test('package.json：dsh.client 声明 + exports ./client 指向存在的文件', () => {
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'))
+  assert.equal(pkg.dsh?.client?.platform, 'web', '必须有 dsh.client.platform=web（否则宿主引导图不含本插件的浏览器半）')
+  assert.ok(Array.isArray(pkg.dsh?.client?.inject) && pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-settings-plugins'))
+  const clientEntry = pkg.exports?.['./client']
+  assert.equal(typeof clientEntry, 'string', 'exports 必须声明 ./client')
+  const clientPath = fileURLToPath(new URL(`../${clientEntry.replace(/^\.\//, '')}`, import.meta.url))
+  assert.ok(existsSync(clientPath), `client 入口文件必须存在：${clientEntry}`)
+})
+
+// ── 汇总 ──────────────────────────────────────────────────────────────────
+console.log(`dsh-agents tests: ${passed} passed, ${failures.length} failed`)
+for (const failure of failures) console.log(`  FAIL ${failure}`)
+process.exit(failures.length === 0 ? 0 : 1)
