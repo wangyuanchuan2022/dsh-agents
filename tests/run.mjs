@@ -229,6 +229,101 @@ test('泳道默认交付要求随泳道变化', () => {
   assert.ok(buildText.includes('证据'))
 })
 
+// ── ③b 任务书模板 v3 增量条款（§3a/§5.1/§5.2/§7.1/§4.1/§6.1/§8.1） ───────────
+test('v3 §3a：statusQuo 提供时渲染现状盘点（含对账说明行），缺省时完全不渲染', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const persona = loadPersona(role)
+  const base = { role, persona, route, task: 't' }
+  const withStatus = composeTaskbook({ ...base, context: '背景若干', statusQuo: '| 盘点项 | 结果 |\n|---|---|\n| 产出文件 | 无 |' })
+  assert.ok(withStatus.includes('### 现状盘点（派活前对账）'), 'statusQuo 提供时必须渲染现状盘点小节')
+  assert.ok(withStatus.includes('组织者派活前对账结论'), '须前置「对账结论」说明行')
+  assert.ok(withStatus.includes('盘点枚举失败≠对象不存在'), '须含「枚举失败≠对象不存在」条款')
+  assert.ok(withStatus.includes('| 产出文件 | 无 |'), '用户传入正文须原样携带')
+  assert.ok(withStatus.indexOf('### 现状盘点') > withStatus.indexOf('### 背景与上下文'), '现状盘点须排在背景与上下文之后')
+  assert.ok(composeTaskbook({ ...base, statusQuo: '无历史产出' }).includes('### 现状盘点'), '无 context 时 statusQuo 仍须渲染')
+  const without = composeTaskbook({ ...base, context: '背景若干' })
+  assert.ok(!without.includes('现状盘点'), 'statusQuo 缺省时不得渲染该小节')
+  assert.ok(!composeTaskbook({ ...base, statusQuo: '   ' }).includes('现状盘点'), '空白 statusQuo 视同缺省')
+})
+
+test('v3 §5.1/§5.2：交付状态三值字段 + skip 必留痕', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const text = composeTaskbook({ role, persona: loadPersona(role), route, task: 't', acceptance: '断言全绿' })
+  assert.ok(text.includes('交付状态三值字段'), '须有「交付状态三值字段」条款')
+  assert.ok(text.includes('DELIVERED_WITH_EVIDENCE'), '执行者可自报 DELIVERED_WITH_EVIDENCE')
+  assert.ok(text.includes('BLOCKED_NEED_HUMAN'), '执行者可自报 BLOCKED_NEED_HUMAN')
+  assert.ok(text.includes('执行者自报 DONE 无效'), 'DONE 只能由组织者/用户确认')
+  assert.ok(text.includes('skip 必留痕'), '须有「skip 必留痕」条款')
+  assert.ok(text.includes('skipped + 原因 + 复跑命令'), 'skip 须记录原因与复跑命令')
+  assert.ok(text.includes('不得计入通过项'), 'skipped 不得计入通过项')
+})
+
+test('v3 §7.1：断言鉴别力条款三条硬要求齐备', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const text = composeTaskbook({ role, persona: loadPersona(role), route, task: 't' })
+  assert.ok(text.includes('断言鉴别力条款'), '须有「断言鉴别力条款」')
+  assert.ok(text.includes('≥3 元素输入'), '① 解析/分类类须有 ≥3 元素输入断言')
+  assert.ok(text.includes('注入必红') && text.includes('负向自测'), '② 新增闸门须配注入必红负向自测')
+  assert.ok(text.includes('真实输入无 workaround 全量跑'), '③ 须含真实输入全量跑一项')
+})
+
+test('v3 §4.1：失败降级分层表 L1–L4 齐备，且 interactive 超时指向 L2（单一口径）', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const persona = loadPersona(role)
+  const interactive = composeTaskbook({ role, persona, route, task: 't', clarifyMode: 'interactive' })
+  assert.ok(interactive.includes('失败降级分层表'), '须有失败降级分层表')
+  for (const [level, action] of [['L1', '查缺省决策表'], ['L2', '该字段为默认值'], ['L3', '说明替代方式'], ['L4', '不得静默停止']]) {
+    assert.ok(interactive.includes(`| ${level} |`), `降级表缺 ${level} 行`)
+    assert.ok(interactive.includes(action), `${level} 行动作语义缺失：${action}`)
+  }
+  const timeoutLine = interactive.split('\n').find((line) => line.includes('超时降级'))
+  assert.ok(timeoutLine && timeoutLine.includes('L2'), 'interactive 超时降级须指向分层表 L2，避免双口径')
+  // 分层表两模式共用（autonomous 亦须携带，便于 L3/L4 处置）
+  const auto = composeTaskbook({ role, persona, route, task: 't', clarifyMode: 'autonomous' })
+  assert.ok(auto.includes('失败降级分层表'), 'autonomous 模式同样携带降级分层表')
+})
+
+test('v3 §6.1/§8.1：回合上界与增量指引 + 等待态退出码表 0/2/3/4/5', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const text = composeTaskbook({ role, persona: loadPersona(role), route, task: 't' })
+  assert.ok(text.includes('最多 3 轮无新落盘增量的往返'), '须有回合上界（3 轮无增量即收尾）')
+  assert.ok(text.includes('广播移交组织者重划界'), '达限须列清单广播移交组织者')
+  assert.ok(text.includes('不重做已确认的部分'), '增量指引：只处理增量，不重做已确认部分')
+  assert.ok(text.includes('等待态退出码表'), '须有等待态退出码表')
+  for (const code of ['0', '2', '3', '4', '5']) assert.ok(text.includes(`| ${code} |`), `退出码表缺码 ${code}`)
+  for (const [code, meaning] of [['0', '正常回收'], ['2', '未广播'], ['3', '已广播但组织者未确认'], ['4', '断点重派'], ['5', '不判死不重派']]) {
+    const line = text.split('\n').find((l) => l.startsWith(`| ${code} |`))
+    assert.ok(line && line.includes(meaning), `退出码 ${code} 的语义缺失：${meaning}`)
+  }
+})
+
+// ── ③c 新条款断言自检：注入必红（防恒真断言） ─────────────────────────────
+test('v3 新条款断言注入必红：删掉对应条款后各谓词变假（断言有鉴别力）', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const text = composeTaskbook({ role, persona: loadPersona(role), route, task: 't', statusQuo: '无历史产出' })
+  // 变异体 = 抹掉承载该条款的那一行；谓词与上面的存在性断言同构。
+  const drop = (needle) => text.split('\n').filter((line) => !line.includes(needle)).join('\n')
+  const cases = [
+    ['现状盘点', '#1', (t) => t.includes('### 现状盘点（派活前对账）') && t.includes('盘点枚举失败≠对象不存在'), '### 现状盘点'],
+    ['三值字段', '#2', (t) => t.includes('DELIVERED_WITH_EVIDENCE') && t.includes('执行者自报 DONE 无效'), '交付状态三值字段'],
+    ['skip 留痕', '#5', (t) => t.includes('skipped + 原因 + 复跑命令') && t.includes('不得计入通过项'), 'skip 必留痕'],
+    ['断言鉴别力', '#4', (t) => t.includes('≥3 元素输入') && t.includes('真实输入无 workaround 全量跑'), '断言鉴别力条款'],
+    ['降级分层表', '#13', (t) => t.includes('| L4 |') && t.includes('广播卡点'), '| L4 |'],
+    ['退出码表', '#12', (t) => t.includes('| 5 |') && t.includes('不判死不重派'), '| 5 |'],
+    ['回合上界', '#8', (t) => t.includes('最多 3 轮无新落盘增量的往返'), '回合上界：'],
+  ]
+  for (const [name, no, predicate, needle] of cases) {
+    assert.equal(predicate(text), true, `${name}（${no}）谓词在原件上应为真`)
+    assert.equal(predicate(drop(needle)), false, `${name}（${no}）注入变异后谓词必红`)
+  }
+})
+
 // ── ④ 派活前置三问 ────────────────────────────────────────────────────────
 test('三问恒为 3 条；副作用动作命中告警；越档有理由位', () => {
   const role = getRole('executor')
