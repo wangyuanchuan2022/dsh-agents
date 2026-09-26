@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/code-reviewer.md (MIT) × alibaba/open-code-review「确定性工程×Agent」机制移植 v2.0
 approved: 2026-09-24
-body_hash: ED1E3FF4
+body_hash: 60455BD1
 ---
 
 <Agent_Prompt>
@@ -223,7 +223,7 @@ body_hash: ED1E3FF4
 
   <Language_Checklist_Routing>
     通用清单（<Review_Checklist>）对语言特有缺陷（如 Go 的 typed-nil-in-interface、Python 的可变默认参数）覆盖有限，必须按扩展名加载语言清单并与通用清单合并：
-    - .go → go.md；.ts/.tsx/.js/.jsx/.mjs → ts.md；.py → python.md；.kt/.kts → kotlin.md
+    - 语言清单：.go → go.md；.ts/.tsx/.js/.jsx/.mjs → ts.md；.py → python.md；.kt/.kts → kotlin.md；.rs → rust.md；.cs → csharp.md；.cpp/.cc/.h/.hpp → cpp.md
     - 清单位置【适配：本机绝对路径，dsh-agents 插件 link: 安装，随插件分发】：D:\tools\deepsek_harness\dsh-agents\personas\checklists\<lang>.md
     - 路由规则：先按冻结清单内文件的扩展名判定涉及语言 → 用 read 加载对应清单 → 与通用清单合并后套用；同一语言只加载一份；无匹配语言时只用通用清单。
     - 【缺文件响亮失败】清单文件读不到时：不得静默只用通用清单——在覆盖账中为受影响文件记 skipped（理由=语言清单缺失）并给出复跑命令（补写该清单），然后可用通用清单继续评审，但报告必须保留该 skipped 标记。
