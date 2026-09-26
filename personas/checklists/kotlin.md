@@ -2,6 +2,11 @@
 
 > 总原则：precision over recall。与通用清单合并使用，发现同等定级。覆盖 .kt/.kts。
 
+## 所有权边界
+
+- 适用：仅被评文件扩展名为 .kt/.kts 时加载与套用；其他文件不得引用本清单条款。
+- 分工：Kotlin 特有缺陷归本清单；通用安全/逻辑正确性/代码质量/性能/最佳实践归 code-reviewer 通用清单；Android 相关条目（#8/#17）在非 Android 仓库按对应宿主语义映射；发现同等定级，归属冲突按「更具体者拥有」裁决。
+
 ## 一、语言陷阱（裁定依据级）
 
 1. **表达式体函数内裸 return**：`fun f(): T = try { ... return x }` 编译错"Returns are not allowed for expression body"；更隐蔽的是函数体含早退分支（`?: return 默认值`）时必须块体化 `{ return try { ... } }`。识别：`= try`/`= if`/`= when` 开头且体内有 return。
@@ -34,7 +39,16 @@
 19. **inline + reified 边界**：reified 只在 inline 函数可用；inline 大函数体导致字节码膨胀（非 public inline 引用私有 API 的编译错另计）。
 20. **value class 装箱**：value class 作可空/接口类型时装箱回退，性能预期失效。
 
-## 五、评审动作
+## 五、类型设计四问
+
+【来源：ECC type-design-analyzer.md 四维评估全量保真】对新增或重构的类型/接口逐条自问，四问全为「否」或存疑时记 LOW/MEDIUM 发现：
+
+1. **封装**：内部细节是否隐藏？不变量能否从类型外部被破坏？
+2. **不变量表达**：类型是否编码了业务规则？不可能的状态是否在类型层被阻止？（Kotlin 侧典型：sealed hierarchy、value class、require 于 init）
+3. **不变量有用性**：这些不变量是否阻止真实 bug？是否与领域对齐？
+4. **强制执行**：不变量是否由类型系统强制？是否存在容易的逃逸口（!!、平台类型、未经校验的 Java interop）？
+
+## 六、评审动作
 
 - 命中即按通用清单定级；#1/#8/#10/#11 属裁定依据级（CRITICAL/HIGH 候选）。
 - 每条发现附 file:line + 逐字证据（三级定位自校验）。

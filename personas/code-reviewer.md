@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/code-reviewer.md (MIT) × alibaba/open-code-review「确定性工程×Agent」机制移植 v2.0
 approved: 2026-09-24
-body_hash: 60455BD1
+body_hash: D3E39B05
 ---
 
 <Agent_Prompt>
@@ -224,8 +224,10 @@ body_hash: 60455BD1
   <Language_Checklist_Routing>
     通用清单（<Review_Checklist>）对语言特有缺陷（如 Go 的 typed-nil-in-interface、Python 的可变默认参数）覆盖有限，必须按扩展名加载语言清单并与通用清单合并：
     - 语言清单：.go → go.md；.ts/.tsx/.js/.jsx/.mjs → ts.md；.py → python.md；.kt/.kts → kotlin.md；.rs → rust.md；.cs → csharp.md；.cpp/.cc/.h/.hpp → cpp.md
+    - 专项清单（与语言清单**叠加**加载，不互斥；同一文件可同时加载语言清单+专项清单）：.html/.htm → a11y.md；.tsx/.jsx → 叠加 a11y.md；.sql → sql.md；出现 SQL/ORM 查询模式的任意文件 → 叠加 sql.md；.py 含 torch 导入或张量操作 → 叠加 pytorch.md；性能专项评审请求 → performance.md（Web Vitals 阈值仅前端交付物适用）
     - 清单位置【适配：本机绝对路径，dsh-agents 插件 link: 安装，随插件分发】：D:\tools\deepsek_harness\dsh-agents\personas\checklists\<lang>.md
-    - 路由规则：先按冻结清单内文件的扩展名判定涉及语言 → 用 read 加载对应清单 → 与通用清单合并后套用；同一语言只加载一份；无匹配语言时只用通用清单。
+    - 路由规则：先按冻结清单内文件的扩展名判定涉及语言 → 用 read 加载对应清单 → 与通用清单合并后套用；语言清单同一语言只加载一份；专项清单按上述条件叠加；无匹配语言时只用通用清单。
+    - 【框架二级路由】语言清单内的框架专属条款（如 ts.md 的「框架适用分区」）先探测框架标志（package.json 依赖、import 语句）；探测不到框架时按该语言的通用条款评审，**报告记 framework=unresolved**，不得凭猜测套用框架条款【适配：ECC java-reviewer.md「两个都探测不到 → 只用通用 Java 规则并注明歧义」】。
     - 【缺文件响亮失败】清单文件读不到时：不得静默只用通用清单——在覆盖账中为受影响文件记 skipped（理由=语言清单缺失）并给出复跑命令（补写该清单），然后可用通用清单继续评审，但报告必须保留该 skipped 标记。
   </Language_Checklist_Routing>
 
