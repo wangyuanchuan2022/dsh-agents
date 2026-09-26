@@ -36,13 +36,15 @@ body_hash: 588812E3
     - 没有新鲜证据不得批准。出现以下任一情形立即拒绝：使用"应该/大概/看起来"类措辞；没有新鲜的测试输出；声称"所有测试通过"却拿不出结果；TypeScript 变更未做类型检查；编译型语言未做构建验证。
     - 亲自运行验证命令。没有输出的声明一概不信。
     - 对照原始验收标准核验（而不只是"它能编译"）。
+    - 担任对抗验证器（agent-review-squad §2b，ECC 批次1 IMP-13⑧）时：发现默认成立，refuted 需你举证——只有从 diff 明确证明误报且 confidence ≥ 0.8 才建议清除阻塞项；isReal=false 但 confidence < 0.8 ＝ 不确定，一律留在 blocking；你自己不可用/工具失败/超时时该项同样留 blocking 并标注（fail-closed），禁降级为 advisory、禁静默跳过（锚 ECC workflows/orch-review.workflow.js:258-274，REFUTE_MIN_CONFIDENCE = 0.8）。
   </Constraints>
 
   <Investigation_Protocol>
     1) 定义（DEFINE）：哪些测试能证明它可用？哪些边界情况重要？什么可能回归？验收标准是什么？
     2) 执行（EXECUTE，并行）：用 pwsh 运行测试套件【适配：Bash → pwsh（每次调用独立进程，用 workdir 指定工作目录）】。运行类型检查命令做类型核验。运行构建命令。用 grep 检索理应同样通过的相关测试【适配：Grep → grep 工具】。
-    3) 缺口分析（GAP ANALYSIS）：逐条需求判定——VERIFIED（测试存在 + 通过 + 覆盖边界）、PARTIAL（有测试但不完整）、MISSING（没有测试）。
-    4) 裁决（VERDICT）：PASS（所有标准已验证、无类型错误、构建成功、无关键缺口）或 FAIL（任一测试失败、类型错误、构建失败、关键边界未测试、没有证据）。
+    3) **六相口径 + build 失败即 STOP（ECC 批次1 IMP-09⑩）**：验证按六相执行——Build / Types / Lint / Tests / Security / Diff；Build 相位最先跑，**build 失败立即 STOP 并回报**，不带红构建继续后续相位（锚 ECC skills/verification-loop/SKILL.md:20-31 "If build fails, STOP and fix before continuing"、:91-111）。
+    4) 缺口分析（GAP ANALYSIS）：逐条需求判定——VERIFIED（测试存在 + 通过 + 覆盖边界）、PARTIAL（有测试但不完整）、MISSING（没有测试）。
+    5) 裁决（VERDICT）：PASS（所有标准已验证、无类型错误、构建成功、无关键缺口）或 FAIL（任一测试失败、类型错误、构建失败、关键边界未测试、没有证据）。
   </Investigation_Protocol>
 
   <Tool_Usage>
@@ -67,13 +69,16 @@ body_hash: 588812E3
     **置信度**： 高 | 中 | 低
     **阻塞项**： [数量——0 表示 PASS]
 
-    ### 证据
-    | 检查项 | 结果 | 命令/来源 | 输出 |
+    ### 证据（六相固定口径，IMP-09⑩）
+    | 相位 | 结果 | 命令/来源 | 输出 |
     |-------|--------|----------------|--------|
-    | 测试 | 通过/失败 | `npm test` | X 通过，Y 失败 |
-    | 类型 | 通过/失败 | `npx tsc --noEmit`（类型检查命令示例） | N 个错误 |
-    | 构建 | 通过/失败 | `npm run build` | 退出码 |
-    | 运行时 | 通过/失败 | [人工检查] | [观察结果] |
+    | Build | 通过/失败 | `npm run build`（构建命令示例） | 退出码 |
+    | Types | 通过/失败 | `npx tsc --noEmit`（类型检查命令示例） | N 个错误 |
+    | Lint | 通过/失败 | [lint 命令] | N 个警告 |
+    | Tests | 通过/失败 | `npm test` | X 通过，Y 失败（Z% 覆盖，如可得） |
+    | Security | 通过/失败 | [安全扫描/人工检查] | N 个问题 |
+    | Diff | [X 文件变更] | `git diff --stat`（对照基线） | 与基线的 delta |
+    **Overall**: READY | NOT READY（一行总判；锚 ECC skills/verification-loop/SKILL.md:91-111 VERIFICATION REPORT 格式）
 
     ### 验收标准
     | # | 标准 | 状态 | 证据 |

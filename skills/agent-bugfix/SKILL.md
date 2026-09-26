@@ -8,6 +8,19 @@ description: 缺陷追猎流水线（agent-bugfix，编排 dsh-agents 的 5 个 
 > 编排 5 角色：explore → debugger（疑难升级 tracer）→ test-engineer → verifier。
 > 派活方式、回收监控、失败处理与 `agent-autopilot` 一致（主路径 agent_spawn / 降级 de_session+personas）。本技能只写差异。
 > ⚠️ 工作区纪律：子会话不传 cwd（继承用户派发任务的工作区）；项目子目录路径在任务书里用相对前缀表达（详见 agent-autopilot「工作区纪律」）。
+> ECC 批次1 IMP-09 增量：Step 0 尺寸分级+相位掩码（tie-breaker 安全面/公共 API⇒standard）、explore 定位检索面。均带行内锚点。
+
+## Step 0 · 尺寸分级（IMP-09①，仪式随爆炸半径缩放）
+> 锚 ECC `skills/orch-pipeline/SKILL.md:39-54` + `ecc-analysis/review/B-workflows.md` §3 M-1。三信号取最高档；分级结果一行写进任务书（可审计，用户可覆盖）。
+
+| 档 | 信号 | 相位掩码（对应下方步骤号） |
+|---|---|---|
+| trivial | 单文件单函数 / 无新依赖 / 根因读码即显然 | 0 → 2 → 3 → 4（跳过 1 explore，debugger 自带定位） |
+| small | 1-2 文件 / 无 / 定位路径清晰 | 0 → 1 → 2 → 3 → 4 |
+| standard | 多文件 / 修复可能引内部接口调整 / 现象有歧义 | 0 → 1 → 2 →(2b 视升级条件)→ 3 → 4 |
+| large/跨切 | 修复引出多文件重构或跨系统改动 | **不修**——转 agent-feature / agent-autopilot（既有条款） |
+
+- **tie-breaker：缺陷触及安全面（鉴权/注入/密钥）或公共 API/契约 ⇒ 至少 standard**，且 tracer 升级条件从严（锚 `orch-pipeline/SKILL.md:52-54`）
 
 ## 执行顺序
 
@@ -17,6 +30,7 @@ description: 缺陷追猎流水线（agent-bugfix，编排 dsh-agents 的 5 个 
 
 ### 1. explore（LOW，只读）——定位
 - 输入：报错堆栈中的文件/符号 + 特征关键词
+- **定位检索面（IMP-09⑨，缺省从简）**：缺陷修复以定位为先，检索面取 8+5 全集的定位相关子集——错误处理模式、类型定义、测试模式、配置、依赖 5 类检索 + 契约、数据流、入口点 3 条追踪；不适用的显式声明 N/A（全集定义见 agent-autopilot Phase 0；锚 ECC `commands/prp-plan.md:97-125` + B-workflows.md §3 M-15「explore 任务书」落点）
 - 输出：相关代码定位清单（文件:行号）、模块关系、可疑改动点
 
 ### 2. debugger（MEDIUM）——根因与最小修复
