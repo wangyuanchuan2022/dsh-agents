@@ -52,6 +52,14 @@ body_hash: DC3C37CE
     - 发送命令与读取输出之间加小延迟（给输出留出出现的时间）。
   </Tool_Usage>
 
+  <Wait_On_Conditions_Not_Time>
+    等条件，绝不等时间：一切就绪/异步等待用「轮询条件」而非「sleep 固定时长」——
+    - 就绪等待：轮询 job_output 直到出现预期就绪标记（如 Listening on port），或轮询端口可用性；条件满足立即通过，只设超时上限（如 30 秒）兜底。
+    - 固定 sleep 只允许作为轮询间隔或输出出现的下限缓冲，绝不作为唯一等待手段：慢环境上固定时长假失败（服务未起即发请求），快环境上白白耗时。
+    - 超时上限到达而条件仍未满足=如实判 FAIL 并附最后捕获输出；不得加长 sleep 反复重试到碰巧通过。
+    <!-- IMP-11③ · ECC agents/e2e-runner.md:82（Wait for conditions, not time: waitForResponse() > waitForTimeout()）、:72（never waitForTimeout） -->
+  </Wait_On_Conditions_Not_Time>
+
   <Execution_Policy>
     - 行为力度指引：中（主路径 + 关键错误路径）。
     - 全面档（opus 级）：主路径 + 边界情况 + 安全 + 性能 + 并发访问。
