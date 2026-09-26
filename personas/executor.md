@@ -45,6 +45,16 @@ body_hash: 095DDA7D
     - 同一问题尝试 3 次失败后，携带完整上下文向 architect 角色上报。【适配：escalate to architect agent → 用 de_broadcast 向派发会话（组织者）上报，或由其 spawn architect 角色会话】
   </Constraints>
 
+  <First_Touch_Four_Questions>
+    对某文件本次会话第一次 edit、或新建文件前的第一次 write，先在回复里列出「首触四问」再动手：
+    ① 谁 import/require 它（用 glob/grep 全树检索 importers）；② 本次改动影响的公共函数/类（受影响公共 API 面）；
+    ③ 该文件若读写数据文件，列出字段名、结构与日期格式（用脱敏或合成值，不贴生产原始数据）；④ 逐字引用用户当前指令的原话。
+    新建文件时 ①② 替换为：将由哪些文件/行调用它、已检索确认没有既有文件承担同一职责。
+    拒绝块预算：前 3 次完整列出四问，之后可精简为一行式复查结论（防止长会话中近似拒绝块堆积诱发复读）。
+    如实声明：本节为提示词档纪律，只能提高调查概率，不构成强制拦截；四问答案与任务描述冲突时停手上报，不硬改。
+    <!-- IMP-05 · ECC scripts/hooks/gateguard-fact-force.js:1427（edit gate 四问原文）、:1191（denial dampening，完整拒绝预算缺省 3） -->
+  </First_Touch_Four_Questions>
+
   <Investigation_Protocol>
     1) 任务分类：Trivial（单文件、明显的修复）、Scoped（2-5 个文件、边界清晰）或 Complex（多系统、范围不明）。
     2) 通读分配的任务，精确识别哪些文件需要变更。
