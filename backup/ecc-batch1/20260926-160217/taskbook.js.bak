@@ -14,9 +14,6 @@
  * 模板 v3 增量（2026-09-17，权威参照 port-kit/docs/task-brief-v3.md）：
  *   §3a 现状盘点（statusQuo，可选入参）/ §5.1 交付状态三值字段 / §5.2 skip 必留痕 /
  *   §7.1 断言鉴别力 / §4.1 失败降级分层表 / §6.1 回合上界与增量指引 / §8.1 等待态退出码。
- * 模板 v3.2 增量（2026-09-26，ECC 批次1 IMP-06 回收契约 + IMP-14 epic 状态语义；
- *   权威参照同上 task-brief-v3.md §5.4/§9.2 与附录 C——组织者面五机制落在文档模板，
- *   本生成面只带执行端可见的两条：回收契约条款 + 完成广播 status/evidence 自报字段）。
  */
 import { existsSync } from 'node:fs'
 
@@ -187,8 +184,6 @@ export function composeTaskbook({
   L.push('- 交付状态三值字段：汇报时**只能自报前两值**——`DELIVERED_WITH_EVIDENCE`（产出已落盘 + 已广播，证据齐备）或 `BLOCKED_NEED_HUMAN`（卡点明确，需人介入）；`DONE`（验收通过）**只能由组织者/用户确认，执行者自报 DONE 无效**。')
   // v3 §5.2：skip 必留痕
   L.push('- skip 必留痕：任何因环境（提权/凭据/平台/网络）而**未执行的检查或步骤**，必须显式记录为 `skipped + 原因 + 复跑命令`，**不得计入通过项**（组织者核验时 skipped 单列）。')
-  // v3.2 §5.4（IMP-06 回收契约，ECC rules/common/agents.md:55-59 语义改写——不照抄）：组织者派活纪律的可见面
-  L.push('- 回收契约：本任务若由组织者 spawn/wake 多个子会话分层完成，组织者必须留有**可核销的回收计划**（触发点=完成广播/心跳超时/回合上界移交；完成核销=「产出落盘非空 + 完成广播到达」双条件，缺一不核销；超时未回收按退出码 2/4/5 处置）。纪律底线：不为单 agent 能装下的活分层，不派无回收计划的活——广播本身不是交付物，落盘+广播双条件才是。')
   if (acceptance !== undefined && String(acceptance).trim() !== '') {
     L.push('- 验收标准（组织者判定用）：')
     L.push(...String(acceptance).trim().split(/\r?\n/).map((line) => (line.startsWith('-') ? `  ${line}` : `  - ${line}`)))
@@ -233,8 +228,6 @@ export function composeTaskbook({
   L.push('## 七、汇报与回收核对')
   L.push('')
   L.push(`- 完成广播：\`de_broadcast\` → 组织者${organizer ? ` \`${organizer}\`` : ''}（subject 用「${role.id} 完成」），正文含：产出文件绝对路径 + 一句话结论 + 未解决项。`)
-  // v3.2 §9.2 执行面（IMP-14 epic 状态语义对齐）：子会话自报状态走白名单词
-  L.push('- 状态自报：进度/完成广播正文须带 `status=`（running/blocked/done——白名单外取值无效）与 `evidence=`（产出文件路径）字段；blocked 须附退出码与复跑命令。状态迁移只走白名单（pending→running→blocked→done），跳迁与复活 done 视为事故，须广播说明。')
   L.push('- 中途进度：长任务（>10 分钟）每完成一个里程碑广播一次进度；增量产物随时追加落盘，不要攒到最后一次性写。')
   L.push('- 角色回收：组织者会用 `de_session action=list/status` 核对本会话是否已产出；若你无法完成，必须广播说明卡点，**不得静默停止**。')
   // v3 §6.1：回合上界与增量指引
