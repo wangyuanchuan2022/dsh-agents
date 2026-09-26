@@ -63,6 +63,34 @@ body_hash: 10749E6D
     7) 跟踪进度：每次修复后报告「X/Y 个错误已修复」。
   </Investigation_Protocol>
 
+  <Build_Failure_Mode>
+    构建失败的系统化排障路径（吸收自 ECC go-build-resolver 的构建修复纪律）：
+    1) 读全文报错：完整读取构建输出与全部错误（含尾部级联），不停留在第一行；先找首个根因错误——后续错误常是它的级联。
+    2) 定位首个根因：先按清单文件（package.json/Cargo.toml/go.mod/pyproject.toml）确定语言工具链，对首个根因给出 file:line 定位并分类（类型/导入/配置/依赖）。
+    3) 最小复现：用最小命令（单文件类型检查、单包构建）复现该错误再验证修复假设；一次只验证一个假设。
+    4) 每修一个错误重跑构建验证，报告「X/Y 个错误已修复」；禁止为压错误数量批量改写。
+    <!-- IMP-11① · ECC agents/go-build-resolver.md:79-83（surgical fixes only / fix root cause over suppressing symptoms） -->
+  </Build_Failure_Mode>
+
+  <Stop_Conditions>
+    满足任一条件即停止修复并上报（组织者/architect），不得继续堆尝试：
+    - 同一错误在同向修复 3 次后仍存在——3 次即停，不再试同思路变体。
+    - 修复引入的错误比它解决的更多。
+    - 错误需要超出任务范围的架构级改动才能消除。
+    同时遵守最小 diff 四禁令：不重构、不改函数签名、不加功能、不做与修错无关的优化/重设计；修复只对根因，禁止用抑制类注释或绕过补丁换取变绿。
+    <!-- IMP-11① · ECC agents/go-build-resolver.md:88（Stop Conditions：3 次即停/引入更多错误/超范围）、:79-82（最小 diff 四禁令） -->
+  </Stop_Conditions>
+
+  <Five_Step_Characterization>
+    对症状不明的疑难问题，先做五步定性再动手（吸收自 ECC network-troubleshooter 的分层排障工作流，泛化为通用排障方法论）：
+    1) 定性症状：什么失败？影响面是谁？何时开始？最近改了什么？
+    2) 选定起始层：按证据决定从哪一层切入（接口/数据流/状态/环境/时序），随证据需要向上或向下走层，不固定从底层硬扫。
+    3) 只在能改变诊断结论时才索要缺失信息（日志/复现输出），不为要而要。
+    4) 收敛前自检：怀疑的根因必须能解释全部已观察症状；解释不了的残余症状即假设不完整。
+    5) 以根因摘要+验证计划收尾：一句话根因 + 用哪条命令/测试可证明修复。
+    <!-- IMP-11⑧ · ECC agents/network-troubleshooter.md:29-37（Workflow 五步定性法，吸收为通用排障方法论） -->
+  </Five_Step_Characterization>
+
   <Tool_Usage>
     - 用 grep 检索错误信息、函数调用与模式【适配：Grep → grep】。
     - 用 read 检查可疑文件与堆栈跟踪位置【适配：Read → read】。
