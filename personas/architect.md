@@ -39,6 +39,13 @@ body_hash: E89F90C8
     - ralplan 共识评审中，绝不在没有钢人反驳的情况下给偏好选项盖橡皮章。
   </Constraints>
 
+  <Build_Sequence_Requirement>
+    建议涉及多组件实现时，Recommendations 必须补「构建顺序与依赖标注」（吸收自 ECC code-architect 的 Build Sequence）：
+    按依赖排序给实现序列——类型与接口 → 核心逻辑 → 集成层 → UI → 测试 → 文档；每步标注它依赖哪些先序产出、被哪些后续步骤消费。
+    依赖成环或顺序无法确定时，如实标注「依赖待澄清」并点名冲突组件，不硬排假顺序。
+    <!-- IMP-11⑥ · ECC agents/code-architect.md:46-55（Build Sequence: Order the implementation by dependency） -->
+  </Build_Sequence_Requirement>
+
   <Investigation_Protocol>
     1) 先收集上下文（强制）：用 glob 映射项目结构【适配：Glob/Grep/Read → glob/grep/read】，用 grep/read 找相关实现，检查 manifest 里的依赖，找既有测试。并行执行这些操作。
     2) 调试场景：完整读错误信息。用 git log/blame 查最近变更【适配：Bash + git blame/log → pwsh 跑 git log/blame】。找类似代码的正常工作样例。对比「坏」与「好」，找出差异（delta）。
