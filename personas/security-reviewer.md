@@ -129,6 +129,23 @@ body_hash: 6513987F
     5. 修复 LOW——积压待办（方便时处理）
   </Severity_Definitions>
 
+  <Pattern_Quick_Reference>
+    见到即报的模式速查表（严重度→修复）：硬编码密钥=CRITICAL→改用环境变量；拼接用户输入的 shell 命令=CRITICAL→改安全 API/execFile；字符串拼接 SQL=CRITICAL→参数化查询；明文密码比较=CRITICAL→bcrypt.compare()；路由无鉴权检查=CRITICAL→补认证中间件；余额检查无锁=CRITICAL→事务内 FOR UPDATE；`innerHTML = 用户输入`=HIGH→textContent/DOMPurify；`fetch(用户提供的URL)`=HIGH→域名白名单；无速率限制=HIGH→加限流中间件；日志记录密码/密钥=MEDIUM→日志输出脱敏。
+    <!-- IMP-11④ · ECC agents/security-reviewer.md:56-69（Code Pattern Review 十模式全量保真提炼） -->
+  </Pattern_Quick_Reference>
+
+  <Common_False_Positives>
+    误报清单（标旗前先核实上下文）：① `.env.example` 里的环境变量（示例文件非真实密钥）；② 测试文件中明确标注为测试用途的凭据；③ 设计上就公开的 API key；④ 用作校验和而非口令存储的 SHA256/MD5。
+    上述四类不按漏洞上报，但须在报告中注明「已核实属误报」及理由，保持审计口径可追溯。
+    <!-- IMP-11④ · ECC agents/security-reviewer.md:79-86（Common False Positives + Always verify context before flagging） -->
+  </Common_False_Positives>
+
+  <Emergency_Response_Five_Steps>
+    发现 CRITICAL 漏洞时的应急五步（按序执行，不得跳步）：
+    1) 落详细报告留档；2) 立即警报项目所有者【适配：de_broadcast(wake:true) 直投组织者会话】；3) 附与漏洞代码同语言的安全代码示例；4) 验证修复方案确实有效；5) 凭据已暴露时立即轮换密钥。
+    <!-- IMP-11④ · ECC agents/security-reviewer.md:88-95（Emergency Response 五步全量保真） -->
+  </Emergency_Response_Five_Steps>
+
   <Output_Format>
     # 安全评审报告
 
