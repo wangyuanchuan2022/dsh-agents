@@ -3,9 +3,10 @@ name: agent-review-squad
 description: 评审小队（agent-review-squad，编排 dsh-agents 的 4 个 sub agent）：OMC「Code Review」组合的 DSH 直译——code-reviewer（质量/逻辑/SOLID/性能）与 security-reviewer（OWASP/密钥/危险模式）对同一 diff 并行独立盲评（P0/P1/P2 + 文件:行号 + 【改进点】），critic 做最终质量闸门汇总裁决（不仅评审「有什么」还指出「缺什么」，误批代价高于误驳），可选 code-simplifier 出行为不变简化建议交 executor 落地。只读评审 + 组织者合成，评审报告落盘双条件核销。适用于：合并前评审、里程碑验收、安全敏感改动审查。触发：用户说「评审这些改动/code review/帮我审一下/合并前检查」，或 agent-autopilot/agent-feature 的 Phase 4 需要外部评审火力。v2（OCR 确定性工程增强）：规格信封/覆盖账闭合/critic 删除闸门/锚定机检/现行性标注/人可复述最小结论。
 ---
 
-# 评审小队（agent-review-squad）v2
+# 评审小队（agent-review-squad）v2.1
 
 > v2 融合 alibaba/open-code-review「确定性工程 × Agent」机制：规格信封、覆盖账闭合、critic 删除闸门、锚定机检、现行性标注、人可复述最小结论。OMC 原有编排全部保留。
+> v2.1（ECC 批次1 IMP-13）新增：评审面复用路由表（单一事实源）、发现归属表、CRITICAL 安全停审、对抗验证步（fail-closed）、实际达成模式三值字段、视觉交付接 visual-verdict、修复回路新鲜评审者与模型家族标注；安全触发判据按 F-3 实测收窄（路径/文件类型优先）。改动均带行内锚点。
 > 编排 4 角色：code-reviewer + security-reviewer（并行盲评）→ critic（汇总裁决）→ 可选 code-simplifier（简化建议）。
 > 派活方式、回收监控与 `agent-autopilot` 一致（主路径 agent_spawn / 降级 de_session+personas）。本技能只写差异。
 > ⚠️ 工作区纪律：子会话不传 cwd（继承用户派发任务的工作区）；项目子目录路径在任务书里用相对前缀表达（详见 agent-autopilot「工作区纪律」）。
@@ -25,15 +26,21 @@ description: 评审小队（agent-review-squad，编排 dsh-agents 的 4 个 sub
 - **同一 spec、同一产出目录、互不可见对方报告**（盲评防锚定；两份任务书除角色外完全一致）
 - code-reviewer 视角：规格符合性、逻辑正确性、错误处理、反模式、SOLID、性能
 - security-reviewer 视角：OWASP Top 10、硬编码密钥、危险模式，按 严重度×可利用性×影响面 排序
-- 统一产出格式：P0/P1/P2 分级 + 文件:行号 证据 + 【改进点】小节 + **覆盖账**（spec 每项落四态之一：reviewed / skipped(封闭枚举理由+复跑方式) / blocked(原因+复跑命令) / waived(引用用户指示原文)）+ **评审身份块**（head_sha / selection_hash / spec_sha / 语言清单 / 模型）
+- **安全席触发判据（F-3 实测修正，路径/文件类型优先）**：派 security-reviewer 的条件以路径/文件类型命中为准——`auth/**`、`*secret*`、`*.sql`、中间件/路由文件、`crypto` 模块 import；通用词表（token/hash/session/query 等）仅作补充信号、不得单独触发（ECC 词表实测 20 行滑窗 32.7%、按 3 hunk 估算约 69% diff 命中＝恒开伪条件，锚 `workflows/orch-review.workflow.js:59` + `ecc-analysis/review/B-workflows.md:111-117`）。安全敏感仓库可显式声明 always-on 双评，无需伪装条件触发
+- **发现归属表（cross-cutting 默认归 security-reviewer）**：一条发现同时命中两席领域时按本表定席，防双席重复报同一问题稀释信号——① 跨切面发现（一个改动同时引入质量与安全问题，如新增的注入点、未校验的迁移）→ **默认归 security-reviewer**，code-reviewer 只在逻辑正确性面独立呈现；② 纯质量面 → code-reviewer；③ 归属争议 → 双席各自原始报告照常落盘，critic 合并时裁决归属，不预合并（锚 `ecc-analysis/review/A-agents.md:222`）
+- **CRITICAL 安全即停审**：任一席在盲评中发现 CRITICAL 级安全问题（可利用的注入/密钥泄漏/认证绕过类）→ 立即停止本席后续分析面、`de_broadcast(wake:true)` 告知组织者；critic 收到后**优先处置**（先于去重与覆盖闭合），裁决「续审 / 升级用户 / 转修复回路」。停审不是丢弃——本席已产出发现照常落盘归档
+- 统一产出格式：P0/P1/P2 分级 + 文件:行号 证据 + 【改进点】小节 + **覆盖账**（spec 每项落四态之一：reviewed / skipped(封闭枚举理由+复跑方式) / blocked(原因+复跑命令) / waived(引用用户指示原文)）+ **评审身份块**（head_sha / selection_hash / spec_sha / 语言清单 / 模型 / **实际达成模式**）
+- **实际达成模式（三值字段，必带）**：评审身份块必须记录本次评审的实际达成模式——`实机`（真实运行了被审对象）/ `截图`（渲染取证但未交互）/ `仅代码`（纯静态审阅）+ 降级理由。凡未实机运行，必须显式声明降级原因（如沙箱不可起服务），**不得把静态审阅悄悄算作实机核验**（锚 ECC `agents/gan-evaluator.md:38-42`「报告降级而非静默把静态审阅当实机评测」；与用户已固化纪律「几何口径 vs 像素口径」同构，锚 `ecc-analysis/review/A-agents.md:233`）
 - **锚定机检门（交付前置，不可省）**：报告落盘后运行 `crgate.mjs anchor --repo <目录> --report <报告> --spec <spec> --strict`（历史审查加 `--at <被审提交>`），exit 0 才算交付完成，anchor-report.json 随批次归档
 - 派活错峰 15s，两份并行跑
 
 ### 2. critic（HIGH，只读）——最终质量闸门
 - 输入：两份盲评报告 + 原始 diff + spec.json + 各席 anchor-report.json（**此时才解盲**）
 - 职责：
-  - 汇总裁决：去重同源发现、裁决相互矛盾的评级、确认每条 P0 证据成立
+  - **CRITICAL 安全优先处置**：存在 §1 的停审信号时，先裁决该事项（续审/升级用户/转修复回路），再进入常规流程
+  - 汇总裁决：去重同源发现、裁决相互矛盾的评级、确认每条 P0 证据成立。**去重键 = 文件 + 归一化证据代码片段**，不是标题措辞或行号（标题与行号随评审者漂移，出错的代码不会漂移，锚 ECC `workflows/orch-review.workflow.js:217-237`；ECC 实测 11 条原始发现 → 4 条唯一，verifier 成本近乎减半，锚 `workflows/README.md:20`）；证据为空的发现退回原席补证据，不得参与去重合并
   - 缺口检查：不仅评审「报告里有什么」，还要指出「报告漏了什么」（盲区清单）
+  - **视觉交付裁决门（GAN 纪律③）**：交付含 UI/视觉改动时，视觉面必须过 `visual-verdict` 技能（score ≥90 且 verdict=pass 才算视觉面通过；低于线必须继续编辑并重跑判定，新截图过线前不得宣布完成）；visual-verdict 不可用（无截图/无参考图）时显式降级并记入评审身份块「实际达成模式」，不得跳过不提
   - 处置分流：P0 必修 / P1 建议修（给修法）/ P2 记账
   - **锚定核对**：两席 anchor --strict 均通过且 anchor-report.json 在案；抽验 P0 发现的 file:line 必须逐字命中——命中不了的发现降 P2 并标「未锚定」，不得作为阻塞项
   - **覆盖闭合闸**：用 `crgate.mjs finalize --spec <spec> --ledger <该席 ledger.json>` 机检两席覆盖账——缺项（sweep 成 failed）/越界路径/空理由/未知状态/重复条目任一出现 → 该席报告判**不完整**，退回补评；覆盖账不得以 failed 终态交付
@@ -47,19 +54,48 @@ description: 评审小队（agent-review-squad，编排 dsh-agents 的 4 个 sub
   - **现行性标注**（历史审查场景）：verdict 对每条发现核对「当前 HEAD 是否仍存在」（read 当前文件确认），已被后续提交修复的项标「已修复于 <提交>」，不参与现行裁定——历史归因与现行性分列，不可混写
 - 产出：`review/<批次>/verdict.md`（评审身份块 + 总裁决 + **覆盖状态** + 分流清单 + 盲区说明 + **人可复述的最小结论 ≤5 条**——每条一句话，脱离 AI 报告也能被人复述清楚）
 
+### 2b. 对抗验证（verifier 席，MEDIUM，只读）——CRITICAL/HIGH 逐条过验证
+- 触发：critic 合并后存在 CRITICAL/HIGH 发现 → 逐条派 `verifier` 做对抗验证（MEDIUM/LOW 不进对抗验证，advisory 直通，控制成本，锚 ECC `workflows/orch-review.workflow.js:240`）
+- **举证责任默认分配（GAN 式对抗，非「再查一遍」）**：发现默认视为成立；verifier 只有从 diff 明确证明「误报」且 confidence ≥ **0.8** 才允许建议清除阻塞项；`isReal=false 但 confidence < 0.8` ＝ 不确定，**一律留在 blocking**——不确定性永远不得降级阻塞项（锚 ECC `workflows/orch-review.workflow.js:258-274`，`REFUTE_MIN_CONFIDENCE = 0.8`）
+- **fail-closed（对抗验证器不可用时该项留 blocking）**：verifier 挂掉 / 工具失败 / 超时 → 该项留在 blocking 并标「未对抗验证——kept as blocking」，不得降级为 advisory、不得静默跳过（锚 ECC `workflows/orch-review.workflow.js:252-253`、`:268-274`；新增对抗验证器＝新增失败面，必须同步 fail-closed，锚 `ecc-analysis/review/B-workflows.md:253` 风险注）
+- **实现层次（DP-4 已定论）**：本节为提示词约束 + verdict 后处理断言（critic 逐条核对 verdict 的 isReal/confidence 字段与清除清单一致）——**禁止写 schema 层**（DSH workflow 工具 schema 子集不含 allOf/if-then，DP-4 实测报 unsupported keyword，锚 PLAN-improvement §3.4 依赖图 DP-4 行）
+- 产出：对抗验证结论并入 verdict.md（每条 CRITICAL/HIGH 标：confirmed / refuted(≥0.8) / uncertain(留 blocking) / unverified(留 blocking)）
+
 ### 3. 可选 code-simplifier（HIGH）——简化建议
 - 触发：用户点名「顺便简化」或 critic 判定可读性问题显著
 - 产出：行为不变的简化建议清单（写明「为什么等价」）；**落地交给 executor**，本技能不改码
 
 ### 4. 修复回路（可选，接 agent-feature/executor）
+- **评测席 ≠ 产出席（GAN 纪律①）**：修复产出的新 diff 由独立评审席评判——产出会话（executor/修复会话）不得自评（「你的工作是建造不是评判，评判归 Evaluator」）；评审席只读、不得顺手改码（锚 ECC `agents/gan-evaluator.md:41` 同族 + `ecc-analysis/review/A-agents.md:233`）
+- **每轮换新鲜评审者**：修复后的每轮复评必须开**新评审会话**执行，不得复用上一轮评审会话——携带上一轮上下文会产生锚定偏差（锚 ECC `skills/santa-method/SKILL.md:204`「each review round uses fresh agents」）。复评任务书仍可带 `<confirmed_findings>`（约束重复，见下条）；成本注：新会话消耗快照注入预算（本机已知长流水线成本大头），复评轮次受重派熔断约束，不为新鲜性无限开新席
+- **模型家族多样性显式标注**：并行双席/复评席尽量落不同模型家族（本机档位路由 HIGH 与非 HIGH 解析到不同模型，天然可得）；两席同家族时必须在 verdict 显式告警「真模型多样性未达成，但上下文隔离仍有效」，不得静默降级（锚 ECC `commands/santa-loop.md:104`）
 - 增量评审的任务书必须带结构化 `<confirmed_findings>` 块：序号 + 文件 + 单行 code 摘要（≤200 字符）+ 单行结论摘要（≤300 字符），总量 ≤30 条，附否定式指令（「不要重复它们；继续在剩余面上找新发现，不得因清单存在而止步」）——该块约束的是**重复**，不是**范围**
 - **免查需凭证**：免查项必须能在上一轮覆盖账找到 reviewed 记录**且**文件内容哈希未变，否则重评
 - **重派熔断**：同一 P0 修复最多重派 2 次——第 2 次必须显式改写任务书（不许原样重派），第 3 次转记账交 critic 裁决；修复会话成功即清零计数
 - **收尾宽限轮**：预算收紧时的最后一轮只许提交已识别的发现、不许新开分析面
 
+## 评审面复用路由表（单一事实源，IMP-13①）
+> 锚：`ecc-analysis/review/A-agents.md:241-246`（每加一个专项就重造席位＝反模式；ECC `agents/mle-reviewer.md:32-47` 的 11 行路由同型）+ network-architect「Handoff To Focused Skills」原则＝深挖交给专门面，不在评审提示里自造 runbook（锚 `ecc-analysis/review/A-agents.md:500`）。
+> 本表是**唯一**派席依据：什么评审对象默认派哪席在此定死；**新增角色/席位一律先改本表再投入使用**（批次3 新角色人格必含同型「评审面复用」节并回指本表）。禁止绕开本表在任务书里临时造席。
+
+| 评审对象（触发特征） | 默认派席 | 备注 |
+|---|---|---|
+| 逻辑正确性 / 错误处理 / 反模式 / SOLID / 性能 | code-reviewer | 常驻两席之一 |
+| 安全面（OWASP / 密钥 / 注入 / 危险模式） | security-reviewer | 常驻两席之一；触发判据按 §1「F-3 实测修正」（路径/文件类型优先） |
+| 跨切面发现（同时踩质量+安全两域） | security-reviewer | 按 §1 发现归属表定席 |
+| 语言专项（py/ts/go/kotlin/rust/cs/cpp 习惯与陷阱） | code-reviewer + `personas/checklists/<lang>.md` | 按扩展名路由，不建语言专项席（A 报告既定方向） |
+| 视觉/UI 交付保真 | critic 强制走 `visual-verdict` 技能 | 现有技能非角色（GAN 纪律③） |
+| 数据库 / SQL / 迁移面 | security-reviewer（数据迁移风险声明）+ `personas/checklists/sql.md` | 清单落位后生效（IMP-12） |
+| RAG / 检索管线 | **未建席（批次3 rag-reviewer）→ 暂由 code-reviewer 兼** | 建席后迁出并回本表登记；不得在任务书里引用尚不存在的角色 |
+| brownfield 规格提取 | **未建席（批次3 spec-miner）→ 暂不适用** | 建席后接表 |
+| 静默失败专项（绿了但漏跑） | **未建席（批次3 silent-failure-hunter）→ 暂由 code-reviewer 错误处理面兼** | 建席后迁出并回本表登记 |
+| 文档一致性（新契约/门禁需持久文档） | critic 在盲区清单提示 → 由组织者派 `writer`/`document-specialist` | 不占评审席 |
+| harness/流水线演进评测 | **未建席（批次3 harness-optimizer）→ 暂不适用** | 建席后接表 |
+
 ## 合并判定（v2：双轨正交，分列输出）
 - **交付等级**（由覆盖闭合度决定）：complete（分母全 reviewed）/ partial（有 skipped/blocked/waived 且理由齐备——必须列明未覆盖范围与原因）/ failed（有缺项或结构错误）。partial 不是失败，但必须显式声明，不得沉默。
-- **合并阻塞**（由发现严重度决定）：P0 清零 + P1 全部有处置 + critic verdict 通过 → 可合并；任一 P0 未修 → 不通过，输出阻断清单
+- **席位级 fail-closed（IMP-09③）**：任一席位没跑成（盲评席失败/被跳过/对抗验证席不可用）⇒ verdict **永不 clean APPROVE**，与该席位本来会发现什么无关——「没跑」与「跑了没问题」必须分得清清楚楚（锚 ECC `workflows/orch-review.workflow.js:212-215`、`:278-283`「fail closed: APPROVE only when every dimension ran AND nothing blocks」；DSH 覆盖账四态同动机）。席位失败的记录进交付等级 failed，且失败席位的覆盖分母整体转 skipped(理由=席位失败+复跑方式)，不得伪装 reviewed
+- **合并阻塞**（由发现严重度决定）：P0 清零 + P1 全部有处置 + critic verdict 通过 + §2b 对抗验证无「uncertain/unverified 留 blocking」项 → 可合并；任一 P0 未修 → 不通过，输出阻断清单
 - **覆盖状态 ≠ complete 时不得给出 APPROVE**；两轨在 verdict.md 中分列
 - skipped 项不得计入通过项：「已验证通过」与「未验证（skipped）」必须分列
 
@@ -69,6 +105,8 @@ description: 评审小队（agent-review-squad，编排 dsh-agents 的 4 个 sub
 
 ## 纪律
 - 盲评是核心：两条任务书不得提及对方存在与输出
+- 派席只认路由表：新增/调整席位一律改「评审面复用路由表」（单一事实源），禁止任务书临时造席
+- 对抗验证与席位失败一律 fail-closed（§2b / 合并判定席位级条款），禁静默降级为 advisory
 - 只读评审：code-reviewer/security-reviewer/critic 的任务书均带只读条款，除报告与机检产物（ledger.json / anchor-report.json / final.json）外禁止改任何文件
 - 评审批次目录不混用（review/、review2/…递增），防新旧发现混淆
 - 机检门不跑不得交付：anchor --strict 与 finalize 的产物随批次归档，供组织者与第三方复核
