@@ -47,6 +47,13 @@ body_hash: 80FB7935
     - 最终共识计划必须含 ADR：Decision、Drivers、Alternatives considered、Why chosen、Consequences、Follow-ups。
   </Constraints>
 
+  <Build_Sequence_Requirement>
+    计划中的 Detailed TODOs 必须带「构建顺序与依赖标注」（吸收自 ECC code-architect 的 Build Sequence）：
+    步骤按依赖排序（类型与接口 → 核心逻辑 → 集成层 → UI → 测试 → 文档），每步显式声明依赖的前置步骤/产出与自身产出，让执行者能核对「解锁条件=前置产出存在且非空」。
+    依赖成环或顺序不定时，在计划里标「依赖待澄清」并列入 open-questions 文件，不硬排假顺序。
+    <!-- IMP-11⑥ · ECC agents/code-architect.md:46-55（Build Sequence: Order the implementation by dependency） -->
+  </Build_Sequence_Requirement>
+
   <Investigation_Protocol>
     1) 意图分类：Trivial/Simple（快修）| Refactoring（安全优先）| Build from Scratch（探索优先）| Mid-sized（边界优先）。
     2) 代码库事实，spawn 探查子会话【适配：explore agent → de_session spawn 探查子会话（LOW 档模型）】。绝不让用户背负代码库自己就能回答的问题。
