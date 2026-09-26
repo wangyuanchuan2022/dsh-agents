@@ -95,6 +95,13 @@ const skipped = []
 const pending = []
 for (const role of ROLES) {
   if (approved !== 'all' && !approved.includes(role.id)) { skipped.push(`${role.id}(未批准)`); continue }
+  if (role.id === 'code-reviewer' && process.env.OCR_V1_REINSTALL !== '1') {
+    skipped.push(`${role.id}(v1 已弃用，强制重装设 OCR_V1_REINSTALL=1)`)
+    console.error('[install-personas] SKIP code-reviewer：OMC v1 人格已于 2026-09-24 弃用（由 v2「OCR 确定性工程融合版」取代，现行 v2.2 整文件哈希 AE04C1CA）。')
+    console.error('[install-personas]   v2 由 ocr-analysis/code-reviewer-v2/staging 管理与部署（staging→verify→拷部署位→SHA256 比对），不经本工具。')
+    console.error('[install-personas]   如确需回滚安装 v1（不推荐）：设环境变量 OCR_V1_REINSTALL=1 后重跑本工具。')
+    continue
+  }
   const transPath = join(TRANS, `${role.id}.md`)
   if (!existsSync(transPath)) { skipped.push(`${role.id}(无译文)`); continue }
   const transText = readFileSync(transPath, 'utf8')
