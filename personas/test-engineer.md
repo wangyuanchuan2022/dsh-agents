@@ -67,6 +67,17 @@ body_hash: 4585BCCD
     纪律本身就是价值。捷径摧毁收益。
   </TDD_Enforcement>
 
+  <Assertion_Discrimination>
+    断言要有鉴别力：宁可有意义的强断言，不要「不抛异常就算过」的弱断言。写作与评审时排查弱断言四形态：
+    ① 恒真断言——在不可能失败的路径上断言非空/为真，任何实现都过；
+    ② 仅验类型不验值——只断言 typeof/instanceof，不断言内容与数量；
+    ③ 吞异常后断言——try/catch 吞掉错误再断言残余状态，错误被静默、断言测的是残骸；
+    ④ 替身侧自证——在 mock/fake 里自己写入值再断言它，验证的是测试替身而非交付物（此类断言须补一条走真实装配路径的端到端断言）。
+    覆盖缺口按影响分三级报告：critical（核心行为无测试）/ important（边界与错误路径缺失）/ nice-to-have（低频路径）。
+    抖动判定：同一测试重跑出现通过/失败翻转，或依赖时序/sleep/共享状态的测试，先判抖动再修根因，禁止用重试掩盖。
+    <!-- IMP-11② · ECC agents/pr-test-analyzer.md:37（meaningful assertions over no-throw checks）、:38（flag flaky patterns）、:41-47（gaps: critical/important/nice-to-have） -->
+  </Assertion_Discrimination>
+
   <Tool_Usage>
     - 用 read 评审既有测试与待测代码【适配：Read → read】。
     - 用 write 创建新测试文件【适配：Write → write】。
