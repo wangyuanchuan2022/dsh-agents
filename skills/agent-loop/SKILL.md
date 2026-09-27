@@ -1,0 +1,786 @@
+---
+name: agent-loop
+description: "DSH 自主循环三层合一技能（机制 + 判断 + 模式）：机制层=loop-start 启动前三查与停止条件落盘 / loop-status 跨会话快照与退出码语义（2=熔断 1=未完成 0=完成）/ guard 同一步骤 3 轮无落盘增量即熔断移交组织者 / 心跳纪律三要素（唤醒有界、间隔按里程碑 ETA 对齐、+5h 长尾保险心跳）；判断层=四条件门、可判定目标、五崩法、三条红线、plan/build/judge；模式层=顺序流水线、De-Sloppify 清理遍、RFC 驱动 DAG 编排、DSH 原语选型树、循环硬门（max-runs / max-cost / max-duration / completion-signal 至少其一）。Use when 编排长任务循环、spawn 子会话跑多轮迭代、组织心跳巡检链、判断循环是否卡死、跨会话读取循环状态、设计或体检一个 loop、给实现步骤配清理遍、把大特性拆成 DAG 并行跑、评估循环模式选型。中文触发：起循环、跑长任务、心跳巡检、循环卡死、熔断、loop 快照、退出码、循环模式、流水线、DAG 编排、拆任务并行、清理遍、deslop、循环硬门、选型树、写 loop、设计 loop、做一个 loop、检查 loop 对不对、loop 体检、loop 会不会跑飞、可判定目标、五个崩法、plan build judge。English triggers: autonomous loop, loop status, loop guard, watchdog, circuit break a loop, heartbeat chain, stale loop detection, stop condition, design an agent loop, write a loop, check a loop, loop review, prevent a runaway loop, goal-oriented loop, decidable goal, plan/build/judge, loop pattern, sequential pipeline, DAG orchestration, de-sloppify pass, bounded loop, merge queue."
+---
+
+<!-- DSH-ADAPT-HEADER BEGIN（合并版头部块：三技能合一。本件由 DSH 技能库三个循环类技能（agent-loop 机制层 / loop-design-check 判断层 / autonomous-loops 模式层）全量保真重组而成——三层内容逐节保留，跨技能引用改写为技能内引用（见本技能 §X），未删除任何实质小节；未映射/改写点逐条登记于同目录 merge-report.md。）
+
+合并原则（三源头部的移植层声明原样继承，逐条见下「溯源」节）：
+  1. 机制层（源 1 agent-loop）为种子合成件：从 ECC 种子段提炼骨架、DSH 原语承载；心跳纪律三要素内嵌原文并注来源，非重造。
+  2. 判断层（源 2 loop-design-check）正文与 ECC 原件逐字一致——仅含行内【适配：…】标注，一字未删。
+  3. 模式层（源 3 autonomous-loops）为 ECC 原件 §1/§5/§6 逐段移植 + DSH 侧 §7/§8 新增/改写节。
+
+文件导航：§A 机制层（怎么起/怎么巡检/怎么熔断）→ §B 判断层（目标对不对、会不会跑飞）→ §C 模式层（选哪种循环形态）→ §D 部署与触发说明。跨层引用一律写作「本技能 §X」。
+-->
+
+# Agent Loop — 机制 / 判断 / 模式 三层合一
+
+> **一句话定位**：一个技能同时回答三个问题——「循环怎么起、怎么巡检、怎么熔断」（§A）、「这个循环的目标本身对不对、会不会跑飞」（§B）、「该选哪种循环形态」（§C）。
+> **使用顺序建议**：先用 §B 判断「该不该建这个循环、目标是否机器可判」，再用 §C 选形态，最后用 §A 起循环并巡检；已经在跑循环、怀疑它卡死时，直接跳 §A-2/§A-3。
+
+## 溯源（三源合并记录，逐条列出）
+
+### 源 1 — `agent-loop`（机制层 → 本技能 §A 全文）
+
+- origin: ECC-seeded synthesis（种子合成新技能，IMP-21①：从 ECC 种子段提炼骨架、DSH 原语承载）
+- ecc-source:
+  - `ecc-analysis/src/ECC-main/commands/loop-start.md:26-30`（Required Safety Checks 三条种子；sha256-16 **FA36F7396F07E70E**）
+  - `ecc-analysis/src/ECC-main/commands/loop-status.md:52-72`（跨会话快照与退出码种子；sha256-16 **74CA3FF7A7249F5D**）
+  - `D:\python\projects\guji\kb\docs\dsh_heartbeat_wake_budget.md`（心跳纪律三要素原文出处，2026-09-08）
+- ported: IMP-21① · P1 · ecc-analysis batch2 → staging/agent-loop/
+- sibling（合并前）: loop-design-check（判断层：目标可判定性/五崩法/红线）——**本件是机制层，两件配套用**；合并后该 sibling 内容即本技能 §B。
+
+### 源 2 — `loop-design-check`（判断层 → 本技能 §B 全文）
+
+- origin: ECC
+- ecc-source: `ecc-analysis/src/ECC-main/skills/loop-design-check/SKILL.md`（ECC v2.2.2，sha256-16 **FC929D24CDBF2349**）
+- ported: IMP-16① · P0 · ecc-analysis batch2 → staging/loop-design-check/
+- 保真校验（源件声明）: 剥离头部适配块与 frontmatter 后，正文与 ECC 原件逐字一致——仅含行内【适配：…】标注，一字未删。校验：`node verify-fidelity.mjs`
+
+### 源 3 — `autonomous-loops`（模式层 → 本技能 §C 全文）
+
+- origin: ECC（三节移植 + 行内适配；§C-7/§C-8 为 DSH 侧改写/新增）
+- ecc-source: `ecc-analysis/src/ECC-main/skills/autonomous-loops/SKILL.md`（ECC v2.2.2；sha256-16 **C2DB797295500B9C**）
+  - §1 Sequential Pipeline（原件 :41-107）
+  - §5 The De-Sloppify Pattern（原件 :318-377）
+  - §6 Ralphinho / RFC-Driven DAG Orchestration（原件 :380-545，含 :470「评审者永不评审自己写的代码」关键设计行）
+  - Anti-Patterns #1（原件 :589）硬门原文保留（本技能 §C-8）
+- upstream-retired: 上游退役声明（原件 :10-13）：autonomous-loops 在 ECC 上游自宣「仅保留一版以兼容，canonical 已换 continuous-agent-loop」——本移植存在版本滞后风险，属已知并接受。
+- scope-basis: 移植范围依据 C-S-4 + 组织者 DP-2 裁决（PLAN-improvement §4，B 案：只移植本件 §1/§5/§6 三节）。未移植部分：§2 NanoClaw / §3 Infinite Agentic Loop / §4 Continuous Claude PR Loop（依赖 ECC 专有载体 claw.js 与 continuous-claude CLI，DSH 无对应宿主）；原「Choosing the Right Pattern」决策矩阵不保留原文，改写为 §C-7 DSH 原语选项树。
+- ported: ecc-analysis batch2 → staging/autonomous-loops/
+
+### 合并说明（本件新增，非源件内容）
+
+- 合并动机（用户拍板）：三技能同源于 ECC v2.2.2 移植，互引密集（源 3 引源 1 §A.2/§C，源 1 引源 2 为配套），合并为一个技能消除跨技能引用加载开销。
+- 合并后部署名 = `agent-loop`（单一技能承载机制/判断/模式三层）。
+- 映射与改写纪律：源节 → 合并版目标节的逐条对照表、未删节证明与字节账见同目录 `merge-report.md`。
+
+## 本文件导航（合并版节号 ↔ 源节号）
+
+| 合并版 | 源 | 源内节号 |
+|---|---|---|
+| §A 机制层 | 源 1 `agent-loop` | 0 总览 / A loop-start / B loop-status / C guard / D 心跳纪律 / E 反模式 |
+| §B 判断层 | 源 2 `loop-design-check` | Premise / When to use / Red-line premise / Action 1（Step 0-5）/ Action 2 五崩法+三红线 / Worked example / One-line close / Lineage |
+| §C 模式层 | 源 3 `autonomous-loops` | §1 顺序流水线 / §5 De-Sloppify / §6 DAG 编排 / §7 选型树 / §8 硬门与反模式 / §9 References |
+| §D 部署与触发 | 合并版新增 | — |
+
+---
+
+# §A 机制层 — 循环怎么起、怎么巡检、怎么熔断（源 1 `agent-loop` 全文；源 1 原标题：`Agent Loop（DSH 自主循环三段式）`）
+
+> 机制层技能：管「循环怎么起、怎么巡检、怎么熔断」。「循环目标本身对不对、会不会跑飞」的判断层见**本技能 §B**——两层配套，本节不重复判断层内容。
+
+### §A 头部适配映射表（源 1 头部「ECC→DSH 适配映射表」原样保留：种子段落宿主设施 → DSH 原语）
+
+| ECC 宿主设施（种子段落） | DSH 对位 |
+|---|---|
+| `npx ecc loop-status --json`（CLI 扫描 ~/.claude/projects 转录找僵死信号） | de_session status/list 巡检 + 本技能 §A-2 状态快照文件（跨会话只读） |
+| `--watch` / `--watch-count`（有界刷新流） | pwsh 后台心跳任务（run_in_background=true）+ job_output 领取（有界由 tool-jobs 唤醒预算承担） |
+| `--exit-code`（ECC 语义：2=发现僵死信号 / 1=无法扫描转录） | 语义按 DSH 口径重定义：2=熔断 / 1=未完成 / 0=完成（§A-2.3） |
+| `--write-dir ~/.claude/loops`（index.json + per-session JSON 快照） | `<项目>/loop-state/`（任务书指定路径优先）：index.json + <session-id>.json |
+| `.claude/plans/` runbook 落盘 | 任务书/计划文件 + loop-state 停止条件文件（§A-1.2） |
+| `ECC_HOOK_PROFILE` 未禁用检查 | DSH 无 hooks——改查：完成判据机器可判（跑本技能 §B 四条件门）+ 档位路由合规（agent_roles action=tiers，禁越档）+ 消耗额度项成本核算书已批 |
+| Claude transcript JSONL 扫描 | `~/.dsh/sessions/<工作区目录>/session-<id>/session.jsonl.zstd`（只读取证；python zstandard 须 stream_reader） |
+
+## §A.0 三段式总览
+
+- **loop-start**（§A-1）：开跑前。安全前置检查 + 停止条件落盘，缺一不开跑。
+- **loop-status**（§A-2）：巡检态。每轮循环把状态写成跨会话可读快照；退出码三态语义。
+- **guard**（§A-3）：熔断态。同一步骤 3 轮无新落盘增量即熔断，点对点移交组织者，不无限续命。
+
+## §A-1 loop-start — 启动前安全前置检查 + 停止条件落盘
+
+（种子：commands/loop-start.md:26-30「Required Safety Checks」三条——先验证测试通过再起首轮；确认 hook profile 未被全局禁用；确认循环有显式停止条件。ECC 逐条 DSH 适配如下。）
+
+### §A-1.1 开跑前三查（全过才准起循环）
+
+1. **基线绿（新鲜输出）**：首轮起跑前的验证（构建/测试/验收链）必须在本会话新鲜跑过并展示输出，不假设上一会话的绿还有效。
+2. **判据可判（DSH 替代 hook-profile 检查）**：DSH 无 hooks，没有运行时拦截兜底——完成判据必须机器可判（跑**本技能 §B** 的四条件门：可判定目标/边界条件/失败回退/评审独立）。判据含糊的循环在 DSH 里必然跑飞，因为没有任何机制能拦住它。
+3. **额度与档位合规**：消耗 API 额度的循环先出成本核算书并获用户批准（用户固化纪律）；子会话一律用档位路由表内模型——spawn 前跑 `agent_roles action=tiers` 以当次回显为准，禁止任何形式的越档显式指定。
+
+### §A-1.2 停止条件落盘（硬门，缺一不开跑）
+
+把停止条件写进循环状态文件（默认 `<项目>/loop-state/index.json`，任务书指定路径优先）：
+
+- **max-runs（最大轮数）/ max-cost（成本上限）/ max-duration（时长上限）/ completion-signal（完成信号）至少其一**——四形态全缺的循环禁止启动（与**本技能 §C-8** 硬门同源，ECC 原文「Always have a max-runs, max-cost, max-duration, or completion signal」）。
+- **回合上界**：同一步骤在同一会话内最多 3 轮无新落盘增量的往返（**§A-3** guard 的触发线，开跑前就写进快照）。
+- 停止条件变更走任务书修订，不静默改、不中途放宽。
+
+### §A-1.3 循环状态文件骨架
+
+```json
+{
+  "loop_id": "<任务/批次名>",
+  "pattern": "<sequential|batch|dag>",
+  "stop_condition": { "max_runs": 10, "max_cost_usd": null, "max_duration": "8h", "completion_signal": "ALL_TESTS_GREEN" },
+  "round_budget": { "rounds_no_progress_limit": 3 },
+  "phase": "<running|paused|done|circuit_broken>",
+  "exit_code": null,
+  "rounds_since_progress": 0,
+  "last_checkpoint": "<时间戳+最后落盘产物>"
+}
+```
+
+（JSON 为示意骨架；字段可按任务增减，stop_condition 与 rounds_no_progress_limit 两块必填。）
+
+## §A-2 loop-status — 跨会话可读状态快照 + 退出码语义
+
+（种子：commands/loop-status.md:52-72——`--write-dir` 维护 index.json 与 per-session JSON 快照供兄弟终端与 watchdog 读取；「快照只是本地转录分析的快照，不控制、不超时运行时工具调用」。）
+
+### §A-2.1 快照纪律
+
+- 每轮循环结束**覆盖写** `loop-state/index.json`（一行一轮：sessionId/pattern/phase/rounds_since_progress/heartbeat 链/eta/exit_code/last_checkpoint）与 `<session-id>.json`（该会话全量载荷）。
+- 快照是跨会话接口：任何心跳回合、组织者巡检、兄弟会话判断循环状态，只读快照，不必唤醒循环本体。
+- **快照是观察面不是控制面**：写快照不等于熔断；熔断以 §A-3 判定为准。细节争议取证回 session.jsonl.zstd（只读），快照不替代转录。
+
+### §A-2.2 心跳回合标准动作
+
+心跳醒来先做四件事：① `job_output` 领取积压通知（可能多条，逐条核对）；② 巡检落盘增量（产出文件 mtime/大小/行数，不凭对方自述）；③ 更新 §A-2.1 快照；④ 按需链下一条心跳（间隔按 §A-4.2）。
+
+### §A-2.3 退出码语义（本技能约定，组织者巡检按码处置）
+
+| exit | 含义 | 组织者处置 |
+|---|---|---|
+| **2** | 熔断（guard 触发，或停止条件命中） | 重划界/接管/按断点重派 |
+| **1** | 未完成（循环在跑或待续） | 等下一心跳或继续 |
+| **0** | 完成（完成判据满足且验证过，展示新鲜输出） | 正常回收验收 |
+
+（注：ECC 原语义 2=发现僵死信号、1=无法扫描转录；DSH 侧重定义收窄为循环三态。僵死信号检测在 DSH 由 §A-3 guard + 心跳巡检承担；转录取证不可用属环境故障，走失败降级 L3/L4 上报，不占码位。）
+
+## §A-3 guard — 3 轮无增量熔断
+
+- **判定**：同一步骤在同一会话内连续 **3 轮**无新落盘增量（产出文件 mtime/大小无变化、无新文件、快照无更新）→ 判熔断，exit_code=2。以「落盘增量」为唯一判据，不以「自认有进展」为准；「写了但没存」与「没写」同罪。
+- **熔断动作**（按序，不得静默停止）：
+  1. 停止该步骤续命——不第 4 次重试；
+  2. `de_broadcast` **点对点直投组织者会话**（有 ORG ID 一律直投，禁用 project: 伪接收者），正文含：卡点现象、已试 3 轮各自的动作与失败原因、当前落盘状态、剩余项清单、退出码 2；
+  3. 快照 phase 置 `circuit_broken`、exit_code=2，移交组织者重划界。
+- **三种失败降级分层**（任务书缺省决策表）：缺参数查缺省表（L1/L2）→ 工具不可用换等价能力并声明（L3）→ 产出无法落盘/任务无法继续必须广播卡点（L4，wake:true）。
+
+## §A-4 心跳纪律三要素（本机已固化纪律，内嵌原文——不重造）
+
+> 来源：`D:\python\projects\guji\kb\docs\dsh_heartbeat_wake_budget.md`（2026-09-08 夜间巡检静默断链根因分析，tool-jobs `maxConsecutiveWakes` 转录取证）+ 全局记忆「DSH 后台任务完成通知的唤醒是有界的（tool-jobs）」条。三要素为长期生效纪律，本技能只做汇编落位。
+
+### §A-4.1 唤醒有界
+
+每个会话**连续由插件通知唤醒最多 3 次**（`maxConsecutiveWakes` 默认 3），第 4 次起通知降级为不唤醒注入（next-step），idle 会话不领取形成盲区；只有领取到**用户亲写消息**（source.kind==="user"）才重置预算——心跳通知本身是 kind=plugin，自激链永不补充自己花掉的预算。**心跳只保证「通知必达」不保证「即时唤醒」**：通知永不丢失只延迟（持久 inbox，下回合批量领取）。预算按会话计不按任务计——同周期几分钟错峰双心跳无效。`maxConsecutiveWakes` 未暴露到 profile/settings，调它需改宿主代码且升级失效。
+
+### §A-4.2 间隔按里程碑 ETA 对齐
+
+心跳间隔按里程碑完成验收点弹性对齐（近期约 45min；跨里程碑完成点按 ETA+15min 余量），**不要均分短周期**。起链前先算唤醒预算账：每个计时器心跳自问「醒来时能验证到什么新状态」——早于目标 ETA、验不到新状态的纯计时器心跳直接砍，把 3 次预算花在里程碑上。
+
+### §A-4.3 +5h 长尾保险心跳
+
+每轮巡检链外挂**一条 +5h 长尾保险心跳**，防「巡检回合中途崩死没接上链」——短链正常时长尾落空无害（降级注入、下轮顺带领取）；短链断头时，长尾 5 小时后仍能复活巡检。长跑收尾过夜方案：晚间最后一次互动后链 45m → 90m → 150m 三级心跳，覆盖约 4.7h，其后通知积累、早晨首批领取。
+
+## §A-5 反模式
+
+1. **无退出条件的循环**——违 §A-1.2 硬门，禁止启动。
+2. **只等完成广播不巡检落盘**——子会话可能无声死亡（内容过滤 1301 / provider 429 配额耗尽），广播与心跳双通道兜底。
+3. **快照只写一次**——§A-2.1 要求每轮覆盖写，跨会话接口失效等于没有。
+4. **熔断后原地重试**——§A-3：3 轮上限，第 4 次动作只能是上报，不是重试。
+5. **心跳均分短周期烧预算**——违 §A-4.2，空转计时器应当场砍掉。
+6. **把唤醒降级当通知丢失**——§A-4.1：静默=延迟不是丢数据，下回合先领取积压再动作。
+
+---
+
+# §B 判断层 — 目标对不对、会不会跑飞（源 2 `loop-design-check` 全文；源 2 原标题：`Loop Design + Review`）
+
+> 判断层负责「WRITE 一个循环（该不该建、目标能不能机器判、选哪种类型、选哪套骨架）」与「REVIEW 一个循环（五崩法 + 可判定性/边界/回退/评审独立 + 红线）」。机制实现（怎么起、怎么巡检、怎么熔断）见**本技能 §A**；循环形态与编排模式见**本技能 §C**。
+
+### §B 头部适配块（源 2 头部原文保留：ECC→DSH 映射表 + DSH 侧补充）
+
+metadata（源 2 的 ECC frontmatter 散字段收编处——DSH frontmatter 契约仅 name+description）：
+`origin: ECC`；`ecc-source: ecc-analysis/src/ECC-main/skills/loop-design-check/SKILL.md（ECC v2.2.2，sha256-16 FC929D24CDBF2349）`；`ported: IMP-16① · P0 · ecc-analysis batch2 → staging/loop-design-check/`
+
+**ECC→DSH 适配映射表（宿主设施 → DSH 原语）**
+
+| ECC 宿主设施（正文原样保留） | DSH 对位 |
+|---|---|
+| `/goal` 斜杠命令（servo 闭环） | create_goal / goal 工具（达目标即停；update_goal complete 收尾） |
+| `/loop` 斜杠命令（恒温器 regulator） | DSH 无原生等价：pwsh 后台心跳任务（run_in_background）+ 组织者巡检（机制细节见本技能 §A-2/§A-4） |
+| `/schedule` / cron | Windows 计划任务（Register-ScheduledTask；沙箱内 schtasks 必挂，建议交用户终端） |
+| Claude Code sub-agents（main Claude dispatching plan/build/judge） | de_session spawn 三角色子会话 + 组织者合成 |
+| CLAUDE.md（常驻规则文件） | ~/.dsh/AGENTS.md（全局）+ 项目 AGENTS.md + memory 轨 |
+| `autonomous-loops` / `continuous-agent-loop`（ECC 机制层技能，本库未移植） | 合并后即**本技能 §C 模式层**（§C-1 顺序流水线 / §C-5 清理遍 / §C-6 DAG 编排 / §C-7 选型树 / §C-8 硬门）；运行时机制层由 goal 工具 / ralph / de_session wake + 心跳承载（§A） |
+| hooks / MCP / claude CLI | 本件零依赖（源件 C 报告宿主依赖扫描确认），无需降级 |
+
+**DSH 循环原语对照（源件 C 报告 A-1 改进点①）**
+
+goal=servo（达目标即停）｜ralph=有界重跑（fresh-agent 迭代，轮数上限）｜de_session wake=regulator（按需触发）｜心跳/Windows 计划任务=cron（定时触发）。
+
+**五崩法 × DSH 最小机检（源件 C 报告 A-1 改进点②）**
+
+#1 目标不可判定→验收标准必须机器可判；#2 自审自判→评审者不得是作者（squad 盲评 / verifier 新鲜证据）；#3 删测试过门→断言测试文件数与断言计数不降于基线；#4 指望运行时提问→澄清必须前置（见下）；#5 陈旧记忆→记忆审查轮 + decay 归档。
+
+**与 subagent-clarify 交叉引用（源件 C 报告 A-1 改进点③）**
+
+崩法 #4「指望 agent 运行中提问」↔ subagent-clarify「缺参数不得瞎猜、按链路取人类输入」——同一条纪律：澄清必须前置，开工前问清。（该技能为独立技能，保持跨技能引用。）
+
+## §B 正文
+
+> **Premise.** An LLM is a feed-forward system: prompt in → tokens out, with no built-in "steer toward the goal" across turns. To make it *behave* like a goal-oriented system, you wrap a feedback loop around it. This skill helps you **write** that loop correctly and **review** it so it won't run away.
+
+### §B-1 When to use / not
+
+**Use it when:**
+- You want to hand a repeating task to an agent that runs over and over (write→test, test→fix, fix→verify…).
+- You already have a loop and worry it spins, cheats, or runs a wrong answer to completion.
+
+**Don't use it for:**
+- A one-off task → just do it; don't wrap a loop around it.
+- A plain timer / poll → use `/loop`; no design needed. 【适配：DSH 无原生 /loop 命令——对位=pwsh 后台心跳任务或 Windows 计划任务，纯计时无需设计循环；机制见本技能 §A-4】
+- *How to wire the loop architecture* (pipelines → DAGs, long-run recovery) → that's the mechanism layer; see **本技能 §C**（原 `autonomous-loops` / `continuous-agent-loop` 一节的内容即本技能 §C）。**This skill only covers "is the goal right, and will it run away" — it does not re-explain mechanism.** 【适配：两技能为 ECC 技能库机制层技能，DSH 侧由源 3 三节移植承载——合并后即**本技能 §C**（§C-1/§C-5/§C-6）；运行时机制层由 goal 工具/ralph/de_session wake+心跳承载（§A）】
+
+### §B-2 Red-line premise: two levels of feedback
+
+| Level | Who owns it | What it does |
+|---|---|---|
+| **Execution** (low) | machine / agent | Measures "how far from the literal goal" and grinds it to zero. The machine is strong here. |
+| **Judgment** (high) | **human** | Decides "is this goal itself right, should it change, should it stop." The machine can't step outside its own loop to question the goal. |
+
+> A thermostat can feed back "how far from 26°C," but when you have a fever and want 28°C it can't judge whether 26 is the *right* target — it just grinds toward 26. **"What to set today" is always the human's call.**
+> Handing judgment / sign-off / the last switch to the machine = removing the high-level feedback = it sprints, fast and hard, toward a goal no one questioned → wrong output.
+
+---
+
+### §B-3 Action 1 — Write a loop (5 steps)
+
+#### Step 0 · Subtract first: should you even build it? (4-condition gate, any miss = veto)
+
+① the task repeats weekly or more　② verification can be automated　③ the token budget can take it　④ the agent has tools that actually *run and see the result*
+
+Miss any one → **don't build a loop**; do it by hand or another way.
+> What stops most people isn't "can I write a loop," it's "does my repo deserve one." A repo that deserves a loop has a reconciliation baseline (golden sample / upstream total) + tests + a lint guard. **A repo that doesn't deserve a loop will only have its errors amplified by one.**
+
+#### Step 1 · Define a *machine-decidable* goal (the hard part — the loop lives or dies here)
+
+The whole loop rides on the comparator's "is it done yet?" **The comparator can only work if your exit condition can be judged yes/no by a machine.**
+
+- Bad: Vague ("make it good," "write it sharper") → the comparator can't judge → either it never passes (stuck retrying) or it guesses (passes/blocks at random).
+- Good: Decidable ("all 96 unit tests green AND a change-list is produced," "module-02 fields filled, pytest passes, business logic untouched") → one check settles it; the loop converges cleanly.
+
+**Five-point goal framework:**
+1. **Done-criterion is machine-verifiable.**
+2. **Boundary conditions defined alongside the done-criterion** ("what it must NOT do") — anti-Goodhart; missing boundaries = a license to cheat.
+3. **Has a failure fallback** — retry cap N + escalate to a human when exceeded.
+4. **Goal is layered.**
+5. **Prefer reconciliation over assertion for the done-criterion** — anchor to external fact (golden sample / upstream total / financial tie-out / platform back-office numbers) before your own assertions. "All tests pass" can be gamed (loosen asserts, fake mocks, swallow exceptions); "diff vs the reference < 0.01" can't.
+
+> **Self-check:** read the goal to someone who doesn't know the domain — can they run one command and tell whether it's done? If not, it isn't decidable enough. Go back.
+
+#### Step 2 · Pick the loop type
+
+| Your task | Loop type (cybernetic) | How it stops |
+|---|---|---|
+| Has a clear "done" test (write to done / a batch of images processed) | **servo** (`/goal`-style closed-loop) 【适配：/goal → DSH create_goal/goal 工具，达目标即停】 | stops on reaching the goal |
+| No endpoint, must keep maintaining a state (inventory alert / scheduled health check) | **regulator** (`/loop`-style thermostat) 【适配：/loop → DSH 无原生等价，对位=pwsh 后台心跳任务+组织者巡检，见本技能 §A-4】 | never stops; acts only on change (dead-band suppresses noise) |
+| Periodic sampling, stop on a condition (watch a PR until CI is green) | **regulator with an exit** | stops when the exit condition holds |
+| Must "ensure something happens on time" | wrap the above in `/schedule` 【适配：/schedule → Windows 计划任务（Register-ScheduledTask，建议交用户终端）】 | cron fires it 【适配：cron → Windows 计划任务 / DSH 心跳任务】 |
+
+> Rule of thumb: clear "done" test → servo; must keep maintaining, no endpoint → regulator; must "happen on time" → wrap a regulator in schedule.
+
+#### Step 3 · Pick a skeleton
+
+**Maintenance type (tend something that exists) → document-driven dispatch.**
+The loop isn't "run a fixed check on a timer," it's **"read a doc on a timer, and dispatch only when the doc changed."** The doc is the task queue + state machine + human interface.
+Three disciplines: ① the problem column is human-write-only, the result column is loop-write-only, **state advances one-way and never rolls back**; ② **the exit code is final** (if the script says exit 1, the script wins); ③ state advances only as far as "awaiting verification" — **the "done" cell is flipped by a human only.** The loop is the worker, not the acceptance officer.
+
+**Greenfield type (build from scratch) → plan / build / judge, three roles.**
+
+| Role | Does | Key |
+|---|---|---|
+| **Plan** | break the goal into a spec + **decidable acceptance conditions** | acceptance must be script-judgeable |
+| **Build** | write to the spec | **must not change the acceptance conditions** |
+| **Judge** | run acceptance **independently**; pass → stop, fail → return with the failure reason to Build | **independent + deterministic** |
+
+Three iron rules (all bet on the judge): ① **the judge must be independent** — not the same agent as Build (grading your own homework always inflates); ② **deterministic rules** — pytest / reconciliation diff / type check / diff, never "looks right"; ③ **Build may not edit the acceptance conditions to pass**. Three failed retries → escalate to a human.
+
+#### Step 4 · Add damping (against oscillation / runaway)
+
+Retry cap, hard stop, human flips the last switch = damping. **Negative feedback with no damping oscillates** (the Ralph-Wiggum loop: spinning in place, burning tokens).
+
+#### Step 5 · Land in three stages (don't go fully automatic on day one)
+
+① **Run it once by hand** (forces you to state exactly "how the judge decides") → ② harden into a skill / Claude Code sub-agents (a main Claude loops, dispatching plan/build/judge) 【适配：Claude Code sub-agents → de_session spawn plan/build/judge 三角色子会话+组织者合成；"harden into a skill" → DSH skill_manage 技能】 → ③ hang it on cron for full automation. 【适配：cron → Windows 计划任务（Register-ScheduledTask，建议交用户终端）】
+
+---
+
+### §B-4 Action 2 — Review a loop (checklist = five failure modes)
+
+> Run the loop past each row. **Hitting any one = this loop will misfire; send it back.** These five are negative experience (gotchas) — worth more than positive rules.
+
+| # | Failure mode (how it breaks) | Review question (a hit = red) | Antibody |
+|---|---|---|---|
+| 1 | Goal is a correct platitude → **spins, burns money** | Can the exit condition be machine-judged yes/no? Or is it "manage it well / make it good"? | Replace with a decidable result condition (Action 1·Step 1) |
+| 2 | "Verification" written as "check if it looks ok" → **agent confidently says fine and stops** | Is the judge the defendant itself? Does verification rest on "looks right" or deterministic rules? | Reconcile + exit code rules + independent judge |
+| 3 | (worst) Only gates on "all tests pass" → **agent deletes the tests** | Is there a boundary ("what it must NOT do")? Or only a done-criterion? | Done-criterion **+ boundary** together (the Goodhart antibody) |
+| 4 | Counts on the agent asking mid-run → **it won't; it runs the wrong answer to the end** | Is there any "clarify only at runtime" point? | **Front-load every clarification**; settle it once before launch |
+| 5 | Bloated CLAUDE.md + stale memory 【适配：CLAUDE.md → DSH 对位=~/.dsh/AGENTS.md + 项目 AGENTS.md + memory 轨】 → **the faster it loops, the more it errs** | Are the docs/memory it depends on fresh? Who maintains them? | Layered memory + periodic lint 【适配：DSH 对位=记忆审查轮 + memory-consolidate / decay 归档】 |
+
+**Plus three red lines (violate any = not allowed to go automatic):**
+- **Keep judgment with the human.** Acceptance / the "done" cell is flipped by a human; the loop is not the acceptance officer.
+- **Responsibility doesn't transfer.** Anything whose failure you can't afford (merge the wrong PR / publish the wrong thing / misallocate money) → **don't hand over the authority automatically.**
+- **Counter-intuitive warning.** The more "self-improving / rewrites-its-own-rules" a loop is, the **stricter the human review it needs** (to see what it rewrote the rules into) — not looser. The machine is too fast to intercept after the fact, so the human's judgment must sit **before the action** (a hard gate), not as a post-hoc patch.
+
+---
+
+### §B-5 Worked example — reviewing a "nightly green-keeper" loop
+
+You want a loop that runs every night and fixes whatever tests are failing.
+
+- **Naive goal:** "make all tests pass." → Step-1 self-check fails: this is the bait for failure mode #3.
+- **Decidable goal (fixed):** "all tests green **AND** no test file deleted or weakened **AND** coverage not lowered **AND** a change-list produced." Boundary now defined alongside the done-criterion.
+- **Type:** servo with a retry cap of 3 (Step 2 + Step 4).
+- **Skeleton:** plan/build/judge — the **judge is CI run independently**, never the fixing agent (Step 3).
+
+Now run the **review checklist**, and it catches what the naive version would have missed:
+- **#3 hit** → the naive "all tests pass" lets the agent delete a failing test to "win." Fixed by the boundary "no test file deleted/weakened."
+- **#2 hit** → if the fixing agent also judged its own fix, it would pass itself. Fixed by "judge = independent CI, deterministic."
+- **#4 hit** → if a fix is ambiguous, the agent won't stop to ask at 2 a.m.; it'll commit a guess. Fixed by front-loading: ambiguous fixes are left for the human, not guessed.
+- **Red line** → the loop opens a PR but **does not auto-merge**; the human flips the last switch (responsibility doesn't transfer).
+
+The naive loop and the reviewed loop differ by four lines of constraint — and that's the difference between "wakes you to a deleted test suite" and "wakes you to a clean PR."
+
+---
+
+### §B-6 One-line close
+
+> The hard part of writing a loop isn't "can I write a loop," it's **defining a goal a machine can reconcile** — decidable, bounded, reconciliation-based. The controller must be deterministic and external; keep judgment and the standard with the human; the system tends toward entropy, so maintain it.
+> **A loop only rewards someone who has already thought it through. Count on it to think for you, and it will happily think wrong, with you, at scale.**
+
+---
+
+### §B-7 Lineage（源 2 尾部原文保留）
+
+> Lineage: Wiener's two-level feedback (*The Human Use of Human Beings*, 1950) for the judgment/execution split and red lines; the plan/build/judge pattern from Anatoli's *Loops explained* and Addy's *Loop Engineering*.
+> Mechanism layer (how to wire the loop architecture): see **本技能 §C**（原 `autonomous-loops` / `continuous-agent-loop`）。This skill does not re-implement mechanism; it covers goal definition and runaway prevention only. 【适配：两技能为 ECC 库机制层技能，DSH 侧由源 3 三节移植承载——合并后即**本技能 §C**；运行时机制层对位见本技能 §A 与 §B 头部映射表】
+
+---
+
+# §C 模式层 — 选哪种循环形态、怎么编排（源 3 `autonomous-loops` §1/§5/§6/§7/§8/§9 全文；源 3 原标题：`Autonomous Loops（DSH 三节移植版）`）
+
+> **范围声明**（源 3 移植范围，DP-2 裁决 B 案；合并后范围不变）：本节只含 ECC 原件 §1/§5/§6 三节 + DSH 侧选项树（§C-7）+ 硬门（§C-8）+ 源 3 References（§C-9）。原件其余各节（§2/§3/§4/决策矩阵原文）未移植，理由见头部 scope-basis（见「溯源」节）。原件头部退役声明（:10-13）转抄：`autonomous-loops` is retained for compatibility only; the canonical skill name is now `continuous-agent-loop`（ECC 上游）——本移植接受该滞后风险，取的是 §1/§5/§6 的模式价值而非版本时效。
+
+### §C 头部适配映射表（源 3 头部原文保留：正文原样保留处 → DSH 原语）
+
+| ECC 宿主设施（正文原样保留处） | DSH 对位 |
+|---|---|
+| `claude -p`（非交互单步调用） | de_session spawn 子会话（任务书=完整提示词，跑完收报告）；或同会话分步执行；或 pwsh 后台任务 |
+| `--model opus/sonnet/haiku` 模型路由 | agent_roles 档位路由（LOW/MEDIUM/HIGH）；spawn 前跑 agent_roles action=tiers 以当次回显为准，禁止任何形式的越档显式指定（2026-09-26 用户规则） |
+| `--allowedTools` 读写面限制 | 只读角色（explore/code-reviewer 等）+ 任务书权限边界（可写实施 / 只读评审） |
+| Task 工具并行 sub-agents | de_session spawn 多角色子会话（错峰启动；并发≤3 只约束开启瞬间） |
+| `.claude/commands/infinite.md` 斜杠命令 | 不移植（依赖 ECC 命令面）；DSH 对位=workflow 工具（用户显式要求时）或组织者分批编排 |
+| shell for 循环串起循环体 | pwsh 直跑循环体 + 每轮调 de_session spawn（沙箱内 node 管道捕获 EPERM——子进程输出用 fd stdio 或落盘中转） |
+| SHARED_TASK_NOTES.md 跨迭代上下文 | 落盘状态文件（loop-state/ 或任务书指定路径）+ memory 工具（项目轨）；快照纪律见**本技能 §A-2** |
+| jj/Jujutsu worktree 隔离 | git worktree，或按任务书「单写者所有权」做文件面隔离 |
+| 全状态持久化到 SQLite、断点续跑 | 落盘 JSON 快照（loop-state/index.json）+ memory 项目轨 + 交接文档（session-handoff 技能） |
+| `gh pr create` / CI 轮询合并队列 | 组织者合成 + 分块 git commit 检查点（用户分块检查点纪律）；push 需用户批准，不自动 push |
+
+## §C-1 Sequential Pipeline (`claude -p`)【适配：DSH 载体 = de_session spawn 子会话流水线】
+
+**The simplest loop.** Break daily development into a sequence of non-interactive `claude -p` calls. Each call is a focused step with a clear prompt. 【适配：`claude -p` → DSH 对位=de_session spawn 子会话（任务书即完整提示词，跑完收报告再起下一步）；下例 bash 骨架保留作模式说明，执行面按映射表替换】
+
+### Core Insight
+
+> If you can't figure out a loop like this, it means you can't even drive the LLM to fix your code in interactive mode.
+
+The `claude -p` flag runs Claude Code non-interactively with a prompt, exits when done. Chain calls to build a pipeline: 【适配：DSH 无 claude CLI（DP-9 裁决：不作为移植依赖，一律映射 de_session spawn）】
+
+```bash
+#!/bin/bash
+# daily-dev.sh — Sequential pipeline for a feature branch
+
+set -e
+
+# Step 1: Implement the feature
+claude -p "Read the spec in docs/auth-spec.md. Implement OAuth2 login in src/auth/. Write tests first (TDD). Do NOT create any new documentation files."
+
+# Step 2: De-sloppify (cleanup pass)
+claude -p "Review all files changed by the previous commit. Remove any unnecessary type tests, overly defensive checks, or testing of language features (e.g., testing that TypeScript generics work). Keep real business logic tests. Run the test suite after cleanup."
+
+# Step 3: Verify
+claude -p "Run the full build, lint, type check, and test suite. Fix any failures. Do not add new features."
+
+# Step 4: Commit
+claude -p "Create a conventional commit for all staged changes. Use 'feat: add OAuth2 login flow' as the message."
+```
+
+【适配：四步 DSH 映射——Step1 = spawn executor（实现）；Step2 = spawn executor 会话并加载 ai-slop-cleaner 技能做清理遍（见 §C-5）；Step3 = spawn verifier/test-engineer（新鲜验证输出，不假设上一步的绿）；Step4 = git-master 或 executor 本地 commit 建检查点（push 需用户批准）。沙箱注意：pwsh 直跑循环体没问题，但脚本内再 spawn 子进程捕获输出会撞 EPERM——用 fd stdio 或落盘文件中转】
+
+### Key Design Principles
+
+1. **Each step is isolated** — A fresh context window per `claude -p` call means no context bleed between steps. 【适配：DSH=每个子会话独立上下文；跨步状态靠任务书与落盘文件传递，不靠上下文】
+2. **Order matters** — Steps execute sequentially. Each builds on the filesystem state left by the previous.
+3. **Negative instructions are dangerous** — Don't say "don't test type systems." Instead, add a separate cleanup step (see [De-Sloppify Pattern](#c-5-the-de-sloppify-pattern)).
+4. **Exit codes propagate** — `set -e` stops the pipeline on failure. 【适配：DSH 循环退出码三态语义（2=熔断/1=未完成/0=完成）见**本技能 §A-2.3**】
+
+### Variations
+
+**With model routing:** 【适配：`--model opus/sonnet` → agent_roles 档位路由 LOW/MEDIUM/HIGH；spawn 前跑 agent_roles action=tiers 确认当次指向；禁止越档显式指定】
+
+```bash
+# Research with Opus (deep reasoning)
+claude -p --model opus "Analyze the codebase architecture and write a plan for adding caching..."
+
+# Implement with Sonnet (fast, capable)
+claude -p "Implement the caching layer according to the plan in docs/caching-plan.md..."
+
+# Review with Opus (thorough)
+claude -p --model opus "Review all changes for security issues, race conditions, and edge cases..."
+```
+
+**With environment context:** 【适配：`.claude-context.md` → 工作区任意落盘文件；`rm` 改为任务收尾清理，不留临时文件】
+
+```bash
+# Pass context via files, not prompt length
+echo "Focus areas: auth module, API rate limiting" > .claude-context.md
+claude -p "Read .claude-context.md for priorities. Work through them in order."
+rm .claude-context.md
+```
+
+**With `--allowedTools` restrictions:** 【适配：只读面 → spawn 只读角色（explore/code-reviewer）+ 任务书只读约束；写面 → spawn executor 可写实施角色】
+
+```bash
+# Read-only analysis pass
+claude -p --allowedTools "Read,Grep,Glob" "Audit this codebase for security vulnerabilities..."
+
+# Write-only implementation pass
+claude -p --allowedTools "Read,Write,Edit,Bash" "Implement the fixes from security-audit.md..."
+```
+
+---
+
+## §C-5 The De-Sloppify Pattern 【适配：清理遍执行改指向既有 ai-slop-cleaner 技能，本节保留问题陈述与模式原理，不重述操作清单】
+
+**An add-on pattern for any loop.** Add a dedicated cleanup/refactor step after each Implementer step.
+
+【适配（范围裁定，DP-2 批准的改指向）：ECC 原节的清理清单与执行步骤，DSH 侧不再重造——既有技能 `ai-slop-cleaner`（全量移植自 OMC 同名：锁行为→清理计划→五类 slop 分类[重复/死代码/无谓抽象/边界违例/缺测试]→单味道单批次逐遍清理→质量门[回归测试绿+lint/typecheck]→writer/reviewer 分离）已覆盖同一问题域且更完整。DSH 执行姿势：清理遍单独 spawn 一个会话（保持独立上下文，正是本模式的 Key Insight），任务书写明「加载 ai-slop-cleaner 技能，对上一提交的变更做清理遍」；或同会话 skill 加载 ai-slop-cleaner。触发词：deslop / 清理 / 太臃肿 / 去 slop。】
+
+### The Problem
+
+When you ask an LLM to implement with TDD, it takes "write tests" too literally:
+- Tests that verify TypeScript's type system works (testing `typeof x === 'string'`)
+- Overly defensive runtime checks for things the type system already guarantees
+- Tests for framework behavior rather than business logic
+- Excessive error handling that obscures the actual code
+
+### Why Not Negative Instructions?
+
+Adding "don't test type systems" or "don't add unnecessary checks" to the Implementer prompt has downstream effects:
+- The model becomes hesitant about ALL testing
+- It skips legitimate edge case tests
+- Quality degrades unpredictably
+
+### The Solution: Separate Pass
+
+Instead of constraining the Implementer, let it be thorough. Then add a focused cleanup agent: 【适配：DSH=spawn 独立清理会话 + ai-slop-cleaner 技能；ECC 原清单作为 ai-slop-cleaner 五类 slop 分类的 ECC 侧对照样本保留】
+
+```bash
+# Step 1: Implement (let it be thorough)
+claude -p "Implement the feature with full TDD. Be thorough with tests."
+
+# Step 2: De-sloppify (separate context, focused cleanup)
+claude -p "Review all changes in the working tree. Remove:
+- Tests that verify language/framework behavior rather than business logic
+- Redundant type checks that the type system already enforces
+- Over-defensive error handling for impossible states
+- Console.log statements
+- Commented-out code
+
+Keep all business logic tests. Run the test suite after cleanup to ensure nothing breaks."
+```
+
+### In a Loop Context
+
+```bash
+for feature in "${features[@]}"; do
+  # Implement
+  claude -p "Implement $feature with TDD."
+
+  # De-sloppify
+  claude -p "Cleanup pass: review changes, remove test/code slop, run tests."
+
+  # Verify
+  claude -p "Run build + lint + tests. Fix any failures."
+
+  # Commit
+  claude -p "Commit with message: feat: add $feature"
+done
+```
+
+【适配：循环体四步同 §C-1 映射；第二步=ai-slop-cleaner 清理遍。DSH 侧补充：for 循环体每轮都要过**本技能 §A-1.2** 停止条件与 **§A-3** 3 轮熔断判定，防循环体空转】
+
+### Key Insight
+
+> Rather than adding negative instructions which have downstream quality effects, add a separate de-sloppify pass. Two focused agents outperform one constrained agent.
+
+---
+
+## §C-6 Ralphinho / RFC-Driven DAG Orchestration
+
+**The most sophisticated pattern.** An RFC-driven, multi-agent pipeline that decomposes a spec into a dependency DAG, runs each unit through a tiered quality pipeline, and lands them via an agent-driven merge queue. Created by enitrat (credit: @enitrat). 【适配：DSH 对位=de_session spawn 多角色子会话分层并行 + 组织者合成；SQLite/jj/gh CI 载体替换见映射表】
+
+### Architecture Overview
+
+```
+RFC/PRD Document
+       │
+       ▼
+  DECOMPOSITION (AI)
+  Break RFC into work units with dependency DAG
+       │
+       ▼
+┌──────────────────────────────────────────────────────┐
+│  RALPH LOOP (up to 3 passes)                         │
+│                                                      │
+│  For each DAG layer (sequential, by dependency):     │
+│                                                      │
+│  ┌── Quality Pipelines (parallel per unit) ───────┐  │
+│  │  Each unit in its own worktree:                │  │
+│  │  Research → Plan → Implement → Test → Review   │  │
+│  │  (depth varies by complexity tier)             │  │
+│  └────────────────────────────────────────────────┘  │
+│                                                      │
+│  ┌── Merge Queue ─────────────────────────────────┐  │
+│  │  Rebase onto main → Run tests → Land or evict │  │
+│  │  Evicted units re-enter with conflict context  │  │
+│  └────────────────────────────────────────────────┘  │
+│                                                      │
+└──────────────────────────────────────────────────────┘
+```
+
+【适配：RALPH LOOP 的「3 passes」上界与**本技能 §A-3**「同一步骤 3 轮无增量熔断」语义一致——第 4 轮动作是上报不是重跑】
+
+### RFC Decomposition
+
+AI reads the RFC and produces work units: 【适配：前置=规格已过 requirement-interview / consensus-plan（DSH 规划技能）；无规格先走规划，不要拿模糊需求直接拆 DAG】
+
+```typescript
+interface WorkUnit {
+  id: string;              // kebab-case identifier
+  name: string;            // Human-readable name
+  rfcSections: string[];   // Which RFC sections this addresses
+  description: string;     // Detailed description
+  deps: string[];          // Dependencies (other unit IDs)
+  acceptance: string[];    // Concrete acceptance criteria
+  tier: "trivial" | "small" | "medium" | "large";
+}
+```
+
+**Decomposition Rules:**
+- Prefer fewer, cohesive units (minimize merge risk)
+- Minimize cross-unit file overlap (avoid conflicts) 【适配：DSH 落点=任务书「单写者所有权」（一个执行者一个产出文件，禁多写者写同一文件）】
+- Keep tests WITH implementation (never separate "implement X" + "test X")
+- Dependencies only where real code dependency exists
+
+The dependency DAG determines execution order:
+```
+Layer 0: [unit-a, unit-b]     ← no deps, run in parallel
+Layer 1: [unit-c]             ← depends on unit-a
+Layer 2: [unit-d, unit-e]     ← depend on unit-c
+```
+
+### Complexity Tiers
+
+Different tiers get different pipeline depths:
+
+| Tier | Pipeline Stages |
+|------|----------------|
+| **trivial** | implement → test |
+| **small** | implement → test → code-review |
+| **medium** | research → plan → implement → test → PRD-review + code-review → review-fix |
+| **large** | research → plan → implement → test → PRD-review + code-review → review-fix → final-review |
+
+This prevents expensive operations on simple changes while ensuring architectural changes get thorough scrutiny. 【适配：各阶段 → dsh-agents 角色：research=explore、plan=planner、implement=executor、test=test-engineer、PRD-review=architect、code-review=code-reviewer、review-fix=executor、final-review=verifier；模型按 agent_roles 档位路由，spawn 前 agent_roles action=tiers】
+
+### Separate Context Windows (Author-Bias Elimination)
+
+Each stage runs in its own agent process with its own context window:
+
+| Stage | Model | Purpose |
+|-------|-------|---------|
+| Research | Sonnet | Read codebase + RFC, produce context doc |
+| Plan | Opus | Design implementation steps |
+| Implement | Codex | Write code following the plan |
+| Test | Sonnet | Run build + test suite |
+| PRD Review | Sonnet | Spec compliance check |
+| Code Review | Opus | Quality + security check |
+| Review Fix | Codex | Address review issues |
+| Final Review | Opus | Quality gate (large tier only) |
+
+【适配：Model 列 → DSH 档位路由表（agent_roles action=tiers 当次回显为准，禁越档）；且各阶段=独立 de_session spawn 子会话，不共享上下文窗口】
+
+**Critical design:** The reviewer never wrote the code it reviews. This eliminates author bias — the most common source of missed issues in self-review. 【适配：原文 :470 逐字保留——DSH 落点=评审/验收子会话与实现子会话分离（squad 盲评、verifier 独立取证）；亦即**本技能 §B-4** 五崩法 #2「自审自判」的同一纪律】
+
+### Merge Queue with Eviction
+
+After quality pipelines complete, units enter the merge queue:
+
+```
+Unit branch
+    │
+    ├─ Rebase onto main
+    │   └─ Conflict? → EVICT (capture conflict context)
+    │
+    ├─ Run build + tests
+    │   └─ Fail? → EVICT (capture test output)
+    │
+    └─ Pass → Fast-forward main, push, delete branch
+```
+
+【适配：push 环节 DSH 侧必须收窄——pass 后只做本地 commit 建检查点，push 与分支删除需用户批准，不自动 push（用户纪律）；「evict」=按断点重派带冲突上下文】
+
+**File Overlap Intelligence:**
+- Non-overlapping units land speculatively in parallel
+- Overlapping units land one-by-one, rebasing each time
+
+**Eviction Recovery:**
+When evicted, full context is captured (conflicting files, diffs, test output) and fed back to the implementer on the next Ralph pass:
+
+```markdown
+## MERGE CONFLICT — RESOLVE BEFORE NEXT LANDING
+
+Your previous implementation conflicted with another unit that landed first.
+Restructure your changes to avoid the conflicting files/lines below.
+
+{full eviction context with diffs}
+```
+
+### Data Flow Between Stages
+
+```
+research.contextFilePath ──────────────────→ plan
+plan.implementationSteps ──────────────────→ implement
+implement.{filesCreated, whatWasDone} ─────→ test, reviews
+test.failingSummary ───────────────────────→ reviews, implement (next pass)
+reviews.{feedback, issues} ────────────────→ review-fix → implement (next pass)
+final-review.reasoning ────────────────────→ implement (next pass)
+evictionContext ───────────────────────────→ implement (after merge conflict)
+```
+
+【适配：跨阶段数据在 DSH 一律走落盘文件（阶段产出=文件路径，任务书引用），不靠上下文转述；路径约定在组织者任务书中钉死】
+
+### Worktree Isolation
+
+Every unit runs in an isolated worktree (uses jj/Jujutsu, not git):
+```
+/tmp/workflow-wt-{unit-id}/
+```
+
+Pipeline stages for the same unit **share** a worktree, preserving state (context files, plan files, code changes) across research → plan → implement → test → review. 【适配：DSH 用 git worktree 或「单写者所有权」的文件面隔离替代 jj；同单元各阶段共享同一工作目录（de_session spawn 同 cwd）】
+
+### Key Design Principles
+
+1. **Deterministic execution** — Upfront decomposition locks in parallelism and ordering
+2. **Human review at leverage points** — The work plan is the single highest-leverage intervention point 【适配：DSH 侧计划批准是硬门（agent-autopilot Phase 1 同款）】
+3. **Separate concerns** — Each stage in a separate context window with a separate agent
+4. **Conflict recovery with context** — Full eviction context enables intelligent re-runs, not blind retries 【适配：带上下文重跑 ≠ 原地重试；3 轮上限仍适用（**本技能 §A-3**）】
+5. **Tier-driven depth** — Trivial changes skip research/review; large changes get maximum scrutiny
+6. **Resumable workflows** — Full state persisted to SQLite; resume from any point 【适配：SQLite → loop-state JSON 快照 + memory 项目轨 + session-handoff 交接文档】
+
+### When to Use Ralphinho vs Simpler Patterns
+
+| Signal | Use Ralphinho | Use Simpler Pattern |
+|--------|--------------|-------------------|
+| Multiple interdependent work units | Yes | No |
+| Need parallel implementation | Yes | No |
+| Merge conflicts likely | Yes | No (sequential is fine) |
+| Single-file change | No | Yes (sequential pipeline) |
+| Multi-day project | Yes | Maybe (continuous-claude) 【适配：continuous-claude 未移植，DSH 对位=顺序流水线+心跳巡检（§A-4）】 |
+| Spec/RFC already written | Yes | Maybe |
+| Quick iteration on one thing | No | Yes (NanoClaw or pipeline) 【适配：NanoClaw 未移植，DSH 对位=单会话直接做】 |
+
+---
+
+## §C-7 选型决策树（DSH 原语选项树——替代原件「Choosing the Right Pattern」决策矩阵）
+
+```
+任务是单一聚焦改动？
+├─ 是 → 会话内直接做，不建循环（别为一步活建循环）
+└─ 否 → 有已写好的规格/RFC（或已过 requirement-interview / consensus-plan）？
+         ├─ 是 → 需要多单元并行实现？
+         │        ├─ 是 → §C-6 DAG 编排：de_session spawn 分层并行（错峰启动）
+         │        │        + 组织者合成 + 分块 commit 检查点
+         │        └─ 否 → §C-1 顺序流水线：de_session spawn 逐步串行
+         └─ 否 → 需要同一件事的很多变体（批量生成）？
+                  ├─ 是 → 有界批量：workflow 工具（用户显式要求时）
+                  │        或组织者分批 spawn（必须附停止条件）
+                  └─ 否 → §C-1 顺序流水线 + §C-5 ai-slop-cleaner 清理遍
+定时/巡检类（无终点、维持状态）→ pwsh 后台心跳任务 + 本技能 §A
+                                  （loop-status 快照 + 退出码 + 熔断）
+到期触达类 → Windows 计划任务（用户终端代建）+ dtodo 挂到期项
+跨回合目标续跑 → create_goal / goal 工具（达目标即停）
+                 ；ralph 仅在用户显式要求 fresh-agent 迭代时用
+```
+
+配套判据：任何循环启动前必须有 max-runs / max-cost / max-duration / completion-signal 之一落盘为停止条件（§C-8 硬门）；DSH 侧补充两条——消耗额度的批量循环先出成本核算书；批量并行 spawn 前跑 agent_roles action=tiers 确认档位。
+
+## §C-8 硬门与反模式（#1 原文 :589 逐字保留；#2-#6 承自原件 Anti-Patterns #2-#6，配 DSH 落点）
+
+1. **Infinite loops without exit conditions** — Always have a max-runs, max-cost, max-duration, or completion signal. 【硬门逐字保留。适配：DSH 落点=**本技能 §A-1.2** 停止条件落盘；四形态全缺的循环禁止启动】
+2. **No context bridge between iterations** — Each `claude -p` call starts fresh. Use `SHARED_TASK_NOTES.md` or filesystem state to bridge context. 【适配：SHARED_TASK_NOTES.md → loop-state 快照 + memory 项目轨】
+3. **Retrying the same failure** — If an iteration fails, don't just retry. Capture the error context and feed it to the next attempt. 【适配：带上下文重跑；同一步骤 3 轮无落盘增量即熔断上报（**本技能 §A-3**），不无限续命】
+4. **Negative instructions instead of cleanup passes** — Don't say "don't do X." Add a separate pass that removes X. 【适配：清理遍 = ai-slop-cleaner 技能（§C-5）】
+5. **All agents in one context window** — For complex workflows, separate concerns into different agent processes. The reviewer should never be the author. 【适配：de_session spawn 分角色；评审子会话不写码、实现子会话不自审（:470 同款纪律）】
+6. **Ignoring file overlap in parallel work** — If two parallel agents might edit the same file, you need a merge strategy (sequential landing, rebase, or conflict resolution). 【适配：任务书单写者所有权 + 分块 commit 检查点】
+
+## §C-9 References
+
+| Project | Author | Link |
+|---------|--------|------|
+| Ralphinho | enitrat | credit: @enitrat |
+| Infinite Agentic Loop | disler | credit: @disler（本移植未含该节，§3 未移植） |
+| Continuous Claude | AnandChowdhary | credit: @AnandChowdhary（本移植未含该节，§4 未移植） |
+| NanoClaw | ECC | `/claw` command in ECC repo（本移植未含该节，§2 未移植） |
+| Verification Loop | ECC | `skills/verification-loop/` in ECC repo |
+
+DSH 侧关联（合并版更新）：本技能 §A 机制层三段式（源 `agent-loop`，IMP-21①）/ 本技能 §B 判断层（源 `loop-design-check`，IMP-16①）/ ai-slop-cleaner（已装，清理遍执行体，§C-5）/ session-handoff（IMP-21③，阶段交接）。
+
+---
+
+# §D 部署与触发说明（合并版新增节，非源件内容）
+
+## §D-1 部署名与替换关系
+
+- **部署名 = `agent-loop`**（frontmatter `name`）。单一技能承载三层：§A 机制层 / §B 判断层 / §C 模式层。
+- 本件**取代**原三个技能目录：`agent-loop`（机制层）、`loop-design-check`（判断层）、`autonomous-loops`（模式层）。三者内容已全量并入本件（对照表见同目录 `merge-report.md`）。
+- 部署纪律：把本件 `SKILL.md` 落到技能根的 `agent-loop/` 目录；**原 `loop-design-check/` 与 `autonomous-loops/` 目录必须同时移除或归档**——否则两个技能目录与合并件的 description 触发词重叠，同一请求会同时命中两件，回到合并前的问题（且判断层/模式层内容出现双副本漂移风险）。
+- DSH 技能根扫描 rank（本机事实）：项目 `.dsh/skills` / `.agents/skills` → 用户 `~/.dsh/skills` → `~/.agents/skills`；技能目录监听实时失效重发布，采纳/落盘后当前运行中的会话即可拾取替换版，无需重启。
+- 落盘位置在工作区外（如 `~/.agents/skills/agent-loop/`）时，DSH 沙箱需 `danger-full-access` 提权；标准作业模式=工作区内改好 → 校验 → 一次性提权拷回 → SHA256 双侧比对。
+
+## §D-2 触发词覆盖（三技能合并后的完整触发面）
+
+| 来源 | 中文触发词 | English triggers |
+|---|---|---|
+| 源 1 机制层 | 起循环、跑长任务、心跳巡检、循环卡死、熔断、loop 快照、退出码、回合上界 | autonomous loop, loop status, loop guard, watchdog, circuit break a loop, heartbeat chain, stale loop detection, stop condition |
+| 源 2 判断层 | 写 loop、设计 loop、做一个 loop、检查 loop 对不对、loop 体检、loop 会不会跑飞、可判定目标、五个崩法、plan build judge | design an agent loop, write a loop, check a loop, loop review, prevent a runaway loop, goal-oriented loop, decidable goal, plan/build/judge |
+| 源 3 模式层 | 循环模式、流水线、DAG 编排、拆任务并行、清理遍、deslop、循环硬门、选型树 | loop pattern, sequential pipeline, DAG orchestration, de-sloppify pass, bounded loop, merge queue |
+
+上述词表全部写入 frontmatter `description`（单行、值内引号一律用单引号以保 YAML 安全）。
+
+## §D-3 加载后怎么用（三层路由）
+
+1. **要起一个循环**（长任务/多轮迭代）→ 先读 §B-3 Step 0 四条件门判断「该不该建」，再读 §B-3 Step 1 定可判定目标与边界条件。
+2. **选形态** → §C-7 选型决策树（单会话直做 / 顺序流水线 / DAG 并行 / 有界批量 / 定时巡检 / 到期触达 / 跨回合目标）。
+3. **起跑前** → §A-1 三查 + 停止条件落盘（§A-1.2 硬门，四形态至少其一）；骨架照 §A-1.3。
+4. **跑起来之后** → 每轮覆盖写快照（§A-2.1）；心跳回合四动作（§A-2.2）；间隔按 §A-4.2；挂 §A-4.3 长尾保险。
+5. **怀疑跑飞/卡死** → §A-3 3 轮无落盘增量熔断 + 上报；同时用 §B-4 五崩法逐行过一遍循环设计本身。
+6. **收尾** → 退出码三态（§A-2.3）；红线（§B-4 三条）决定「能不能全自动」；交付验收仍按项目既有纪律（落盘 + 广播双条件）。
+
+## §D-4 外部依赖（保持跨技能引用，不并入本件）
+
+| 技能/工具 | 用途 | 本件引用处 |
+|---|---|---|
+| ai-slop-cleaner | 清理遍执行体（五类 slop、质量门、writer/reviewer 分离） | §C-5、§C-8 #4 |
+| subagent-clarify | 澄清前置（崩法 #4 的抗体链路） | §B 头部交叉引用 |
+| requirement-interview / consensus-plan | 规格前置（拆 DAG 前要有规格） | §C-6 RFC Decomposition、§C-7 |
+| session-handoff | 阶段交接与断点续跑 | §C-6 Key Design Principles #6、映射表 |
+| memory-consolidate / memory decay | 崩法 #5 陈旧记忆的抗体 | §B-4 #5 |
+| de_session / de_broadcast / job_output / agent_roles / dtodo / create_goal / ralph / workflow | DSH 运行时原语（映射表对位目标） | §A 头部映射表、§B 头部映射表、§C 头部映射表、§C-7 |
+
+## §D-5 保真与维护纪律
+
+- **全量保真**：三源每个实质小节在合并版中均有落点；未删内容。映射对照、未映射项（如有）与字节账见同目录 `merge-report.md`。
+- **跨技能引用内部化**：源件中所有「见 loop-design-check 技能 / 见 agent-loop 技能 / 见 autonomous-loops 技能」类引用均已改写为「本技能 §X」；对外部技能（ai-slop-cleaner 等）的引用保持不变。
+- **节号即接口**：本件节号（§A-1.2 / §A-2.3 / §A-3 / §B-3 / §B-4 / §C-5 / §C-8 等）被正文多处交叉引用；改动节号必须同步改写全部引用点。
+- **源 3 上游滞后风险**：ECC 上游已把 canonical 换为 `continuous-agent-loop`（见「溯源」节 upstream-retired）；如将来在本机移植 `continuous-agent-loop`，模式层应与其对齐后择优合并，勿双份并存。

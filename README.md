@@ -132,14 +132,21 @@ dsh-agents/
   lib/client.js         浏览器半：设置卡（settings.plugin.item 槽位，懒 CJS 工厂格式）
   lib/index.js          插件入口 + 三个工具定义
   personas/             19 份人格正文（经用户逐篇批准后写入）
+  personas/checklists/  11 份评审清单（语言 7 + 专项 4，按扩展名路由）
+  docs/task-brief-v3.md 任务书模板正本（v3.2：回收契约 + 工作单元状态语义）
+  skills/               22 件工作流技能（见 §9，源副本；装机副本 ~/.agents/skills 与 ~/.dsh/skills）
   review/               审批材料：BRIEF.md（译制规范）、original/（OMC 原文）、trans/（中文+适配）
-  tests/run.mjs         直跑测试（34 项：纯逻辑 + 假宿主全链路 + 端点 + 浏览器半/manifest 门）
+  tests/run.mjs         直跑测试（46 项：纯逻辑 + 假宿主全链路 + 端点 + 浏览器半/manifest 门）
   tests/boot-schema-check.mjs  宿主真实校验器验收门（装前必过）
   tests/installed-smoke.mjs    安装副本烟测（工具+settings+端点三方同源）
   tests/probe-boot.mjs  重启后探针：宿主引导图含 dsh-agents + client.js 可分发
+  tools/crgate.mjs      评审确定性机检（freeze/anchor/finalize，自测 65 断言）
+  tools/publish-scan.mjs 发布前脱敏机检（v1.0.4，六类扫描+三值裁定，自测 47 断言）
+  tools/install-personas.mjs   人格批量安装（默认跳过 code-reviewer v2+，防降级覆盖）
 ```
 
 测试：`node tests/run.mjs`（不用 `node --test`——DSH 沙箱内 node 的 pipe 子进程捕获会 EPERM）。
+工具自测：`node tools/crgate.test.mjs`（65）+ `node tools/publish-scan.test.mjs`（47）。
 
 ## 8. 来源与许可
 
@@ -149,22 +156,57 @@ dsh-agents/
 
 ---
 
-## 6. 工作流技能（skills/，2026-09-12 新增）
+## 9. 完整工作流技能集（skills/，22 件）
 
-四个工作流技能把 19 个角色按项目实现流程串联成可一键触发的流水线（源档 `skills/<name>/SKILL.md`，已采纳入库 `~/.agents/skills/`）：
+技能分三组。**源副本=本仓 `skills/`**；装机副本：流水线/协作九件在 `~/.agents/skills/`，工作流十三件在
+`~/.dsh/skills/`——**改动必须双位同步并比对哈希**（单向改动=漂移，2026-09-26 已抓过两起先例）。
+
+### 9.1 流水线技能（4 件，编排本插件 19 角色）
 
 | 技能 | 角色 | 用途 |
 |---|---|---|
-| `agent-autopilot` | 全 19 角色按需（六阶段核心：explore/analyst→planner(+architect)→executor(+debugger)→test-engineer→code-reviewer+security-reviewer→verifier→git-master/writer） | 旗舰：想法→验证过的代码，六阶段硬门 |
+| `agent-autopilot` | 全 19 角色按需（六阶段核心链） | 旗舰：想法→验证过的代码，六阶段硬门（v2.1 增尺寸分级+相位掩码/席位 fail-closed/档位置信度等十条机制） |
 | `agent-feature` | analyst→planner→executor→test-engineer→code-reviewer→verifier | 明确特性的六角色流水线 |
 | `agent-bugfix` | explore→debugger(→tracer)→test-engineer→verifier | 缺陷追猎：根因→回归锁→取证 |
-| `agent-review-squad` | code-reviewer+security-reviewer 并行盲评→critic 裁决(→code-simplifier) | 评审小队：盲评+总裁决 |
+| `agent-review-squad` | code-reviewer+security-reviewer 并行盲评→critic 裁决(→code-simplifier) | 评审小队（v2.1 增评审面复用路由表/CRITICAL 即停/对抗验证 fail-closed 等九条） |
 
-注：工作流优先用本插件三工具派活；插件未安装时自动降级 de_session spawn + personas 手动注入（档位表见上）。
+### 9.2 协作技能（5 件，工作流的外围协议，源自 port-kit）
+
+| 技能 | 作用 |
+|---|---|
+| `subagent-clarify` | 子会话澄清协议：缺信息不瞎猜，结构化提问→广播问组织者→超时降级缺省表 |
+| `requirement-interview` | 需求访谈：苏格拉底式提问+数学化含糊度门控，含糊度≤阈值才准动代码 |
+| `consensus-plan` | 共识规划：规划与执行分离，planner 快照→architect/critic 串行盲评→≤5 轮至 APPROVE |
+| `ai-slop-cleaner` | AI 屎山清理：先锁行为再清理，五类 slop 分类+单味道单批次+writer/reviewer 分离 |
+| `visual-verdict` | 视觉判定：截图 vs 参考图的结构化 JSON verdict，score≥90 且 pass 才准收工 |
+
+### 9.3 工作流方法论技能（13 件，源自 Everything Claude Code v2.2.2 分析移植）
+
+| 技能 | 工作流环节 | 说明 |
+|---|---|---|
+| `agent-loop` | 长任务循环 | **三合一**（机制/判断/模式三层，787 行）：loop-start/status/guard + 心跳纪律三要素 + 五崩法 + DAG 编排选型树——吸收已废弃的 loop-design-check 与 autonomous-loops（2026-09-27 合并） |
+| `tdd-workflow` | 实现/测试 | RED 门不可让渡+TDD 证据报告五列表（供 test-engineer 引用；80% 覆盖率条款按本机 100% 口径适配） |
+| `verification-loop` | 收尾核验 | 六相命令矩阵+固定 VERIFICATION REPORT（verifier 人格同款格式） |
+| `parallel-execution-optimizer` | 并行编排 | lane 矩阵+写面隔离并行授权判据 |
+| `error-handling` | 健壮性 | TS/Python/Go 错误处理模式（类型化错误/重试/熔断） |
+| `git-workflow` | 提交纪律 | 分支策略/合并 vs rebase/冲突解决（push 类条款按本机「push 需用户批准」适配） |
+| `operator-approval-loop` | 外发审批 | epoch 键控审批账+一次投递保证（含 references/ 审批账 schema 与断言脚本） |
+| `agent-harness-construction` | 工具面设计 | 动作空间/工具定义/observation 格式设计与优化 |
+| `skill-eval` | 经验沉淀 | skill_manage create 前置闸：grep 重叠→四态裁决→写后校验 |
+| `skill-stocktake` | 技能盘点 | 五态裁决（Keep/Improve/Update/Retire/Merge），「7d/30d 使用」列降级 mtime/hit-stats |
+| `session-handoff` | 会话交接 | 八节交接文档（What Did NOT Work=核心节），session.jsonl.zstd 为唯一转录事实源 |
+| `dsh-troubleshooting` | 排障 | 本机实证症状索引（假 idle=429/EPERM/PS5 管道污染等 8 条，增量模式） |
+| `opensource-sanitize` | 发布把关 | 六类扫描+三值裁定，配套 `tools/publish-scan.mjs`（push 前跑单仓放行门） |
+
+移植纪律：ECC 来源技能**全量保真**——frontmatter 契约化 + 头部 ECC→DSH 映射块 + 行内【适配】标注，
+原文零删减；保真校验脚本（47+11 断言）留档于 `ecc-analysis/batch2/verify-fidelity*.mjs`。
+
+任务书模板正本：`docs/task-brief-v3.md`（v3.2 = v3.1 OCR 批次四件 + 回收契约（IMP-06）+ 工作单元
+状态语义（IMP-14：四字段头/deps 显式声明禁正则扫/单写者/迁移白名单/收尾双门））。
 
 ---
 
-## 7. 设置页：三档模型手动配置（2026-09-12 新增，同日修复设置卡）
+## 10. 设置页：三档模型手动配置（2026-09-12 新增，同日修复设置卡）
 
 插件采用与 dsh-dafeiyu 相同的「服务端命名空间 × 浏览器端卡片」双半结构（DSH 设置页
 只渲染两者的交集：宿主 settings 服务已注册的命名空间 × 已在 `settings.plugin.item`
@@ -193,7 +235,7 @@ dsh-agents/
 - `agent_roles` 新增动作：`set`（tier+provider+model，AI 代改，与设置卡同源）、`reset`（清用户覆盖回落基底）；`tiers` 动作新增 `tierSources` 字段标注各档生效来源
 - settings 服务或 webServer 缺失时：插件照常加载，档位回落 cordis 配置链；设置卡显示「不可用」而非报错
 - 依赖：`@deepseek-ai/schemastery` ^3.18.1（宿主同款包；安全扫描 R-EVAL 为 schema 序列化复活机制，声明式用法不触碰，用户已批准引入）
-- 测试守卫：`tests/run.mjs`（34 断言，含端点防护/浏览器半格式/manifest 门）、
+- 测试守卫：`tests/run.mjs`（46 断言，含端点防护/浏览器半格式/manifest 门）、
   `tests/boot-schema-check.mjs`（宿主真实校验器 6/6）、`tests/installed-smoke.mjs`
   （安装副本烟测：工具+settings+端点三方同源）、`tests/probe-boot.mjs`（重启后
   验证宿主引导图已含 dsh-agents 且 client.js 可分发）
