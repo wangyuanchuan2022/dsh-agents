@@ -134,7 +134,7 @@ dsh-agents/
   personas/             19 份人格正文（经用户逐篇批准后写入）
   personas/checklists/  11 份评审清单（语言 7 + 专项 4，按扩展名路由）
   docs/task-brief-v3.md 任务书模板正本（v3.2：回收契约 + 工作单元状态语义）
-  skills/               22 件工作流技能（见 §9，源副本；装机副本 ~/.agents/skills 与 ~/.dsh/skills）
+  skills/               23 件工作流技能（见 §9，源副本；装机副本 ~/.agents/skills 与 ~/.dsh/skills）
   review/               审批材料：BRIEF.md（译制规范）、original/（OMC 原文）、trans/（中文+适配）
   tests/run.mjs         直跑测试（46 项：纯逻辑 + 假宿主全链路 + 端点 + 浏览器半/manifest 门）
   tests/boot-schema-check.mjs  宿主真实校验器验收门（装前必过）
@@ -156,10 +156,18 @@ dsh-agents/
 
 ---
 
-## 9. 完整工作流技能集（skills/，22 件）
+## 9. 完整工作流技能集（skills/，23 件）
 
-技能分三组。**源副本=本仓 `skills/`**；装机副本：流水线/协作九件在 `~/.agents/skills/`，工作流十三件在
+技能分四组。**源副本=本仓 `skills/`**；装机副本：流水线/协作/路由十一件在 `~/.agents/skills/`，工作流方法论十三件在
 `~/.dsh/skills/`——**改动必须双位同步并比对哈希**（单向改动=漂移，2026-09-26 已抓过两起先例）。
+入口纪律：所有技能的 `description` **触发词前置**（`触发：<中文提法>｜English: <triggers>｜<职责正文>`）——
+DSH 技能目录只显示 description 前 ~330-500 字符，触发词写在末尾会被截断而无法被自动发现。
+
+### 9.0 路由入口（1 件，用户没点技能名时先加载它）
+
+| 技能 | 作用 |
+|---|---|
+| `agent-workflow-router` | **总入口**：按用户意图路由到下面 22 件之一（§1 意图表 22 行），并固化五条硬协议（派活前置三问／档位现场确认禁越档／任务书四条必含（双条件+增量落盘+不停回合+ORG ID）／消息纪律（点对点、禁 project:）／工作区纪律（不传 cwd）），附前置门（含糊→requirement-interview、重大方案→consensus-plan、长任务→agent-loop 停止条件、上下文将满→session-handoff）与组合范式（新项目/加功能/修 bug/大重构/长跑实验/发布 六条串联链） |
 
 ### 9.1 流水线技能（4 件，编排本插件 19 角色）
 

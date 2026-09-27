@@ -1,6 +1,6 @@
 ---
 name: skill-eval
-description: "技能沉淀前质量闸：把会话经验写成新技能入库（skill_manage create）之前，先跑 grep 重叠检查（对既有技能库+记忆轨，实际执行不凭印象）→ 四态裁决（Save / Improve / Absorb / Drop，附引用核对结果的理由）→ Save 后写后校验（frontmatter 契约 / description 逐字一致 / 待确认队列终态），任一校验失败不报成功。定位=memory-consolidate 的姊妹技能：memory-consolidate 整理既有记忆轨，本技能守「新技能入库」这道门，是 skill_manage create 的前置闸。Use when 会话结束想把经验沉淀为技能、准备 skill_manage create、判断新经验该新建技能还是并入既有技能、或怀疑要写的内容与库内重叠。中文触发：沉淀技能、写个技能、技能入库、要不要建技能、技能重复、Absorb 还是新建。English triggers: save a skill, skill quality gate, dedupe against existing skills, absorb into existing skill, before skill_manage create."
+description: "触发：沉淀技能、写个技能、技能入库、要不要建技能、技能重复｜English: save a skill, skill quality gate, dedupe skills｜技能沉淀前质量闸：把会话经验写成新技能入库（skill_manage create）之前，先跑 grep 重叠检查（对既有技能库+记忆轨，实际执行不凭印象）→ 四态裁决（Save / Improve / Absorb / Drop，附引用核对结果的理由）→ Save 后写后校验（frontmatter 契约 / description 逐字一致 / 待确认队列终态），任一校验失败不报成功。定位=memory-consolidate 的姊妹技能：memory-consolidate 整理既有记忆轨，本技能守「新技能入库」这道门，是 skill_manage create 的前置闸。Use when 会话结束想把经验沉淀为技能、准备 skill_manage create、判断新经验该新建技能还是并入既有技能、或怀疑要写的内容与库内重叠。中文触发：沉淀技能、写个技能、技能入库、要不要建技能、技能重复、Absorb 还是新建。English triggers: save a skill, skill quality gate, dedupe against existing skills, absorb into existing skill, before skill_manage create."
 ---
 
 <!-- DSH-ADAPT-HEADER BEGIN（移植层新增块：frontmatter 契约化 + ECC→DSH 映射表。本件为种子合成新技能（IMP-21②）：从 ECC learn-eval 种子段提炼流程骨架，宿主设施换 DSH 原语。）

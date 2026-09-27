@@ -1,6 +1,6 @@
 ---
 name: tdd-workflow
-description: "TDD 工作流方法论手册（供 test-engineer / verifier 引用，不并入角色）：写新特性、修缺陷、重构时强制测试先行——RED 门为不可让渡纪律（只写了但未编译执行的测试不算 RED），GREEN 与覆盖率核验后写 TDD 证据报告（五列保证表，跨会话/跨 squash 保留证明）。ECC 原文：Use this skill when writing new features, fixing bugs, or refactoring code. Enforces test-driven development with 80%+ coverage including unit, integration, and E2E tests.【适配：本机覆盖纪律=100%（互补双跑合并口径）+不可达逐项单独说明，80% 仅绝对下限，不因本技能下调】中文触发：TDD、测试先行、红绿循环、RED 门、写测试、覆盖率、证据报告。English triggers: TDD, test-first, red-green, RED gate, coverage, evidence report."
+description: "触发：测试先行、TDD、红绿循环、先写测试、RED 门、覆盖率核验｜English: TDD, test-first, red-green, RED gate, coverage｜TDD 工作流方法论手册（供 test-engineer / verifier 引用，不并入角色）：写新特性、修缺陷、重构时强制测试先行——RED 门为不可让渡纪律（只写了但未编译执行的测试不算 RED），GREEN 与覆盖率核验后写 TDD 证据报告（五列保证表，跨会话/跨 squash 保留证明）。ECC 原文：Use this skill when writing new features, fixing bugs, or refactoring code. Enforces test-driven development with 80%+ coverage including unit, integration, and E2E tests.【适配：本机覆盖纪律=100%（互补双跑合并口径）+不可达逐项单独说明，80% 仅绝对下限，不因本技能下调】中文触发：TDD、测试先行、红绿循环、RED 门、写测试、覆盖率、证据报告。English triggers: TDD, test-first, red-green, RED gate, coverage, evidence report."
 ---
 
 <!-- DSH-ADAPT-HEADER BEGIN（移植层新增块。B 档语义=承重段重写后落地：非 A 档全量保真；承重段逐条对应 ECC 原文（锚点 file:line + 原文引句在位），80% 覆盖率条款为逐字保留段（原文一字不删）。源冻结 sha256-16 见 metadata.ecc-source）

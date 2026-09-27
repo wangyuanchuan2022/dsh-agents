@@ -1,6 +1,6 @@
 ---
 name: verification-loop
-description: "验证环路（verifier 检查表，引用不并入角色）：完工自报前的六相验证——build/type/lint/test/security/diff 六相命令矩阵逐相过门，输出固定 VERIFICATION REPORT；Build 失败即 STOP；跳过项单列 skipped 不计入通过。ECC 原文：A comprehensive verification system for Claude Code sessions. Use when verifying a Claude Code session's work before claiming it is complete.【适配：验证对象=Claude Code 会话 → DSH 会话/交付物（子会话产出、报告、diff）】中文触发：验证、收尾核验、完工检查、六相验证、VERIFICATION REPORT、验证报告。English triggers: verification loop, verify before done, six-phase verification, verification report."
+description: "触发：收尾核验、完工检查、六相验证、验证报告、交付前验证｜English: verification loop, six-phase verification, verify before done, verification report｜验证环路（verifier 检查表，引用不并入角色）：完工自报前的六相验证——build/type/lint/test/security/diff 六相命令矩阵逐相过门，输出固定 VERIFICATION REPORT；Build 失败即 STOP；跳过项单列 skipped 不计入通过。ECC 原文：A comprehensive verification system for Claude Code sessions. Use when verifying a Claude Code session's work before claiming it is complete.【适配：验证对象=Claude Code 会话 → DSH 会话/交付物（子会话产出、报告、diff）】中文触发：验证、收尾核验、完工检查、六相验证、VERIFICATION REPORT、验证报告。English triggers: verification loop, verify before done, six-phase verification, verification report."
 ---
 
 <!-- DSH-ADAPT-HEADER BEGIN（移植层新增块。B 档语义=承重段重写后落地：非 A 档全量保真；承重段逐条对应 ECC 原文（锚点 file:line + 原文引句在位），固定 VERIFICATION REPORT 格式为逐字保留段。源冻结 sha256-16 见 metadata.ecc-source）

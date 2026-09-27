@@ -1,6 +1,6 @@
 ---
 name: operator-approval-loop
-description: Operator approval contract with internal filing notices for agent-drafted outbound messages, hashed drafts, epoch-keyed decisions, durable delivery claims and receipts, and a pre-draft baseline gate. Use when an agent drafts messages to external counterparties and a human operator must approve, reject, or steer each send before it leaves.
+description: "触发：外发消息审批、代理发信前人工确认、审批账、外发草稿审批｜English: outbound message approval, operator approval, approval ledger｜Operator approval contract with internal filing notices for agent-drafted outbound messages, hashed drafts, epoch-keyed decisions, durable delivery claims and receipts, and a pre-draft baseline gate. Use when an agent drafts messages to external counterparties and a human operator must approve, reject, or steer each send before it leaves."
 ---
 
 <!-- DSH-ADAPT-HEADER BEGIN（移植层新增块：ECC→DSH 映射表。frontmatter 原生即 DSH 契约（仅 name+description，无散字段），未改动。剥离本块与 frontmatter 后，正文与 ECC 原件逐字一致——仅含行内【适配：…】标注，一字未删。校验：node verify-fidelity.mjs）

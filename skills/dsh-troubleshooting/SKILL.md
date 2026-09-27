@@ -1,6 +1,6 @@
 ---
 name: dsh-troubleshooting
-description: DSH 运行排障症状索引（Symptom→Causes→Diagnostics 三段式）：子会话假 idle 与 429 配额耗尽、子进程管道 EPERM、PowerShell 5 管道二进制污染与 UTF-16 重定向、mkdtemp 权限坑、Start-Process 拒绝、心跳唤醒预算、cwd 基准面半覆盖、workdir ENOENT 假象等已实证症状的快速定位手册。当出现排障、诊断、症状定位、没反应、假死、无输出、权限被拒、EPERM、乱码、假空等情形时使用。首版 8 条，增量模式。
+description: "触发：DSH 排障、没反应、假死、权限被拒、EPERM、乱码、子会话不动、无输出｜English: DSH troubleshooting, no output, permission denied, EPERM, mojibake｜DSH 运行排障症状索引（Symptom→Causes→Diagnostics 三段式）：子会话假 idle 与 429 配额耗尽、子进程管道 EPERM、PowerShell 5 管道二进制污染与 UTF-16 重定向、mkdtemp 权限坑、Start-Process 拒绝、心跳唤醒预算、cwd 基准面半覆盖、workdir ENOENT 假象等已实证症状的快速定位手册。当出现排障、诊断、症状定位、没反应、假死、无输出、权限被拒、EPERM、乱码、假空等情形时使用。首版 8 条，增量模式。"
 ---
 
 # dsh-troubleshooting · DSH 排障症状索引

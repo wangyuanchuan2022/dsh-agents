@@ -1,6 +1,6 @@
 ---
 name: agent-bugfix
-description: 缺陷追猎流水线（agent-bugfix，编排 dsh-agents 的 5 个 sub agent）：OMC「Bug Investigation」组合的 DSH 直译——explore 先定位相关代码 → debugger 把缺陷追到根因并给最小修复（优先让红变绿不顺手重构）→ 疑难杂症升级 tracer 做竞争假设与证据排序 → test-engineer 写回归测试锁住根因（防复发）→ verifier 取证收尾（修复证据 + 无回归证据）。适用于：报错、行为不符预期、构建失败等缺陷修复任务。触发：用户说「修这个 bug/报错了/行为不对/修完验证」，且能提供错误现象（报错文本/复现步骤/截图）。
+description: "触发：修个 bug、报错了、行为不对、构建失败、测试挂了、修完验证、定位根因、别再复现｜English: fix this bug, broken build, failing test, debug, root cause, regression lock｜缺陷追猎流水线（agent-bugfix，编排 dsh-agents 的 5 个 sub agent）：OMC「Bug Investigation」组合的 DSH 直译——explore 先定位相关代码 → debugger 把缺陷追到根因并给最小修复（优先让红变绿不顺手重构）→ 疑难杂症升级 tracer 做竞争假设与证据排序 → test-engineer 写回归测试锁住根因（防复发）→ verifier 取证收尾（修复证据 + 无回归证据）。适用于：报错、行为不符预期、构建失败等缺陷修复任务。触发：用户说「修这个 bug/报错了/行为不对/修完验证」，且能提供错误现象（报错文本/复现步骤/截图）。"
 ---
 
 # 缺陷追猎流水线（agent-bugfix）

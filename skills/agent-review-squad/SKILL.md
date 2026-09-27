@@ -1,6 +1,6 @@
 ---
 name: agent-review-squad
-description: 评审小队（agent-review-squad，编排 dsh-agents 的 4 个 sub agent）：OMC「Code Review」组合的 DSH 直译——code-reviewer（质量/逻辑/SOLID/性能）与 security-reviewer（OWASP/密钥/危险模式）对同一 diff 并行独立盲评（P0/P1/P2 + 文件:行号 + 【改进点】），critic 做最终质量闸门汇总裁决（不仅评审「有什么」还指出「缺什么」，误批代价高于误驳），可选 code-simplifier 出行为不变简化建议交 executor 落地。只读评审 + 组织者合成，评审报告落盘双条件核销。适用于：合并前评审、里程碑验收、安全敏感改动审查。触发：用户说「评审这些改动/code review/帮我审一下/合并前检查」，或 agent-autopilot/agent-feature 的 Phase 4 需要外部评审火力。v2（OCR 确定性工程增强）：规格信封/覆盖账闭合/critic 删除闸门/锚定机检/现行性标注/人可复述最小结论。
+description: "触发：评审改动、代码审查、code review、帮我审一下、合并前检查、安全审查、挑毛病｜English: code review, review my changes, pre-merge check, security review｜评审小队（agent-review-squad，编排 dsh-agents 的 4 个 sub agent）：OMC「Code Review」组合的 DSH 直译——code-reviewer（质量/逻辑/SOLID/性能）与 security-reviewer（OWASP/密钥/危险模式）对同一 diff 并行独立盲评（P0/P1/P2 + 文件:行号 + 【改进点】），critic 做最终质量闸门汇总裁决（不仅评审「有什么」还指出「缺什么」，误批代价高于误驳），可选 code-simplifier 出行为不变简化建议交 executor 落地。只读评审 + 组织者合成，评审报告落盘双条件核销。适用于：合并前评审、里程碑验收、安全敏感改动审查。触发：用户说「评审这些改动/code review/帮我审一下/合并前检查」，或 agent-autopilot/agent-feature 的 Phase 4 需要外部评审火力。v2（OCR 确定性工程增强）：规格信封/覆盖账闭合/critic 删除闸门/锚定机检/现行性标注/人可复述最小结论。"
 ---
 
 # 评审小队（agent-review-squad）v2.1

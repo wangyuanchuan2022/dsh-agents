@@ -1,6 +1,6 @@
 ---
 name: subagent-clarify
-description: 子会话澄清协议（subagent-clarify）：spawn 出的子会话缺信息时不得瞎猜、不得编造参数、不得擅自终止——按「结构化提问 → de_broadcast(wake:true) 问主会话 → 主会话 ask_user_question 问用户 → 答案回传子会话 → 超时降级缺省决策表」链路获取人类输入；含防编造条款、消息格式、超时降级规则与心跳巡检兼容。触发：任务书澄清模式为 interactive，或任一方提到「澄清协议/缺参数/问用户/clarify」。
+description: "触发：子会话缺参数、澄清协议、子代理问主会话、任务书澄清模式、缺信息怎么办｜English: subagent clarification, missing parameters, ask the organizer｜子会话澄清协议（subagent-clarify）：spawn 出的子会话缺信息时不得瞎猜、不得编造参数、不得擅自终止——按「结构化提问 → de_broadcast(wake:true) 问主会话 → 主会话 ask_user_question 问用户 → 答案回传子会话 → 超时降级缺省决策表」链路获取人类输入；含防编造条款、消息格式、超时降级规则与心跳巡检兼容。触发：任务书澄清模式为 interactive，或任一方提到「澄清协议/缺参数/问用户/clarify」。"
 ---
 
 # 子会话澄清协议（subagent-clarify）

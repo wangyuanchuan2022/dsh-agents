@@ -1,6 +1,6 @@
 ---
 name: requirement-interview
-description: 需求访谈技能（requirement-interview，全量移植自 OMC deep-interview v5.4.0）：苏格拉底式提问 + 数学化含糊度门控——Round 0 锁定组件拓扑（防单组件纵深遮蔽兄弟组件），访谈循环一次一问、瞄准「最弱组件×最弱维度」、每轮透明打分与本体（实体）稳定度追踪；含糊度公式分野（greenfield 40/30/30，brownfield 35/25/25/15），含糊度 ≤ 阈值（默认 0.2）且用户明确批准执行路径前禁止改任何代码；挑战者模式（R4 反题/R6 极简/R8 本体家）、超大上下文摘要纪律、软限 10 轮/硬限 20 轮、早退带风险声明；spec 按固定结构落盘标 pending approval。触发：用户说「访谈/问清楚/别假设/我有个模糊想法」，或任务描述只有模糊动词、无具体文件与验收判据。
+description: "触发：需求访谈、帮我问清楚、别假设、我有个模糊想法、需求不明确、先访谈再动手｜English: requirements interview, clarify the ask, don't assume, vague idea｜需求访谈技能（requirement-interview，全量移植自 OMC deep-interview v5.4.0）：苏格拉底式提问 + 数学化含糊度门控——Round 0 锁定组件拓扑（防单组件纵深遮蔽兄弟组件），访谈循环一次一问、瞄准「最弱组件×最弱维度」、每轮透明打分与本体（实体）稳定度追踪；含糊度公式分野（greenfield 40/30/30，brownfield 35/25/25/15），含糊度 ≤ 阈值（默认 0.2）且用户明确批准执行路径前禁止改任何代码；挑战者模式（R4 反题/R6 极简/R8 本体家）、超大上下文摘要纪律、软限 10 轮/硬限 20 轮、早退带风险声明；spec 按固定结构落盘标 pending approval。触发：用户说「访谈/问清楚/别假设/我有个模糊想法」，或任务描述只有模糊动词、无具体文件与验收判据。"
 ---
 
 # 需求访谈（requirement-interview）

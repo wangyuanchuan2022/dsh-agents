@@ -1,6 +1,6 @@
 ---
 name: skill-stocktake
-description: "技能质量盘点（auditing Claude skills for quality 的 DSH 版）：对 DSH 技能库（四根扫描）做 Quick Scan（仅变更技能）与 Full Stocktake 全盘两模式，批评席子会话按检查表+整体判断给五态裁决（Keep/Improve/Update/Retire/Merge into [X]），判定理由必须自含证据可决策；results.json 缓存+断点续跑。ECC 原文：Use when auditing Claude skills and commands for quality. Supports Quick Scan (changed skills only) and Full Stocktake modes with sequential subagent batch evaluation.【适配：扫描根 ~/.claude/skills → DSH 四根；「7d/30d 使用」列无数据源显式降级 mtime/hit-stats 说明】中文触发：盘点技能、技能审查、技能质量、skill 盘点、库存盘点、retire 技能。English triggers: skill stocktake, audit skills, skill quality review, quick scan."
+description: "触发：盘点技能、技能审查、技能质量、该退休哪些技能、技能库存｜English: skill stocktake, audit skills, skill quality review｜技能质量盘点（auditing Claude skills for quality 的 DSH 版）：对 DSH 技能库（四根扫描）做 Quick Scan（仅变更技能）与 Full Stocktake 全盘两模式，批评席子会话按检查表+整体判断给五态裁决（Keep/Improve/Update/Retire/Merge into [X]），判定理由必须自含证据可决策；results.json 缓存+断点续跑。ECC 原文：Use when auditing Claude skills and commands for quality. Supports Quick Scan (changed skills only) and Full Stocktake modes with sequential subagent batch evaluation.【适配：扫描根 ~/.claude/skills → DSH 四根；「7d/30d 使用」列无数据源显式降级 mtime/hit-stats 说明】中文触发：盘点技能、技能审查、技能质量、skill 盘点、库存盘点、retire 技能。English triggers: skill stocktake, audit skills, skill quality review, quick scan."
 ---
 
 <!-- DSH-ADAPT-HEADER BEGIN（移植层新增块。B 档语义=承重段重写后落地：非 A 档全量保真；承重段逐条对应 ECC 原文（锚点 file:line + 原文引句在位），五态裁决 JSON 与判定理由质量要求为逐字保留段。源冻结 sha256-16 见 metadata.ecc-source）

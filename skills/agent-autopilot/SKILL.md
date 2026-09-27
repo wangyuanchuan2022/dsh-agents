@@ -1,6 +1,6 @@
 ---
 name: agent-autopilot
-description: 项目全流程自动实现（agent-autopilot，编排 dsh-agents 的 19 个 sub agent）：六阶段自动跑完「想法→验证过的代码」——Phase 0 扩写（explore 勘察现状 + analyst 需求转验收标准）、Phase 1 规划（planner 出 3-6 步计划，复杂边界加 architect）、Phase 2 执行（executor 逐任务派活，debugger 兜底，interactive 模式缺参数走 subagent-clarify）、Phase 3 QA（test-engineer 循环到测试全绿）、Phase 4 验证（code-reviewer + security-reviewer 并行评审 + verifier 新鲜证据核验）、Phase 5 收尾（git-master 提交 + 角色回收核对报告）；阶段间硬门（计划需用户批准、验证不过不进下一阶段），已存在的 requirement-interview spec 或 consensus-plan 计划可跳过对应前置阶段。触发：用户说「自动实现这个项目/autopilot/从想法到代码/全自动做完」，或需求已清晰的多阶段项目开发。
+description: "触发：自动实现整个项目、全自动做完、从想法到代码、帮我一条龙做出来、多阶段项目开发、端到端实现｜English: autopilot, build the whole project, end-to-end implementation, idea to code, full pipeline｜项目全流程自动实现（agent-autopilot，编排 dsh-agents 的 19 个 sub agent）：六阶段自动跑完「想法→验证过的代码」——Phase 0 扩写（explore 勘察现状 + analyst 需求转验收标准）、Phase 1 规划（planner 出 3-6 步计划，复杂边界加 architect）、Phase 2 执行（executor 逐任务派活，debugger 兜底，interactive 模式缺参数走 subagent-clarify）、Phase 3 QA（test-engineer 循环到测试全绿）、Phase 4 验证（code-reviewer + security-reviewer 并行评审 + verifier 新鲜证据核验）、Phase 5 收尾（git-master 提交 + 角色回收核对报告）；阶段间硬门（计划需用户批准、验证不过不进下一阶段），已存在的 requirement-interview spec 或 consensus-plan 计划可跳过对应前置阶段。触发：用户说「自动实现这个项目/autopilot/从想法到代码/全自动做完」，或需求已清晰的多阶段项目开发。"
 ---
 
 # 项目全流程自动实现（agent-autopilot）

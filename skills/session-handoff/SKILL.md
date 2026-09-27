@@ -1,6 +1,6 @@
 ---
 name: session-handoff
-description: "DSH 会话交接：把一个会话的工作状态提炼成八节交接文档（What We Are Building / What WORKED·带证据 / What Did NOT Work+确切原因 / What Has NOT Been Tried Yet / Current State of Files / Decisions Made / Blockers & Open Questions / Exact Next Step），供接手会话或新会话全量吸收后继续；含同一目录多份交接文档时的候选排序判据（只对自动发现排序、显式路径直读不替换）。不自建会话存储——DSH 已有 session.jsonl.zstd 全量转录，交接文档只承担「意图与判断层」。Use when 会话上下文快耗尽、跨天续做、把工作移交另一会话或子会话、或接手别人的交接文档。中文触发：交接、会话接续、换会话继续、跨天收工、handoff、接手别人的活、写交接文档。English triggers: session handoff, hand off work to another session, resume from a handoff, context is running out, continue tomorrow, absorb a handoff."
+description: "触发：会话交接、换会话继续、跨天收工、上下文要满了、写交接文档、接手别人的活｜English: session handoff, continue in a new session, context running out, write a handoff｜DSH 会话交接：把一个会话的工作状态提炼成八节交接文档（What We Are Building / What WORKED·带证据 / What Did NOT Work+确切原因 / What Has NOT Been Tried Yet / Current State of Files / Decisions Made / Blockers & Open Questions / Exact Next Step），供接手会话或新会话全量吸收后继续；含同一目录多份交接文档时的候选排序判据（只对自动发现排序、显式路径直读不替换）。不自建会话存储——DSH 已有 session.jsonl.zstd 全量转录，交接文档只承担「意图与判断层」。Use when 会话上下文快耗尽、跨天续做、把工作移交另一会话或子会话、或接手别人的交接文档。中文触发：交接、会话接续、换会话继续、跨天收工、handoff、接手别人的活、写交接文档。English triggers: session handoff, hand off work to another session, resume from a handoff, context is running out, continue tomorrow, absorb a handoff."
 ---
 
 <!-- DSH-ADAPT-HEADER BEGIN（移植层新增块：frontmatter 契约化 + ECC→DSH 映射表。本件为种子合成新技能（IMP-21③，B 报告候选 3 降配版）：八节格式与候选排序判据自 ECC 种子段移植，存储面全部换 DSH 原语。）
