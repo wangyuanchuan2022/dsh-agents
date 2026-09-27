@@ -49,6 +49,11 @@
  *   8) 扫描器产物自豁免 + 短匹配掩码收紧（v1.0.3）：--allow 豁免清单（reason 引用被豁免
  *      模式的字面量）与 --out 报告 JSON（user 元数据/掩码片段）按绝对路径自豁免；
  *      掩码对 ≤6 字符匹配只留前 3 字符，防掩码文本在重扫时再次命中规则。
+ *   9) git-history 面文件上下文自豁免（v1.0.4）：history diff 按 +++ b/<path> 跟踪当前文件，
+ *      扫描器自身源码/自测文件的行（规则字面量+合成 fixture）跳过并计数留痕（849 行先例）。
+ *  10) git-history 面 canonical-placeholder 降级（v1.0.5）：与文件面同口径——顺序测试值/
+ *      x{8,}/your/example 等占位样本在 history 面同样降 WARNING，不误报 CRITICAL
+ *      （先例：ECC sanitizer 原文讲解占位规则的句子本身含 sk-0123456789abcdef 举例）。
  *
  * 沙箱安全：git 子进程经 fd-stdio 捕获（DSH 沙箱命名管道 spawnSync EPERM，fd 直传是
  * 已实证合法通道，同 crgate.mjs）。stdout 全 ASCII（Windows GBK 控制台安全）。
@@ -290,10 +295,16 @@ function scanHistory(repoDir, opts, findings, skipped) {
       const re = new RegExp(rule.source, rule.flags.replace('g', '') + 'g');
       let mm;
       while ((mm = re.exec(lines[i])) !== null) {
+        // v1.0.5 口径统一：history 面同享文件面的 canonical-placeholder 降级
+        // （顺序测试值/x{8,}/your/example/... → WARNING），避免文档里讲解占位样本
+        // 的文本（如 ECC sanitizer 原文举例 sk-0123456789abcdef）在 history 面误报 CRITICAL。
+        const isPlaceholder = PLACEHOLDER_HINTS.some((h) => h.test(mm[0]));
         findings.push({
-          id: findings.length + 1, category: 'git-history', severity: 'critical', rule: rule.id,
+          id: findings.length + 1, category: 'git-history',
+          severity: isPlaceholder ? 'warning' : 'critical',
+          rule: rule.id,
           file: `git-history:${hash}`, line: i + 1, snippet: maskMatch(mm[0]),
-          reason: `secret-like pattern in history (${rule.label})`,
+          reason: `secret-like pattern in history (${rule.label})` + (isPlaceholder ? ' [canonical-placeholder downgrade]' : ''),
         });
         if (re.lastIndex === mm.index) re.lastIndex++;
       }
