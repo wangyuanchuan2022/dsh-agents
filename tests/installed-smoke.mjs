@@ -6,7 +6,10 @@
  *   ③ 设置卡 HTTP 端点（ctx.inject(['webServer']) 注册 + GET/PATCH 直调）。
  */
 import url from 'node:url'
-const installed = 'file:///C:/Users/ycwan/.dsh/profiles/web/node_modules/dsh-agents/lib/index.js'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
+// 安装副本位置运行时解析（家目录动态取），不落用户名字面量
+const installed = url.pathToFileURL(join(homedir(), '.dsh/profiles/web/node_modules/dsh-agents/lib/index.js')).href
 const m = await import(installed)
 console.log('[OK] import name=' + m.name + ' inject=' + JSON.stringify(m.inject))
 

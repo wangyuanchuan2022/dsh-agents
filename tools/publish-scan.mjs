@@ -65,7 +65,7 @@ import {
   readFileSync, writeFileSync, readdirSync, existsSync, rmSync,
   openSync, closeSync,
 } from 'node:fs';
-import { dirname, join, resolve, extname, basename } from 'node:path';
+import { dirname, join, resolve, extname, basename, relative } from 'node:path';
 import { tmpdir, userInfo } from 'node:os';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
@@ -260,11 +260,32 @@ function scanHistory(repoDir, opts, findings, skipped) {
     skipped.push({ item: 'git-history-patch', reason: `git log -p failed: ${log.stderr.trim().slice(0, 120)}`, rerun: 'git -C <repo> log -p -n 50' });
     return;
   }
+  // v1.0.4 自豁免（git-history 面）：扫描器自身源码/自测文件合法携带规则字面量与合成
+  // fixture 样本，history diff 里的这些行按文件上下文豁免（与工作区面的 isSelf 同口径）。
+  // 文件上下文来自 diff 头 +++ b/<path>；豁免计数进 stats.selfExempt 保持诚实留痕。
+  const selfRel = new Set();
+  try {
+    const selfAbsDir = dirname(fileURLToPath(import.meta.url));
+    const relDir = relative(resolve(repoDir), selfAbsDir).replace(/\\/g, '/');
+    if (relDir && !relDir.startsWith('..')) {
+      selfRel.add((relDir + '/publish-scan.mjs').toLowerCase());
+      selfRel.add((relDir + '/publish-scan.test.mjs').toLowerCase());
+    }
+  } catch { /* non-file URL */ }
+  let selfExemptLines = 0;
   const lines = log.stdout.split('\n');
   let hash = '';
+  let curFile = '';
   for (let i = 0; i < lines.length; i++) {
-    const m = /^commit ([0-9a-f]{7,40})/.exec(lines[i]);
-    if (m) hash = m[1].slice(0, 12);
+    const cm = /^commit ([0-9a-f]{7,40})/.exec(lines[i]);
+    if (cm) hash = cm[1].slice(0, 12);
+    const fm = /^\+\+\+ b\/(.+)$/.exec(lines[i]);
+    if (fm) curFile = fm[1].trim().toLowerCase();
+    if (selfRel.size > 0 && selfRel.has(curFile)) {
+      // 该行属于扫描器自身文件：内容为规则定义/fixture 样本，跳过但计数留痕
+      if (/^\+/.test(lines[i]) && lines[i].length > 1) selfExemptLines++;
+      continue;
+    }
     for (const rule of SECRET_RULES) {
       const re = new RegExp(rule.source, rule.flags.replace('g', '') + 'g');
       let mm;
@@ -277,6 +298,13 @@ function scanHistory(repoDir, opts, findings, skipped) {
         if (re.lastIndex === mm.index) re.lastIndex++;
       }
     }
+  }
+  if (selfExemptLines > 0) {
+    skipped.push({
+      item: 'git-history-self-exempt',
+      reason: `scanner's own files (rules/fixtures) in history: ${selfExemptLines} added lines exempted by file context`,
+      rerun: 'inspect git log -p -- tools/publish-scan.mjs tools/publish-scan.test.mjs manually',
+    });
   }
 }
 

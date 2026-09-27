@@ -785,7 +785,7 @@ await testEndpoint('端点 PATCH：非法形状/未知档位大声 400，不写�
 
 await testEndpoint('端点防护：非回环 403；Origin 与 Host 不一致 403；其他方法 405', async (handler) => {
   const remote = fakeRes()
-  await handler(fakeReq({ remote: '192.168.1.9' }), remote)
+  await handler(fakeReq({ remote: '192.0.2.9' }), remote) // RFC 5737 文档段 IP（TEST-NET-1），非回环语义不变
   assert.equal(remote.statusCode, 403)
   const evil = fakeRes()
   await handler(fakeReq({ origin: 'http://evil.example:3080' }), evil)

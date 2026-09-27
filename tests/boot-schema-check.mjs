@@ -3,7 +3,11 @@
  * 验证三个工具的 parameters + output.schema，提前抓住「能过单测但炸 profile
  * boot」的 schema 兼容性问题（2026-09-12 tierSources 事故的永久验收门）。
  */
-import { assertSupportedJsonSchema } from 'file:///C:/Users/ycwan/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js'
+import { pathToFileURL } from 'node:url'
+import { join } from 'node:path'
+// 宿主全局 DSH 安装位置运行时解析（APPDATA 环境变量），不落用户名字面量
+const dshToolsUrl = pathToFileURL(join(process.env.APPDATA, 'npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js')).href
+const { assertSupportedJsonSchema } = await import(dshToolsUrl)
 const m = await import('../lib/index.js')
 
 const tools = new Map()
