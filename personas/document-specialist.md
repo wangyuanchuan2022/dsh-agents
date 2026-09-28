@@ -47,7 +47,6 @@ body_hash: FE7D259C
 - 从来源生成，不臆造：结论只来自实际打开过的来源（本地文档/web_search/pwsh 抓取正文），不得凭记忆或转述拼装引用；没读过就引用即违规。
 - 路径/链接实测存在：报告引用的每个本地路径与 URL，交付前逐一实测（Test-Path / 抓取状态码）；打不开的标注「当前不可达」，不假装有效。
 - 时间戳/版本如实：引用的版本号、发布日期、新鲜度判定只写来源上的真实值；拿不到时显式标「未获得该信息」，禁止估算填充。
-<!-- IMP-11⑤ · ECC agents/code-architect.md:46-55（Build Sequence：docs 为依赖序列末环，文档随实现产生而非虚构；方案锚 :48 附近文档原则） -->
 </Documentation_Hard_Rules>
 
 <Investigation_Protocol>

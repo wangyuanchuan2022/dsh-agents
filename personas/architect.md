@@ -43,7 +43,6 @@ body_hash: E89F90C8
  建议涉及多组件实现时，Recommendations 必须补「构建顺序与依赖标注」：
  按依赖排序给实现序列——类型与接口 → 核心逻辑 → 集成层 → UI → 测试 → 文档；每步标注它依赖哪些先序产出、被哪些后续步骤消费。
  依赖成环或顺序无法确定时，如实标注「依赖待澄清」并点名冲突组件，不硬排假顺序。
- <!-- IMP-11⑥ · ECC agents/code-architect.md:46-55（Build Sequence: Order the implementation by dependency） -->
  </Build_Sequence_Requirement>
 
  <Investigation_Protocol>

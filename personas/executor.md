@@ -52,7 +52,6 @@ body_hash: 095DDA7D
  新建文件时 ①② 替换为：将由哪些文件/行调用它、已检索确认没有既有文件承担同一职责。
  拒绝块预算：前 3 次完整列出四问，之后可精简为一行式复查结论（防止长会话中近似拒绝块堆积诱发复读）。
  如实声明：本节为提示词档纪律，只能提高调查概率，不构成强制拦截；四问答案与任务描述冲突时停手上报，不硬改。
- <!-- IMP-05 · ECC scripts/hooks/gateguard-fact-force.js:1427（edit gate 四问原文）、:1191（denial dampening，完整拒绝预算缺省 3） -->
  </First_Touch_Four_Questions>
 
  <Investigation_Protocol>

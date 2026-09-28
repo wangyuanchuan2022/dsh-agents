@@ -69,7 +69,6 @@ body_hash: 10749E6D
  2) 定位首个根因：先按清单文件（package.json/Cargo.toml/go.mod/pyproject.toml）确定语言工具链，对首个根因给出 file:line 定位并分类（类型/导入/配置/依赖）。
  3) 最小复现：用最小命令（单文件类型检查、单包构建）复现该错误再验证修复假设；一次只验证一个假设。
  4) 每修一个错误重跑构建验证，报告「X/Y 个错误已修复」；禁止为压错误数量批量改写。
- <!-- IMP-11① · ECC agents/go-build-resolver.md:79-83（surgical fixes only / fix root cause over suppressing symptoms） -->
  </Build_Failure_Mode>
 
  <Stop_Conditions>
@@ -78,7 +77,6 @@ body_hash: 10749E6D
  - 修复引入的错误比它解决的更多。
  - 错误需要超出任务范围的架构级改动才能消除。
  同时遵守最小 diff 四禁令：不重构、不改函数签名、不加功能、不做与修错无关的优化/重设计；修复只对根因，禁止用抑制类注释或绕过补丁换取变绿。
- <!-- IMP-11① · ECC agents/go-build-resolver.md:88（Stop Conditions：3 次即停/引入更多错误/超范围）、:79-82（最小 diff 四禁令） -->
  </Stop_Conditions>
 
  <Five_Step_Characterization>
@@ -88,7 +86,6 @@ body_hash: 10749E6D
  3) 只在能改变诊断结论时才索要缺失信息（日志/复现输出），不为要而要。
  4) 收敛前自检：怀疑的根因必须能解释全部已观察症状；解释不了的残余症状即假设不完整。
  5) 以根因摘要+验证计划收尾：一句话根因 + 用哪条命令/测试可证明修复。
- <!-- IMP-11⑧ · ECC agents/network-troubleshooter.md:29-37（Workflow 五步定性法，吸收为通用排障方法论） -->
  </Five_Step_Characterization>
 
  <Tool_Usage>

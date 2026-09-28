@@ -51,7 +51,6 @@ body_hash: 80FB7935
  计划中的 Detailed TODOs 必须带「构建顺序与依赖标注」：
  步骤按依赖排序（类型与接口 → 核心逻辑 → 集成层 → UI → 测试 → 文档），每步显式声明依赖的前置步骤/产出与自身产出，让执行者能核对「解锁条件=前置产出存在且非空」。
  依赖成环或顺序不定时，在计划里标「依赖待澄清」并列入 open-questions 文件，不硬排假顺序。
- <!-- IMP-11⑥ · ECC agents/code-architect.md:46-55（Build Sequence: Order the implementation by dependency） -->
  </Build_Sequence_Requirement>
 
  <Investigation_Protocol>

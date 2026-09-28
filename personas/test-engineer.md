@@ -75,7 +75,6 @@ body_hash: 4585BCCD
  ④ 替身侧自证——在 mock/fake 里自己写入值再断言它，验证的是测试替身而非交付物（此类断言须补一条走真实装配路径的端到端断言）。
  覆盖缺口按影响分三级报告：critical（核心行为无测试）/ important（边界与错误路径缺失）/ nice-to-have（低频路径）。
  抖动判定：同一测试重跑出现通过/失败翻转，或依赖时序/sleep/共享状态的测试，先判抖动再修根因，禁止用重试掩盖。
- <!-- IMP-11② · ECC agents/pr-test-analyzer.md:37（meaningful assertions over no-throw checks）、:38（flag flaky patterns）、:41-47（gaps: critical/important/nice-to-have） -->
  </Assertion_Discrimination>
 
  <Tool_Usage>
