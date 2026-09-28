@@ -38,13 +38,18 @@ agent_spawn(role="executor", task="…")           # 直接派活（默认继承
 | **MEDIUM**（sonnet，10 个：主力实现与专业工作） | debugger、executor、verifier、tracer、test-engineer、designer、qa-tester、git-master、document-specialist、scientist | verifier / document-specialist / scientist 只读 |
 | **LOW**（haiku，2 个：窄而快的检索/写作任务） | explore、writer | explore 只读 |
 
-档位默认映射（本机 `settings.yaml` 里确实配置的 provider）：
+档位映射有两层：**基底**（`cordis.patch.yml` 的 `config.tiers`）与**用户层覆盖**（设置页 / `agent_roles set`，优先级更高）。
+当前本机**实际生效**值（2026-09-27 `agent_roles action=tiers` 实测回显）：
 
-| 档位 | provider / model | 设计意图 |
+| 档位 | 当前生效 provider / model | 设计意图 |
 |---|---|---|
-| LOW | `deepseek` / `deepseek-flash` | 检索、定位、文档、批量转录等窄任务 |
+| LOW | `glm-pro` / `glm-5.3-flash` | 检索、定位、文档、批量转录等窄任务 |
 | MEDIUM | `glm-pro` / `glm-5.3-flash` | 实现、调试、测试、设计、数据、QA、提交等主力工作 |
-| HIGH | `deepseek` / `deepseek-v4-pro` | 需求分析、规划、架构、代码/安全/计划评审 |
+| HIGH | `glm-pro` / `glm-5.3` | 需求分析、规划、架构、代码/安全/计划评审（长链条推理） |
+
+> ⚠️ 档位表会随设置页/用户层改动而变——**派活前以 `agent_roles action=tiers` 当次回显为准，勿凭本表或旧记忆假设**
+>（既定纪律：当前配置下 LOW=MEDIUM 同模型，档位语义实际是「HIGH / 非 HIGH」二元；HIGH 的模型曾由 deepseek 系换为 glm-5.3）。
+> 基底默认值见 §3 示例；解析优先级=调用期显式 → roleOverrides → settings 用户层 → cordis 基底 → 内置默认。
 
 ---
 
@@ -55,7 +60,7 @@ agent_spawn(role="executor", task="…")           # 直接派活（默认继承
     - id: dsh-agents
       name: dsh-agents
       config:
-        tiers:                                    # 档位 → provider + model（改档只改这里）
+        tiers:                                    # 档位 → provider + model（**基底默认**，改档只改这里）
           LOW:    { provider: deepseek, model: deepseek-flash }
           MEDIUM: { provider: glm-pro,  model: glm-5.3-flash }
           HIGH:   { provider: deepseek, model: deepseek-v4-pro }
@@ -66,6 +71,9 @@ agent_spawn(role="executor", task="…")           # 直接派活（默认继承
         agentOutSubdir: agent-out                 # 默认产出目录名（相对 cwd）
         allowSpawn: true                          # false = 紧急刹车，禁用 agent_spawn
 ```
+
+> 注：上表是 `cordis.patch.yml` 的**基底默认**（仓库真实内容）；本机实际生效值被 settings 用户层覆盖
+> （当前 LOW/MEDIUM=glm-pro/glm-5.3-flash、HIGH=glm-pro/glm-5.3，见 §2），改档走设置页或 `agent_roles set`。
 
 配置错（未知档位、未知角色 id、半个路由、非法 `clarifyMode`）**直接抛错**——静默兜底会让「改了没生效」变成黑盒。
 
@@ -102,6 +110,8 @@ dsh plugin --profile web add D:\tools\deepsek_harness\dsh-agents
 另有**派活前置三问**（MACAE B2 的 DSH 变体，方向反转）：MACAE 分类失败 fail-open 照常执行，
 DSH 语境里「不派」才是安全默认——① 这事哪个会话能做 ② 目标会话有没有对应工具/数据 ③ 是否要求对方
 做它做不到的副作用（写库/删数据/发消息/装依赖）。任务文本命中副作用关键词时自动告警（fail-closed）。
+
+模板正本：`docs/task-brief-v3.md`（v3.2，含 §5.4 回收契约与工作单元状态语义）——本节为结构概览，条款以正本为准。
 
 ---
 
@@ -141,7 +151,7 @@ dsh-agents/
   tests/installed-smoke.mjs    安装副本烟测（工具+settings+端点三方同源）
   tests/probe-boot.mjs  重启后探针：宿主引导图含 dsh-agents + client.js 可分发
   tools/crgate.mjs      评审确定性机检（freeze/anchor/finalize，自测 65 断言）
-  tools/publish-scan.mjs 发布前脱敏机检（v1.0.4，六类扫描+三值裁定，自测 47 断言）
+  tools/publish-scan.mjs 发布前脱敏机检（v1.0.5，六类扫描+三值裁定+git-history 自豁免与占位降级，自测 47 断言）
   tools/install-personas.mjs   人格批量安装（默认跳过 code-reviewer v2+，防降级覆盖）
 ```
 
@@ -152,7 +162,10 @@ dsh-agents/
 
 - 角色定义与人格原文：oh-my-claudecode（MIT，Copyright © Yeachan Heo），原文逐字留档于 `review/original/`；
 - 任务书模板：MACAE（Microsoft，MIT）可移植机制清单 B1/B2/B3/B4；
-- 会话创建时序：`dsh-memory-evolve` 的 `de_session` 实机踩坑记录（presets 挂载、provider 解析、seed seq、工作区挂接）。
+- 会话创建时序：`dsh-memory-evolve` 的 `de_session` 实机踩坑记录（presets 挂载、provider 解析、seed seq、工作区挂接）；
+- §9.3 十三件方法论技能、`personas/checklists/` 四份专项清单（rust/csharp/cpp/a11y/performance/sql/pytorch）、
+  `tools/publish-scan.mjs`：[Everything Claude Code](https://github.com/affaan-m/everything-claude-code)（ECC）v2.2.2
+  分析移植（全量保真 + 行内【适配】标注；许可核验为公开化前置项，当前私有仓使用）。
 
 ---
 
@@ -162,6 +175,8 @@ dsh-agents/
 `~/.dsh/skills/`——**改动必须双位同步并比对哈希**（单向改动=漂移，2026-09-26 已抓过两起先例）。
 入口纪律：所有技能的 `description` **触发词前置**（`触发：<中文提法>｜English: <triggers>｜<职责正文>`）——
 DSH 技能目录只显示 description 前 ~330-500 字符，触发词写在末尾会被截断而无法被自动发现。
+入口验收：路由冒烟 5/5 精确命中（「加个导出功能」→agent-feature／「构建失败了」→agent-bugfix／
+「代码太臃肿」→ai-slop-cleaner／「我有个模糊想法」→requirement-interview／「有哪些工作流」→agent-workflow-router）。
 
 ### 9.0 路由入口（1 件，用户没点技能名时先加载它）
 
