@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import { ROLES, getRole, roleIds, normalizeTier, filterRoles } from '../lib/roles.js'
 import {
-  DEFAULT_TIERS, TIER_INTENT, resolveTierTable, resolveRoleOverrides, resolveRoute, resolveProviderForModel, filterUsableCatalog,
+  DEFAULT_TIERS, TIER_INTENT, resolveTierTable, resolveRoleOverrides, resolveRoute, resolveProviderForModel, listConfiguredRoutes, filterUsableCatalog,
 } from '../lib/routing.js'
 import { composeTaskbook, preflight, stamp, dedupeEvidencePath } from '../lib/taskbook.js'
 import { loadPersona, listPersonaFiles, splitFrontmatter } from '../lib/persona.js'
@@ -907,6 +907,34 @@ test('entry Config：导出 schema 且三档标 volatile（否则宿主 describe
   for (const key of ['roleOverrides', 'defaultPreset', 'agentOutSubdir']) {
     assert.ok(CONFIG_SCHEMA.dict?.[key], `Config 必须声明 ${key}（否则 loader 归一后配置丢失）`)
   }
+})
+
+// ── provider 目录解析：两代 settings 形态（旧 get / 新 describe） ─────────
+await testAsync('provider 目录：新宿主 forms 形态下 listConfiguredRoutes / resolveProviderForModel 仍可用', async () => {
+  const formsSettings = {
+    describe: () => [{
+      ns: 'llm-pi-ai',
+      value: { providers: { 'prov-x': { models: [{ id: 'model-a' }, { id: 'model-b' }] } } },
+    }],
+    update: async () => {},
+  }
+  const llm = { listConfigurableProviders: () => [{ provider: 'prov-x', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'prov-x'] }] }
+  const catalog = await listConfiguredRoutes({ llm, settings: formsSettings })
+  assert.deepEqual(catalog['prov-x'], ['model-a', 'model-b'], '目录必须能从 describe() 读到（否则设置卡下拉为空）')
+  assert.equal(await resolveProviderForModel({ llm, settings: formsSettings }, 'model-b'), 'prov-x')
+})
+
+await testAsync('provider 目录：旧宿主 get(ns) 路径保持原行为', async () => {
+  const legacy = { get: (ns) => (ns === 'llm-pi-ai' ? { providers: { 'p-legacy': { models: [{ id: 'm1' }] } } } : undefined) }
+  const llm = { listConfigurableProviders: () => [{ provider: 'p-legacy', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'p-legacy'] }] }
+  assert.deepEqual((await listConfiguredRoutes({ llm, settings: legacy }))['p-legacy'], ['m1'])
+  assert.equal(await resolveProviderForModel({ llm, settings: legacy }, 'm1'), 'p-legacy')
+})
+
+await testAsync('provider 目录：settings 无读取面时目录记空列表而不抛错', async () => {
+  const llm = { listConfigurableProviders: () => [{ provider: 'p', settingsNs: 'llm-pi-ai', settingsPath: [] }] }
+  assert.deepEqual(await listConfiguredRoutes({ llm, settings: {} }), { p: [] }, '读不到配置 → 该 provider 记空列表（不抛错）')
+  assert.equal(await resolveProviderForModel({ llm, settings: {} }, 'm'), undefined)
 })
 
 // ── 浏览器半（lib/client.js）：模块加载器工厂格式 + 设置卡注册 ─────────────
