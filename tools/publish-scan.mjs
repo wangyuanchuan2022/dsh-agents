@@ -640,7 +640,7 @@ function printSummary(r) {
 }
 
 function parseArgs(argv) {
-  const opts = { excludeGlobs: [], extraIgnoreDirs: [] };
+  const opts = { excludeGlobs: [], extraIgnoreDirs: [], maxHistoryCommits: 50 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => { if (i + 1 >= argv.length) throw new Error(`missing value for ${a}`); return argv[++i]; };
@@ -653,7 +653,14 @@ function parseArgs(argv) {
     else if (a === '--extra-ignore') opts.extraIgnoreDirs.push(next());
     else if (a === '--allow') opts.allowPath = next();
     else if (a === '--git-history') opts.gitHistory = true;
-    else if (a === '--max-history-commits') opts.maxHistoryCommits = parseInt(next(), 10);
+    else if (a === '--max-history-commits') {
+      const v = parseInt(next(), 10);
+      // 缺省 50（见 parseArgs 的 opts 初值）；显式传值必须是非负整数，否则响亮失败
+      // —— 旧版无缺省时此值为 undefined，Math.min 得 NaN，git log -p -n NaN 直接 fatal，
+      // 于是最深的 git 历史扫描被静默 SKIPPED（2026-09-28 公开 dsh-agents 时实测）。
+      if (!Number.isInteger(v) || v < 0) throw new Error('--max-history-commits requires a non-negative integer');
+      opts.maxHistoryCommits = v;
+    }
     else if (a === '--strict-single-commit') opts.strictSingleCommit = true;
     else if (a === '--strict-tracked') opts.strictTracked = true;
     else if (a === '--user') opts.user = next();

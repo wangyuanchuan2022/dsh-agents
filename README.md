@@ -262,3 +262,14 @@ DSH 技能目录只显示 description 前 ~330-500 字符，触发词写在末�
   `tests/boot-schema-check.mjs`（宿主真实校验器 6/6）、`tests/installed-smoke.mjs`
   （安装副本烟测：工具+settings+端点三方同源）、`tests/probe-boot.mjs`（重启后
   验证宿主引导图已含 dsh-agents 且 client.js 可分发）
+
+---
+
+## 11. 许可
+
+- **本仓库自身代码**：MIT，见根目录 [LICENSE](LICENSE)。
+- **角色体系移植来源**：`personas/`（30 个角色人格）与 `personas/checklists/` 移植自
+  [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)（OMC，MIT，
+  Copyright (c) 2025 Yeachan Heo）。按 MIT 要求，其原始版权声明与许可全文保留在
+  [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)，**请勿删除**。
+- 过程物（`backup/` `review/` `agent-out/` 等）与 `node_modules/` 不入库（见 `.gitignore`）。
