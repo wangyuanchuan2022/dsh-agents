@@ -3,41 +3,6 @@ name: operator-approval-loop
 description: "触发：外发消息审批、代理发信前人工确认、审批账、外发草稿审批｜English: outbound message approval, operator approval, approval ledger｜Operator approval contract with internal filing notices for agent-drafted outbound messages, hashed drafts, epoch-keyed decisions, durable delivery claims and receipts, and a pre-draft baseline gate. Use when an agent drafts messages to external counterparties and a human operator must approve, reject, or steer each send before it leaves."
 ---
 
-<!-- DSH-ADAPT-HEADER BEGIN（移植层新增块：ECC→DSH 映射表。frontmatter 原生即 DSH 契约（仅 name+description，无散字段），未改动。剥离本块与 frontmatter 后，正文与 ECC 原件逐字一致——仅含行内【适配：…】标注，一字未删。校验：node verify-fidelity.mjs）
-
-metadata:（来源收编——ECC frontmatter 无散字段，此为移植层补记）
-  origin: ECC
-  ecc-source: ecc-analysis/src/ECC-main/skills/operator-approval-loop/SKILL.md（ECC v2.2.2，sha256-16 6F79952C1498C274）
-  references: approval-ledger.sql（sha256-16 511F41E804D7C1F8）/ approval_claims.py（CF30D615CF8FC4E6）逐字节拷贝
-  ported: IMP-16② · P1 · ecc-analysis batch2 → staging/operator-approval-loop/
-
-## ECC→DSH 适配映射表
-
-| ECC 宿主设施/概念（正文原样保留） | DSH 对位 |
-|---|---|
-| internal ops destination（已验证内部落点） | 内部面=组织者会话（de_broadcast 点对点直投，禁 project:/群发）或 de_channel_send channels:"web"（站内通知）；**外部面**=de_channel_send channels:"feishu/qq/weixin/wecom" 渠道 |
-| counterparty / origin channel（外部收件方） | 外部渠道会话（de_channel_send target，如 p2p:oc_xxx） |
-| python3 命令行 | python（本机 3.11，满足 SQLite 序列化要求；沙箱内直跑） |
-| transport（消息传输层） | de_channel_send 渠道直发；本契约的 claim/dispatch 状态机管「是否允许发」，transport 由 DSH 渠道工具执行 |
-| hooks / claude CLI / MCP | 本件零依赖（C 报告 15 模式宿主依赖扫描全零），无需降级 |
-
-## 渠道落点矩阵（C 报告 A-2 改进点①：never fall back to external 落到工具参数）
-
-| 面 | 落点 | 允许内容 |
-|---|---|---|
-| 内部 | 组织者会话 / web 站内通知 | 审批请求、filing 回执、delivery footer、审批元数据 |
-| 外部 | feishu/qq/weixin/wecom 渠道 | 仅经 approve 决策 + claim/dispatch 放行的 exact draft_text；禁带审批元数据 |
-| 未知/未分类 origin | 静默（不投递） | — |
-
-## auto_send_after 缺省口径（C 报告 A-2 改进点②）
-
-DSH 侧缺省**关闭**超时自动放行（草稿不带 auto_send_after 即 hard-gated forever，与正文条款一致）——符合本机「外发需授权」纪律；如需启用须用户显式批准并在任务书写明。
-
-## 机检脚本（C 报告 A-2 改进点③）
-
-claim 状态表 5 条不变量断言脚本留待部署批落地（本批交付范围=移植+保真校验 verify-fidelity.mjs，不扩大范围）。
--->
-
 # Operator Approval Loop
 
 An agent that talks to external counterparties should never send on its own
@@ -48,11 +13,11 @@ decides on the exact text, and a delivery ledger proves what went out.
 ## When to Use
 
 - An agent drafts replies to customers, suppliers, investors, or partners in
-  a shared channel, email, or chat, and a human must approve before send.
+ a shared channel, email, or chat, and a human must approve before send.
 - You need an audit trail that links each sent message to the exact draft
-  text, the operator who approved it, and the decision time.
+ text, the operator who approved it, and the decision time.
 - You have seen a stale approval release a rewritten draft, or two workers
-  deliver the same approved message twice.
+ deliver the same approved message twice.
 - Drafts keep re-asking counterparties for facts the ledger already holds.
 
 ## How It Works
@@ -73,22 +38,22 @@ The reference schema is in [references/approval-ledger.sql](references/approval-
 ### Filing a draft
 
 1. Clean inputs. Strip control characters, collapse whitespace in single-line
-   fields, and enforce length caps (draft, summary, context, counterparty).
-   Empty or oversized fields are refused, not truncated silently.
+ fields, and enforce length caps (draft, summary, context, counterparty).
+ Empty or oversized fields are refused, not truncated silently.
 2. Run the baseline gate (below). It may refuse the filing.
 3. Hash the draft text with sha256. The hash prefix goes into the summary so
-   the approval panel shows which text it is approving.
+ the approval panel shows which text it is approving.
 4. Upsert. If an open drafted obligation already exists for the same
-   (counterparty, channel), replace the draft sidecar and advance the
-   obligation's `updated_at`. That advance is the epoch rotation: any
-   decision keyed to the old epoch can no longer release the new text.
-   Otherwise insert a new obligation with status `drafted`.
+ (counterparty, channel), replace the draft sidecar and advance the
+ obligation's `updated_at`. That advance is the epoch rotation: any
+ decision keyed to the old epoch can no longer release the new text.
+ Otherwise insert a new obligation with status `drafted`.
 5. Route the filing receipt only to a configured, verified internal ops
-   destination. If the origin is that internal destination, acknowledge there.
-   Never-silent means internal reporting, not an automatic external reply.
-   Keep draft hashes, approval status, operator identity and workflow metadata
-   out of counterparty-visible channels. Unknown or unclassified origins stay
-   quiet; a direct message is not automatically internal. 【适配：DSH 内部面=组织者会话（de_broadcast 点对点直投）/ web 站内通知；外部面=de_channel_send 渠道——收据只投内部面，落点矩阵见头部】
+ destination. If the origin is that internal destination, acknowledge there.
+ Never-silent means internal reporting, not an automatic external reply.
+ Keep draft hashes, approval status, operator identity and workflow metadata
+ out of counterparty-visible channels. Unknown or unclassified origins stay
+ quiet; a direct message is not automatically internal.
 
 If a verified internal destination is unavailable, retain the filing result
 in the internal tool result or operator surface. Never fall back to an external
@@ -98,7 +63,6 @@ Filing a draft does not authorize an external response. Any policy-permitted
 clarifying question or neutral response is a separate outbound decision, subject
 to the existing mention, channel, draft-only, frozen and never constraints in
 counterparty-channel-discipline. It must not disclose internal approval metadata.
-【适配：counterparty-channel-discipline 为 ECC 侧姊妹契约技能，DSH 侧未移植——其约束（mention/channel/draft-only/frozen/never）在本契约内以审批账机制承载，外发一律走 approve+claim 放行】
 
 ### Baseline gate
 
@@ -106,15 +70,15 @@ Before any draft is filed, query the current baseline for the counterparty
 (a temporal ledger, contract store, or CRM):
 
 - Signed or delivered contract on record: refuse the filing with the evidence
-  and a recommendation. Asking a counterparty about specs after signing is the
-  exact failure this gate exists to stop.
+ and a recommendation. Asking a counterparty about specs after signing is the
+ exact failure this gate exists to stop.
 - Operator override: `force_despite_signed_contract` lets the filing through
-  and stamps `[BASELINE_OVERRIDE_SIGNED_CONTRACT]` into the draft context.
+ and stamps `[BASELINE_OVERRIDE_SIGNED_CONTRACT]` into the draft context.
 - Gate service unreachable: the filing proceeds and the context is stamped
-  `[BASELINE_CHECK_UNAVAILABLE]`. The panel sees that the guard was off.
-  Failures never silently disable the gate.
+ `[BASELINE_CHECK_UNAVAILABLE]`. The panel sees that the guard was off.
+ Failures never silently disable the gate.
 - When facts are available, attach the freshest few to the context as a
-  `[BASELINE FACTS: ...]` digest so the draft lands with current truth.
+ `[BASELINE FACTS: ...]` digest so the draft lands with current truth.
 
 ### Deciding
 
@@ -143,26 +107,26 @@ approval records. All writers must enable foreign keys and recursive triggers
 and honor the schema guards; administrative database tampering is outside this model.
 
 1. Discover bound approved drafts. Discovery is not permission. `claim()` opens
-   its own `BEGIN IMMEDIATE` transaction, validates the current approved epoch,
-   exact text, computed SHA-256 and full destination against the snapshot, and
-   inserts a unique claim before returning its token. A conflict stops the worker
-   before transport. Completed receipts cannot be claimed again.
+ its own `BEGIN IMMEDIATE` transaction, validates the current approved epoch,
+ exact text, computed SHA-256 and full destination against the snapshot, and
+ inserts a unique claim before returning its token. A conflict stops the worker
+ before transport. Completed receipts cannot be claimed again.
 2. `begin_dispatch()` revalidates the binding and atomically changes `claimed`
-   to `dispatching` using the token. Only its winning caller receives
-   the exact `draft_text` and destination after commit. Never regenerate text, reread a
-   mutable sidecar for transport, or reuse the payload for another attempt.
-   A nested caller transaction is refused; permission cannot depend on a later
-   caller commit. No database transaction remains open across transport.
+ to `dispatching` using the token. Only its winning caller receives
+ the exact `draft_text` and destination after commit. Never regenerate text, reread a
+ mutable sidecar for transport, or reuse the payload for another attempt.
+ A nested caller transaction is refused; permission cannot depend on a later
+ caller commit. No database transaction remains open across transport.
 3. A confirmed successful result goes to `complete()`, which atomically records
-   the delivery coordinate, marks the claim delivered and flips the obligation
-   to `sent`. Identical completion is a no-op; conflicting coordinates fail.
-   The receipt UNIQUE key deduplicates records, not prior external effects.
+ the delivery coordinate, marks the claim delivered and flips the obligation
+ to `sent`. Identical completion is a no-op; conflicting coordinates fail.
+ The receipt UNIQUE key deduplicates records, not prior external effects.
 4. Exceptions, timeouts, worker death after begin-dispatch, or failed receipt
-   persistence leave a blocked attempt. `mark_unknown()` records uncertainty.
-   Unknown claims never expire, reopen, auto-retry or allow another decision for
-   that obligation to bypass them. A trusted caller may use `reconcile()` with
-   confirmed successful coordinate and evidence; the module does not verify
-   that evidence. An absent receipt is not proof of non-delivery.
+ persistence leave a blocked attempt. `mark_unknown()` records uncertainty.
+ Unknown claims never expire, reopen, auto-retry or allow another decision for
+ that obligation to bypass them. A trusted caller may use `reconcile()` with
+ confirmed successful coordinate and evidence; the module does not verify
+ that evidence. An absent receipt is not proof of non-delivery.
 
 The guarantee is one automatic dispatch attempt per approved decision, not
 exactly-once external delivery. A crash after begin-dispatch but before transport
@@ -192,7 +156,7 @@ Never alter already-approved external text to append workflow metadata.
 Focused local validation uses temporary databases, separate connections and a
 simulated attempt counter, not a provider or real message:
 `python3 -m unittest discover -s tests/skills -p 'test_approval_delivery_claims.py'`.
-【适配：python3 → python（本机 3.11 满足要求，沙箱内直跑；ECC 仓库的 tests/skills 测试文件不在本包内，DSH 侧按 Invariants 节自行构造最小验证）】
+
 The tests require Python 3.11+ with SQLite serialization support; the reference
 uses only the standard library. The existing desk-pattern contract checks remain
 a separate compatibility check.
@@ -220,12 +184,12 @@ Reject the filing if the referenced row does not exist.
 
 ```text
 file_request(
-  draft="Thanks, we can hold the slot until Friday. Which start date works?",
-  counterparty="acme-supplier",
-  context="reply to delivery window question",
-  origin_platform="slack", origin_channel="#acme-shared",
-  origin_thread="1712345678.000100", priority="P1",
-  signal_obligation_id=412)
+ draft="Thanks, we can hold the slot until Friday. Which start date works?",
+ counterparty="acme-supplier",
+ context="reply to delivery window question",
+ origin_platform="slack", origin_channel="#acme-shared",
+ origin_thread="1712345678.000100", priority="P1",
+ signal_obligation_id=412)
 -> {obligation_id: 431, draft_sha256: "9f2c...", refiled: false}
 ```
 
@@ -233,7 +197,7 @@ The configured, verified internal ops destination sees:
 `Draft filed for approval (P1, sha 9f2c8a1b). Waiting on operator.`
 The counterparty-visible origin channel receives no filing notice. If no verified
 internal destination is available, the receipt stays in the internal tool result
-or operator surface, with no external fallback. 【适配：内部落点=组织者会话/web 站内通知；"internal tool result" 在 DSH 即工具返回值本身，落点矩阵见头部】
+or operator surface, with no external fallback.
 
 ### Re-file after a steer
 
@@ -261,9 +225,9 @@ approved by operator-a · receipt 118 · draft sha256 9f2c8a1b2d3e4f50
 ## Invariants to test
 
 - Filing receipts go only to configured, verified internal ops; the origin
-  receives one only when it is that verified internal destination. 【适配：内部面枚举见头部映射表——组织者会话 / web 站内通知】
+ receives one only when it is that verified internal destination.
 - An unknown origin stays quiet. An unavailable internal destination uses the
-  internal tool result or operator surface, with no external fallback.
+ internal tool result or operator surface, with no external fallback.
 - Same (counterparty, channel) filed twice yields one obligation, two epochs.
 - A decision with a stale epoch never results in a delivery row.
 - Two concurrent claimants yield one dispatch permission; losers never attempt transport.

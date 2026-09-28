@@ -1,7 +1,7 @@
 # 性能评审清单（code-reviewer v2 伴随资产）
 
 > 总原则：precision over recall。与语言清单叠加加载（不互斥），发现同等定级。
-> 来源：ECC agents/performance-optimizer.md:58-80 全量保真提炼（【适配】只加头部映射与行内标注，未删原文语义）。
+> 来源：ECC agents/performance-optimizer.md:58-80 全量保真提炼（只加头部映射与行内标注，未删原文语义）。
 
 ## 所有权边界
 
@@ -18,8 +18,6 @@
 | Cumulative Layout Shift | < 0.1 | 为图片预留空间，避免布局抖动 |
 | Total Blocking Time | < 200ms | 拆分长任务，使用 web workers |
 | Bundle Size (gzipped) | < 200KB | tree shaking，懒加载，代码分割 |
-
-【适配：A-D-7 适用范围声明——以上阈值仅对浏览器前端栈适用；批处理吞吐/GPU 利用率阈值 ECC 原文 :58-80 未给出，本清单不编造，需要时另行补区】
 
 ## 二、复杂度对照【全栈通用】
 

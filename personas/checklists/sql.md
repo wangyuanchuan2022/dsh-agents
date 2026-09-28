@@ -1,7 +1,7 @@
 # SQL/数据库评审清单（code-reviewer v2 伴随资产）
 
 > 总原则：precision over recall。与语言清单叠加加载（不互斥），发现同等定级。
-> 来源：ECC agents/database-reviewer.md:69-90（锚 :74）全量保真提炼（【适配】只加头部映射与行内标注，未删原文语义）。
+> 来源：ECC agents/database-reviewer.md:69-90（锚 :74）全量保真提炼（只加头部映射与行内标注，未删原文语义）。
 
 ## 所有权边界
 

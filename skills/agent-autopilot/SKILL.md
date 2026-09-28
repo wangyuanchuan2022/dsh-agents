@@ -6,8 +6,6 @@ description: "触发：自动实现整个项目、全自动做完、从想法到
 # 项目全流程自动实现（agent-autopilot）
 
 > 编排对象：dsh-agents 插件的 19 个 sub agent（工具：`agent_roles` / `agent_taskbook` / `agent_spawn`）。
-> 结构移植自 OMC autopilot 六阶段 + team 阶段路由表。
-> ECC 批次1 IMP-09 增量：Step 0 尺寸分级+相位掩码（tie-breaker 安全面/公共 API⇒standard）、提交前 GATE 2、delta 报告、交接候选排序判据、档位置信度+回退档、侧问插话纪律、formatter 两档+扩展名映射、计划前固定检索面 8+5。均带行内锚点。
 
 ## 派活方式（主路径 / 降级路径）
 - **主路径**：dsh-agents 插件已装（存在 `agent_spawn` 工具）→ `agent_spawn(role=<角色>, task=<任务>, evidencePath=<可选>)`。插件会自动：钉档位模型、注入人格、合成八节任务书（含交付验收与硬性完成标准双条件）、生成产出路径 `agent-out/<角色id>-<时间戳>.md`。
@@ -16,24 +14,24 @@ description: "触发：自动实现整个项目、全自动做完、从想法到
 - 派活前过 `agent_taskbook`（或人工三问）：这事该这个角色做吗 / 它有工具数据吗 / 是不是要它做做不到的副作用。
 - 报告路径防撞车：同一流水线多 executor 并行时，任务书里显式给 evidencePath 并带步骤后缀（如 `agent-out\executor-step4-report.md`）。
 - 派活前过 `agent_taskbook`（或人工三问）：这事该这个角色做吗 / 它有工具数据吗 / 是不是要它做做不到的副作用。
-- **档位路由输出两字段（IMP-09⑥）**：降级路径手动选档或任何非标派活时，任务书角色档位行必须补记两字段——**置信度**（高/中/低 + 一句理由）与**失败回退档**（首选失败时降到哪档/升到哪席）（锚 ECC `commands/model-route.md:13-24` required output：recommended model / confidence / why / fallback model）。主路径 agent_spawn 的任务书由插件合成，两字段由组织者校对时补记；任务书模板层固定两列由任务书批次另行处置（该文件不归本批所有权）
+- **档位路由输出两字段**：降级路径手动选档或任何非标派活时，任务书角色档位行必须补记两字段——**置信度**（高/中/低 + 一句理由）与**失败回退档**（首选失败时降到哪档/升到哪席）。主路径 agent_spawn 的任务书由插件合成，两字段由组织者校对时补记；任务书模板层固定两列由任务书批次另行处置（该文件不归本批所有权）
 
 ## 回收与监控（全程）
 - 每个角色会话的硬性完成标准双条件：**报告落盘 agent-out/ + de_broadcast(wake:true) 回组织者**，缺一即未完成。
 - 组织者用 `de_session action=status/list` 做角色回收核对；长任务配心跳闹钟（pwsh 后台 sleep 300-360s）兜底。
-- **巡检判产出真伪（交接候选排序判据，IMP-09⑤）**：心跳巡检验证「这份产出是不是真产出」按序执行——① 拒不可读/空/纯空白/仅标题-元数据-分隔符-占位符（如「[此处填产出]」「- [ ]」）的文件；② 拒只有单任务且无实质结构内容的摘要回声；③ 有实质内容（已完成工作/进行中/具体下一步/具体路径/多任务）才入候选；④ 候选内取最新 mtime，同 mtime 依次比更饱满 → 更多非占位内容 → 更大字节 → 路径字典序（确定性 tie-break 收口，锚 ECC `commands/resume-session.md:56-68` + `ecc-analysis/review/B-workflows.md` §3 M-7）
-- **侧问插话纪律（IMP-09⑦）**：会话工作途中被组织者/用户插话提问时——先冻结任务态（记下正在做什么/下一步是什么）→ 直接作答（先答后理，短而完整）→ 显式宣告回到任务（「— 回到任务：<一句话>」）；插话期间禁写任何文件（锚 ECC `commands/aside.md:30-62` + B-workflows.md §3 M-13）
+- **巡检判产出真伪**：心跳巡检验证「这份产出是不是真产出」按序执行——① 拒不可读/空/纯空白/仅标题-元数据-分隔符-占位符（如「[此处填产出]」「- [ ]」）的文件；② 拒只有单任务且无实质结构内容的摘要回声；③ 有实质内容（已完成工作/进行中/具体下一步/具体路径/多任务）才入候选；④ 候选内取最新 mtime，同 mtime 依次比更饱满 → 更多非占位内容 → 更大字节 → 路径字典序
+- **侧问插话纪律**：会话工作途中被组织者/用户插话提问时——先冻结任务态（记下正在做什么/下一步是什么）→ 直接作答（先答后理，短而完整）→ 显式宣告回到任务（「— 回到任务：<一句话>」）；插话期间禁写任何文件
 - 派活错峰约 15 秒（并发≤3 作用于开启瞬间）。
 - 角色会话死亡（无广播且状态非 running）：按其产出断点补派；重试上限 2 次，超限如实上报。
 
 ## 阶段门（硬规则）
 每阶段完成才进下一阶段（唯一例外：Phase 3 与 Phase 4 的双评审按 A2 基线哈希门并行，见下）；阶段产物落盘；**Phase 1 的计划必须经用户批准**才能进 Phase 2。
-本流水线是**门控的，不是自主的**（gated, not autonomous，锚 ECC `skills/orch-pipeline/SKILL.md:76-85`）：
+本流水线是**门控的，不是自主的**：
 1. **GATE 1 — 计划批准后**（即上句 Phase 1 门，既有条款）。
-2. **GATE 2 — 收尾提交前（IMP-09②）**：git-master 产出提交清单（diff 摘要 + 拟用提交信息）呈用户确认后，才执行收尾提交与 push。【适配】本机既有纪律：中途分块检查点 commit 免逐次确认（用户已批准的工作模式）；GATE 2 作用于**收尾提交与 push**（push 本就属需用户批准的操作）。
+2. **GATE 2 — 收尾提交前**：git-master 产出提交清单（diff 摘要 + 拟用提交信息）呈用户确认后，才执行收尾提交与 push。本机既有纪律：中途分块检查点 commit 免逐次确认（用户已批准的工作模式）；GATE 2 作用于**收尾提交与 push**（push 本就属需用户批准的操作）。
 两门之间全速流动不停。
 
-## Step 0 · 尺寸分级（IMP-09①，仪式随爆炸半径缩放）
+## Step 0 · 尺寸分级
 > 锚 ECC `skills/orch-pipeline/SKILL.md:39-54`（三信号取最高档 + 一行陈述供用户覆盖）+ `ecc-analysis/review/B-workflows.md` §3 M-1。
 
 | 档 | 信号（文件数 / 新依赖或契约 / 设计含糊度） | 相位掩码（哪些阶段跑） |
@@ -53,7 +51,7 @@ description: "触发：自动实现整个项目、全自动做完、从想法到
 - **跳过条件**：已存在 requirement-interview 的 spec（`docs/specs/`）→ 直接当 Phase 0 产物；已存在 consensus-plan 计划（`docs/plans/`）→ 连 Phase 1 都跳过，直接进 Phase 2。
 - 派 `explore`（LOW，只读）：勘察项目现状——结构、技术栈、相关模块、可复用部件，落盘勘察报告。
 - 派 `analyst`（HIGH，只读）：把需求转成可实施的验收标准（每条可测试），标出需求缺口；缺口大的回 ask_user_question 补齐。
-- **计划前固定检索面 8+5（IMP-09⑨，explore/analyst 任务书必填）**：8 类检索——①相似实现 ②命名约定 ③错误处理 ④日志模式 ⑤类型定义 ⑥测试模式 ⑦配置 ⑧依赖；5 条追踪——①入口点 ②数据流 ③状态变更 ④契约 ⑤架构模式。产出统一发现表（Category | File:Lines | Pattern | Key Snippet）；任一类确认不适用时在报告里显式声明 N/A 及原因，不得静默缺类（锚 ECC `commands/prp-plan.md:97-125` + `ecc-analysis/review/B-workflows.md` §3 M-15）
+- **计划前固定检索面 8+5**：8 类检索——①相似实现 ②命名约定 ③错误处理 ④日志模式 ⑤类型定义 ⑥测试模式 ⑦配置 ⑧依赖；5 条追踪——①入口点 ②数据流 ③状态变更 ④契约 ⑤架构模式。产出统一发现表（Category | File:Lines | Pattern | Key Snippet）；任一类确认不适用时在报告里显式声明 N/A 及原因，不得静默缺类
 - 产物：`docs/specs/autopilot-<slug>.md`（目标/范围/非目标/验收标准清单）。
 
 ## Phase 1 · 规划
@@ -65,9 +63,9 @@ description: "触发：自动实现整个项目、全自动做完、从想法到
 - 按计划逐任务派 `executor`（MEDIUM）：任务书带该步的文件范围与完成判据；最小可行 diff。
 - 独立任务可并行派多个 executor（错峰 15s）；文件冲突任务串行。
 - 每步完成后：
-  - **formatter check（IMP-09⑧，executor 每步收尾）**：跑本语言 formatter check——standard 档默认（只报告不阻断）；strict 档须用户显式声明，**非零退出码即阻断**（ECC 的 quality-gate 非 strict 时格式化失败只写日志、既不改变退出码也不阻断＝空门教训，锚 `scripts/hooks/quality-gate.js:96` + `ecc-analysis/review/B-workflows.md:119-126`）。扩展名映射：`.ts/.tsx/.js/.jsx`→prettier；`.py`→ruff format 或 black；`.go`→gofmt；`.rs`→rustfmt；`.cs`→dotnet format；`.cpp/.cc/.h/.hpp`→clang-format；`.kt`→ktlint（锚 `scripts/hooks/quality-gate.js:57-131` 映射表 + `hooks/README.md:151-154` profile 分档；hook 形态不移植，DSH 无 PostToolUse 通道）
-  - 编译/类型错误 → 派 `debugger`（MEDIUM）追根因最小修复；
-  - interactive 澄清模式：executor 缺参数 → subagent-clarify 协议（广播问组织者 → ask_user → 回传；超时按任务书缺省决策表降级并标注）。
+ - **formatter check**：跑本语言 formatter check——standard 档默认（只报告不阻断）；strict 档须用户显式声明，**非零退出码即阻断**（ECC 的 quality-gate 非 strict 时格式化失败只写日志、既不改变退出码也不阻断＝空门教训，锚 `scripts/hooks/quality-gate.js:96` + `ecc-analysis/review/B-workflows.md:119-126`）。扩展名映射：`.ts/.tsx/.js/.jsx`→prettier；`.py`→ruff format 或 black；`.go`→gofmt；`.rs`→rustfmt；`.cs`→dotnet format；`.cpp/.cc/.h/.hpp`→clang-format；`.kt`→ktlint（锚 `scripts/hooks/quality-gate.js:57-131` 映射表 + `hooks/README.md:151-154` profile 分档；hook 形态不移植，DSH 无 PostToolUse 通道）
+ - 编译/类型错误 → 派 `debugger`（MEDIUM）追根因最小修复；
+ - interactive 澄清模式：executor 缺参数 → subagent-clarify 协议（广播问组织者 → ask_user → 回传；超时按任务书缺省决策表降级并标注）。
 - 每步过验收判据才勾掉（todo_write 同步真实进度）。
 
 ## Phase 3 · QA（基线锁定后与 Phase 4 双评审并行）
@@ -86,15 +84,15 @@ description: "触发：自动实现整个项目、全自动做完、从想法到
 - 派 `git-master`（MEDIUM）：分块提交建检查点（如 feat(core)/fix(x)），提交信息符合仓库惯例。
 - 可选派 `writer`（LOW）：README/用法文档（每个示例命令必须验证过）。
 - **角色回收核对报告**：对照全程派活记录逐角色核销（产出落盘？广播收到？验收过？），用 deliverable_verify 插件工具机检（可用时）。报告落盘 `agent-out/autopilot-summary-<时间戳>.md`。
-- **对基线的 delta 块（IMP-09④，收尾报告必带）**：
-  ```
-  CHECKPOINT DELTA: <slug>
-  Files changed: X
-  Tests: +Y passed / -Z failed
-  Coverage: +X% / -Y%（基线有覆盖率数据时）
-  Build: [PASS/FAIL]
-  ```
-  对照 Phase 3 基线哈希门的备案产出计算；verifier 的增量复验引用同一 delta 口径（锚 ECC `commands/checkpoint.md:27-55` + B-workflows.md §3 M-5；检查点语义已由本技能 Phase 3 基线哈希门承担，此处只吸收 delta 报告格式）
+- **对基线的 delta 块**：
+ ```
+ CHECKPOINT DELTA: <slug>
+ Files changed: X
+ Tests: +Y passed / -Z failed
+ Coverage: +X% / -Y%（基线有覆盖率数据时）
+ Build: [PASS/FAIL]
+ ```
+ 对照 Phase 3 基线哈希门的备案产出计算；verifier 的增量复验引用同一 delta 口径
 
 ## 触发方式
 - 用户说：「自动实现这个项目」「autopilot」「从想法到代码」「全自动做完」

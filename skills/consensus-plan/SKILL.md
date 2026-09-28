@@ -1,6 +1,6 @@
 ---
 name: consensus-plan
-description: "触发：规划方案、方案评审、出个计划、重大方案先评审、架构方案讨论、计划要评审｜English: plan review, design review, consensus plan, architecture decision｜共识规划技能（consensus-plan，全量移植自 OMC ralplan）：规划与执行严格分离——前置门拦截欠规格的执行请求转规划；Planner 产出固定快照计划（RALPLAN-DR 结构：原则 3-5 条/决策驱动 top3/可行方案 ≥2 及排除理由；高危 deliberate 预演 3 失败场景+扩展测试计划）；Architect 与 Critic 对同一快照串行独立评审（严格先后、互不可见对方输出、仅 Planner 合成修订、≤5 轮至 APPROVE）；计划全程 pending approval 不改源码不 commit 不 spawn 执行；轻任务同会话三帽分相，重任务 spawn architect/critic 子会话（可显式指定不同 provider）。触发：用户要求规划或评审重大方案，或执行请求过模糊（≤15 有效词且无具体锚点）被前置门拦截转规划。"
+description: "触发：规划方案、方案评审、出个计划、重大方案先评审、架构方案讨论、计划要评审｜English: plan review, design review, consensus plan, architecture decision｜共识规划技能：规划与执行严格分离——前置门拦截欠规格的执行请求转规划；Planner 产出固定快照计划（RALPLAN-DR 结构：原则 3-5 条/决策驱动 top3/可行方案 ≥2 及排除理由；高危 deliberate 预演 3 失败场景+扩展测试计划）；Architect 与 Critic 对同一快照串行独立评审（严格先后、互不可见对方输出、仅 Planner 合成修订、≤5 轮至 APPROVE）；计划全程 pending approval 不改源码不 commit 不 spawn 执行；轻任务同会话三帽分相，重任务 spawn architect/critic 子会话（可显式指定不同 provider）。触发：用户要求规划或评审重大方案，或执行请求过模糊（≤15 有效词且无具体锚点）被前置门拦截转规划。"
 ---
 
 # 共识规划（consensus-plan）
@@ -54,7 +54,7 @@ description: "触发：规划方案、方案评审、出个计划、重大方案
 3. **可行方案**（≥2 个）+ 有界 pros/cons
 4. 只剩一个可行方案时：写明其余方案的显式作废理由
 5. **deliberate 模式追加**：pre-mortem（3 个失败场景）+ 扩展测试计划（单测/集成/端到端/可观测性）
-   - 显式 `--deliberate` 强制开启；或请求含高危信号时自动开启：auth/安全、数据迁移、破坏性变更、生产事故、合规/PII、公共 API 破坏
+ - 显式 `--deliberate` 强制开启；或请求含高危信号时自动开启：auth/安全、数据迁移、破坏性变更、生产事故、合规/PII、公共 API 破坏
 
 ## 评审循环（核心纪律）
 1. **Planner** 立初始计划 + RALPLAN-DR 摘要，形成**固定快照**

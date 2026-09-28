@@ -1,7 +1,7 @@
 # Rust 评审清单（code-reviewer v2 伴随资产）
 
 > 总原则：precision over recall。与通用清单合并使用，发现同等定级。覆盖 .rs。
-> 来源：ECC agents/rust-reviewer.md:30-44 全量保真提炼（【适配】只加头部映射与行内标注，未删原文语义）。
+> 来源：ECC agents/rust-reviewer.md:30-44 全量保真提炼（只加头部映射与行内标注，未删原文语义）。
 
 ## 所有权边界
 
@@ -29,5 +29,5 @@
 ## 三、评审动作
 
 - 命中即按通用清单定级；每条发现附 file:line + 逐字证据（人格 <Positioning_Integrity> 三级校验）。
-- 机器检查（存在则跑、跑不了记 skipped）：cargo check / cargo clippy -- -D warnings / cargo fmt --check / cargo test。【适配：ECC 原文为评审前置步骤，DSH 侧按「存在则跑、跑不了记 skipped+复跑命令」执行】
+- 机器检查（存在则跑、跑不了记 skipped）：cargo check / cargo clippy -- -D warnings / cargo fmt --check / cargo test。
 - 本清单未覆盖的 Rust 模式按通用清单处理；可提议补条目（报告尾部「清单增补建议」）。

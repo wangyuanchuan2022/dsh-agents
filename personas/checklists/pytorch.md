@@ -1,7 +1,7 @@
 # PyTorch 评审清单（code-reviewer v2 伴随资产）
 
 > 总原则：precision over recall。与语言清单（python.md）叠加加载（不互斥），发现同等定级。
-> 来源：ECC agents/pytorch-build-resolver.md:99-106（锚 :105）全量保真提炼（【适配】只加头部映射与行内标注，未删原文语义）。
+> 来源：ECC agents/pytorch-build-resolver.md:99-106（锚 :105）全量保真提炼（只加头部映射与行内标注，未删原文语义）。
 
 ## 所有权边界
 

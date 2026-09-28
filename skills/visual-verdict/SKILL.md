@@ -1,6 +1,6 @@
 ---
 name: visual-verdict
-description: "触发：视觉判定、截图比对、UI 还原度、视觉保真验收、像不像参考图｜English: visual verdict, screenshot comparison, UI fidelity check｜视觉判定技能（visual-verdict，全量移植自 OMC 同名）：对生成截图与参考图做结构化对比，输出**只含 JSON** 的严格 verdict——score 0-100 整数、verdict（pass/revise/fail）、category_match、differences[]（具体视觉失配：布局/间距/排版/颜色/层级）、suggestions[]（与 differences 一一对应的可执行下一步编辑）、reasoning（1-2 句）；通过线 score ≥90 且 verdict=pass，低于线必须继续编辑并重跑判定，新截图过线前不得把视觉任务当完成；category_match 判定生成图是否命中目标 UI 风格类；像素级 diff（pixelmatch 类）仅作定位热点的辅助调试，判定与停止权始终在 JSON 契约。触发：任务带视觉保真要求（布局/间距/排版/组件样式）且已有生成截图与至少一张参考图，需要确定性 pass/fail 判据再继续编辑时。"
+description: "触发：视觉判定、截图比对、UI 还原度、视觉保真验收、像不像参考图｜English: visual verdict, screenshot comparison, UI fidelity check｜视觉判定技能：对生成截图与参考图做结构化对比，输出**只含 JSON** 的严格 verdict——score 0-100 整数、verdict（pass/revise/fail）、category_match、differences[]（具体视觉失配：布局/间距/排版/颜色/层级）、suggestions[]（与 differences 一一对应的可执行下一步编辑）、reasoning（1-2 句）；通过线 score ≥90 且 verdict=pass，低于线必须继续编辑并重跑判定，新截图过线前不得把视觉任务当完成；category_match 判定生成图是否命中目标 UI 风格类；像素级 diff（pixelmatch 类）仅作定位热点的辅助调试，判定与停止权始终在 JSON 契约。触发：任务带视觉保真要求（布局/间距/排版/组件样式）且已有生成截图与至少一张参考图，需要确定性 pass/fail 判据再继续编辑时。"
 ---
 
 # 视觉判定（visual-verdict）
@@ -23,12 +23,12 @@ description: "触发：视觉判定、截图比对、UI 还原度、视觉保真
 ## 输出契约（只输出这个 JSON，形状完全一致）
 ```json
 {
-  "score": 0,
-  "verdict": "revise",
-  "category_match": false,
-  "differences": ["..."],
-  "suggestions": ["..."],
-  "reasoning": "short explanation"
+ "score": 0,
+ "verdict": "revise",
+ "category_match": false,
+ "differences": ["..."],
+ "suggestions": ["..."],
+ "reasoning": "short explanation"
 }
 ```
 
@@ -55,18 +55,18 @@ description: "触发：视觉判定、截图比对、UI 还原度、视觉保真
 ## 示例
 ```json
 {
-  "score": 87,
-  "verdict": "revise",
-  "category_match": true,
-  "differences": [
-    "顶部导航间距比参考图紧",
-    "主按钮字重偏小"
-  ],
-  "suggestions": [
-    "导航项水平 padding 增加 4px",
-    "主按钮 font-weight 设为 600"
-  ],
-  "reasoning": "核心布局一致，但风格细节仍有偏差。"
+ "score": 87,
+ "verdict": "revise",
+ "category_match": true,
+ "differences": [
+ "顶部导航间距比参考图紧",
+ "主按钮字重偏小"
+ ],
+ "suggestions": [
+ "导航项水平 padding 增加 4px",
+ "主按钮 font-weight 设为 600"
+ ],
+ "reasoning": "核心布局一致，但风格细节仍有偏差。"
 }
 ```
 

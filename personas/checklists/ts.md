@@ -47,7 +47,7 @@
 
 ## 六、框架适用分区
 
-框架专属条款先探测框架标志（package.json 依赖、import 语句），探测不到对应框架时按该文件的语言通用条款评审，报告记 framework=unresolved，不得凭猜测套用框架条款【适配：ECC java-reviewer.md「两者都探测不到 → 只用通用规则并注明歧义」】。
+框架专属条款先探测框架标志（package.json 依赖、import 语句），探测不到对应框架时按该文件的语言通用条款评审，报告记 framework=unresolved，不得凭猜测套用框架条款。
 
 ### 仅 React 适用
 

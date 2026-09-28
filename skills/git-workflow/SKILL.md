@@ -3,36 +3,6 @@ name: git-workflow
 description: "触发：git 工作流、分支策略、提交规范、rebase 还是 merge、冲突解决、怎么提交｜English: git workflow, branching strategy, commit conventions, rebase vs merge, resolve conflicts｜Git workflow patterns including branching strategies, commit conventions, merge vs rebase, conflict resolution, and collaborative development best practices for teams of all sizes. Use when choosing a branching strategy, writing commit conventions, deciding merge versus rebase, or resolving conflicts."
 ---
 
-<!-- DSH-ADAPT-HEADER BEGIN（移植层新增块：frontmatter 契约化 + ECC→DSH 映射表。剥离本块与 frontmatter 后，正文与 ECC 原件逐字一致——仅含行内【适配：…】标注，一字未删。校验：node verify-fidelity.mjs）
-
-metadata:（ECC frontmatter 散字段收编于此——DSH frontmatter 契约仅 name+description）
-  origin: ECC
-  ecc-source: ecc-analysis/src/ECC-main/skills/git-workflow/SKILL.md（ECC v2.2.2，sha256-16 D34CFC7114B4479C，15,191 字节 / LF 716 行）
-  ported: IMP-16④ · P1 · ecc-analysis batch2 → staging/git-workflow/
-
-## ECC→DSH 适配映射表（宿主设施 → DSH 原语）
-
-| ECC 宿主设施（正文原样保留） | DSH 对位 |
-|---|---|
-| git push / gh CLI（正文逐处行内标注） | 沙箱内 git push 需提权（danger-full-access 后 GCM 凭据链路可用）；push 需用户批准、夜间（23:00-07:00）冻结；本文件无 gh 命令（grep 零命中，C 报告 A-4 零宿主依赖） |
-| GitHub/GitLab PR 流程 | 本机 gh CLI 已登录（token: repo/gist/read:org）；workflow scope 缺失——.github/workflows 改动的推送会被拒，需另行授权 |
-| Git hooks（.git/hooks/*） | Git 自身机制，与 Claude/DSH hooks 无关，宿主无关直接可用（C 报告 A-4：零宿主依赖） |
-| bash 代码块命令 | DSH 侧用 pwsh 直跑；逐字节敏感操作（git show 等 blob 级管道转交）禁止经 PS 管道，用 python subprocess 捕获字节 |
-| `Deploy immediately after merge` / CI/CD 语境 | DSH 不承载部署，按各项目自身发布流程 |
-
-## DSH git 纪律指针（C 报告 A-4 改进点①，正文不删只加指针）
-
-① 推送需授权：push 前须用户批准，夜间冻结（沙箱内需提权）；② 敏感扫描三步把关：首次提交/推送前对全部暂存文件做敏感信息全量扫描（本机用户目录、用户名、token/密钥特征、内网地址、本机绝对路径等）+ 决定不推的文件先移出暂存并写 .gitignore + 文档死链检查；③ 分块检查点：多批次改动每块验收通过立即 commit 建检查点，再放行下一批。
-
-## force-push 三级分级（C 报告 A-4 改进点②，对应正文位置）
-
-本地未推分支=可 rebase 后 `push --force-with-lease`（正文 Rebase Workflow 节）＜ 共享分支=禁 rebase 禁 force（When NOT to Rebase 节，"Rebase rewrites history"）＜ 公开主干=绝对禁 force push，用 revert（Anti-Patterns 节）。用户红线「公开历史不得 force push」对应最严级；三级与 --force-with-lease 的适用条件已在正文原位，此处只做 DSH 语境显式分级。
-
-## git-master 角色引用（C 报告 A-4 改进点③）
-
-dsh-agents/personas/git-master.md 此前无作战手册——本技能即其 git 操作手册，git-master 派活时随任务书引用本技能。
--->
-
 # Git Workflow Patterns
 
 Best practices for Git version control, branching strategies, and collaborative development.
@@ -54,10 +24,10 @@ Best for continuous deployment and small-to-medium teams.
 
 ```
 main (protected, always deployable)
-  │
-  ├── feature/user-auth      → PR → merge to main
-  ├── feature/payment-flow   → PR → merge to main
-  └── fix/login-bug          → PR → merge to main
+ │
+ ├── feature/user-auth → PR → merge to main
+ ├── feature/payment-flow → PR → merge to main
+ └── fix/login-bug → PR → merge to main
 ```
 
 **Rules:**
@@ -73,10 +43,10 @@ Best for teams with strong CI/CD and feature flags.
 
 ```
 main (trunk)
-  │
-  ├── short-lived feature (1-2 days max)
-  ├── short-lived feature
-  └── short-lived feature
+ │
+ ├── short-lived feature (1-2 days max)
+ ├── short-lived feature
+ └── short-lived feature
 ```
 
 **Rules:**
@@ -91,15 +61,15 @@ Best for scheduled releases and enterprise projects.
 
 ```
 main (production releases)
-  │
-  └── develop (integration branch)
-        │
-        ├── feature/user-auth
-        ├── feature/payment
-        │
-        ├── release/1.0.0    → merge to main and develop
-        │
-        └── hotfix/critical  → merge to main and develop
+ │
+ └── develop (integration branch)
+ │
+ ├── feature/user-auth
+ ├── feature/payment
+ │
+ ├── release/1.0.0 → merge to main and develop
+ │
+ └── hotfix/critical → merge to main and develop
 ```
 
 **Rules:**
@@ -187,7 +157,7 @@ git checkout main
 git merge feature/user-auth
 
 # Result:
-# *   merge commit
+# * merge commit
 # |\
 # | * feature commits
 # |/
@@ -230,7 +200,7 @@ git rebase origin/main
 # Tests should still pass
 
 # Force push (only if you're the only contributor)
-git push --force-with-lease origin feature/user-auth 【适配：push 需用户批准，夜间冻结；沙箱内 git push 需提权——仅限本人独占的本地分支】
+git push --force-with-lease origin feature/user-auth
 ```
 
 ### When NOT to Rebase
@@ -349,8 +319,8 @@ git status
 git mergetool
 
 # Option 3: Accept one side
-git checkout --ours src/auth/login.ts    # Keep main version
-git checkout --theirs src/auth/login.ts  # Keep feature version
+git checkout --ours src/auth/login.ts # Keep main version
+git checkout --theirs src/auth/login.ts # Keep feature version
 
 # After resolving, stage and commit
 git add src/auth/login.ts
@@ -407,11 +377,11 @@ git branch --merged main | grep -v "^\*\|main" | xargs -n 1 git branch -d
 git fetch -p
 
 # Delete local branch
-git branch -d feature/user-auth  # Safe delete (only if merged)
-git branch -D feature/user-auth  # Force delete
+git branch -d feature/user-auth # Safe delete (only if merged)
+git branch -D feature/user-auth # Force delete
 
 # Delete remote branch
-git push origin --delete feature/user-auth 【适配：push 需用户批准，夜间冻结；沙箱内 git push 需提权】
+git push origin --delete feature/user-auth
 ```
 
 ### Stash Workflow
@@ -467,14 +437,14 @@ Breaking Changes:
 - None"
 
 # Push tag to remote
-git push origin v1.2.0 【适配：push 需用户批准，夜间冻结；沙箱内 git push 需提权】
+git push origin v1.2.0
 
 # List tags
 git tag -l
 
 # Delete tag
 git tag -d v1.2.0
-git push origin --delete v1.2.0 【适配：push 需用户批准，夜间冻结；沙箱内 git push 需提权】
+git push origin --delete v1.2.0
 ```
 
 ### Changelog Generation
@@ -520,17 +490,17 @@ git config --global color.ui auto
 ```bash
 # Add to ~/.gitconfig
 [alias]
-    co = checkout
-    br = branch
-    ci = commit
-    st = status
-    unstage = reset HEAD --
-    last = log -1 HEAD
-    visual = log --oneline --graph --all
-    amend = commit --amend --no-edit
-    wip = commit -m "WIP"
-    undo = reset --soft HEAD~1
-    contributors = shortlog -sn
+ co = checkout
+ br = branch
+ ci = commit
+ st = status
+ unstage = reset HEAD --
+ last = log -1 HEAD
+ visual = log --oneline --graph --all
+ amend = commit --amend --no-edit
+ wip = commit -m "WIP"
+ undo = reset --soft HEAD~1
+ contributors = shortlog -sn
 ```
 
 ### Gitignore Patterns
@@ -590,9 +560,9 @@ git add .
 git commit -m "feat(auth): implement OAuth2 login"
 
 # 4. Push to remote
-git push -u origin feature/user-auth 【适配：push 需用户批准，夜间冻结；沙箱内 git push 需提权】
+git push -u origin feature/user-auth
 
-# 5. Create Pull Request on GitHub/GitLab 【适配：本机 gh CLI 已登录（token: repo/gist/read:org）可代建 PR；workflow scope 缺失——.github/workflows 改动的推送会被拒，需另行授权】
+# 5. Create Pull Request on GitHub/GitLab
 ```
 
 ### Updating a PR with New Changes
@@ -603,7 +573,7 @@ git add .
 git commit -m "feat(auth): add error handling"
 
 # 2. Push updates
-git push origin feature/user-auth 【适配：push 需用户批准，夜间冻结；沙箱内 git push 需提权】
+git push origin feature/user-auth
 ```
 
 ### Syncing Fork with Upstream
@@ -620,7 +590,7 @@ git checkout main
 git merge upstream/main
 
 # 4. Push to your fork
-git push origin main 【适配：push 需用户批准，夜间冻结；沙箱内 git push 需提权】
+git push origin main
 ```
 
 ### Undoing Mistakes
@@ -634,7 +604,7 @@ git reset --hard HEAD~1
 
 # Undo last commit pushed to remote
 git revert HEAD
-git push origin main 【适配：push 需用户批准，夜间冻结；沙箱内 git push 需提权】
+git push origin main
 
 # Undo specific file changes
 git checkout HEAD -- path/to/file
@@ -653,7 +623,7 @@ git commit --amend --no-edit
 
 ```bash
 #!/bin/bash
-# .git/hooks/pre-commit 【适配：.git/hooks 为 Git 自身机制，与 Claude/DSH hooks 无关，宿主无关直接可用（C 报告 A-4 零宿主依赖）】
+# .git/hooks/pre-commit
 
 # Run linting
 npm run lint || exit 1
@@ -663,8 +633,8 @@ npm test || exit 1
 
 # Check for secrets
 if git diff --cached | grep -E '(password|api_key|secret)'; then
-    echo "Possible secret detected. Commit aborted."
-    exit 1
+ echo "Possible secret detected. Commit aborted."
+ exit 1
 fi
 ```
 
@@ -672,15 +642,15 @@ fi
 
 ```bash
 #!/bin/bash
-# .git/hooks/pre-push 【适配：同上——Git 自身机制直接可用】
+# .git/hooks/pre-push
 
 # Run full test suite
 npm run test:all || exit 1
 
 # Check for console.log statements
 if git diff origin/main | grep -E 'console\.log'; then
-    echo "Remove console.log statements before pushing."
-    exit 1
+ echo "Remove console.log statements before pushing."
+ exit 1
 fi
 ```
 
@@ -694,7 +664,7 @@ git commit -m "fix bug"
 # GOOD: Use feature branches and PRs
 
 # BAD: Committing secrets
-git add .env  # Contains API keys
+git add .env # Contains API keys
 
 # GOOD: Add to .gitignore, use environment variables
 
@@ -709,7 +679,7 @@ git commit -m "fix"
 git commit -m "fix(auth): resolve redirect loop after login"
 
 # BAD: Rewriting public history
-git push --force origin main 【适配：push 需用户批准，夜间冻结；沙箱内 git push 需提权——公开主干 force push 亦为用户红线，用 revert】
+git push --force origin main
 
 # GOOD: Use revert for public branches
 git revert HEAD
@@ -737,7 +707,7 @@ git add node_modules/
 | View changes | `git diff` |
 | Stage changes | `git add .` or `git add -p` |
 | Commit | `git commit -m "message"` |
-| Push | `git push origin branch-name` 【适配：push 需用户批准，夜间冻结；沙箱内 git push 需提权】 |
+| Push | `git push origin branch-name` |
 | Pull | `git pull origin branch-name` |
 | Stash | `git stash push -m "message"` |
 | Undo last commit | `git reset --soft HEAD~1` |

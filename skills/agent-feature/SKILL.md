@@ -1,6 +1,6 @@
 ---
 name: agent-feature
-description: "触发：加个功能、实现一个功能、新增特性、给项目加 X、做个小需求、feature 流水线｜English: add a feature, implement X, new feature pipeline, feature development｜特性开发流水线（agent-feature，编排 dsh-agents 的 6 个 sub agent）：OMC「Feature Development」组合的 DSH 直译——analyst 把特性需求转成可测验收标准 → planner 出带完成判据的分步计划 → executor 按步实现（最小 diff）→ test-engineer 补测试并跑绿 → code-reviewer 分级评审 → verifier 取证收尾；对应 OMC team 的 team-plan/team-prd/team-exec/team-verify 四阶段。适用于：给现有项目加一个明确的新特性（需求基本清晰，不需要完整 autopilot）。触发：用户说「加个特性/实现 X 功能/feature 流水线」，且能指名目标项目与特性描述。"
+description: "触发：加个功能、实现一个功能、新增特性、给项目加 X、做个小需求、feature 流水线｜English: add a feature, implement X, new feature pipeline, feature development｜特性开发流水线（agent-feature，编排 dsh-agents 的 6 个 sub agent）：analyst 把特性需求转成可测验收标准 → planner 出带完成判据的分步计划 → executor 按步实现（最小 diff）→ test-engineer 补测试并跑绿 → code-reviewer 分级评审 → verifier 取证收尾；对应 OMC team 的 team-plan/team-prd/team-exec/team-verify 四阶段。适用于：给现有项目加一个明确的新特性（需求基本清晰，不需要完整 autopilot）。触发：用户说「加个特性/实现 X 功能/feature 流水线」，且能指名目标项目与特性描述。"
 ---
 
 # 特性开发流水线（agent-feature）
@@ -8,9 +8,8 @@ description: "触发：加个功能、实现一个功能、新增特性、给项
 > 编排 6 角色：analyst → planner → executor → test-engineer → code-reviewer → verifier。
 > 派活方式、回收监控、失败处理与 `agent-autopilot` 完全一致（主路径 agent_spawn / 降级 de_session+personas；错峰 15s；双条件完成标准；回收核对）。本技能不重复，只写差异。
 > ⚠️ 工作区纪律：子会话不传 cwd（继承用户派发任务的工作区）；项目子目录路径在任务书里用相对前缀表达（详见 agent-autopilot「工作区纪律」）。
-> ECC 批次1 IMP-09 增量：Step 0 尺寸分级+相位掩码（tie-breaker 安全面/公共 API⇒standard）、计划前固定检索面 8+5、formatter check 两档。均带行内锚点；分级/门控细则以 agent-autopilot 为准。
 
-## Step 0 · 尺寸分级（IMP-09①，仪式随爆炸半径缩放）
+## Step 0 · 尺寸分级
 > 锚 ECC `skills/orch-pipeline/SKILL.md:39-54` + `ecc-analysis/review/B-workflows.md` §3 M-1。三信号取最高档；分级结果一行写进任务书（可审计，用户可覆盖）。
 
 | 档 | 信号 | 相位掩码（对应下方执行顺序步骤号） |
@@ -26,7 +25,7 @@ description: "触发：加个功能、实现一个功能、新增特性、给项
 
 ### 1. analyst（HIGH，只读）——需求转验收
 - 输入：用户的特性描述 + 目标项目现状（可先让主会话快速 glob/read 一眼，或派 explore 补勘察）
-- **计划前固定检索面 8+5（IMP-09⑨，任务书必填）**：8 类检索（相似实现/命名约定/错误处理/日志模式/类型定义/测试模式/配置/依赖）+ 5 条追踪（入口点/数据流/状态变更/契约/架构模式），产出统一发现表；不适用项显式声明 N/A 及原因（锚 ECC `commands/prp-plan.md:97-125` + B-workflows.md §3 M-15）
+- **计划前固定检索面 8+5**：8 类检索（相似实现/命名约定/错误处理/日志模式/类型定义/测试模式/配置/依赖）+ 5 条追踪（入口点/数据流/状态变更/契约/架构模式），产出统一发现表；不适用项显式声明 N/A 及原因
 - 输出：验收标准清单（每条可测试）+ 边界与非目标 + 需求缺口提问
 - 缺口大 → 组织者 ask_user_question 补齐后再继续
 
@@ -37,7 +36,7 @@ description: "触发：加个功能、实现一个功能、新增特性、给项
 
 ### 3. executor（MEDIUM）——逐步实现
 - 每步一个任务书：文件范围 + 完成判据 + 最小 diff 纪律
-- **每步收尾跑 formatter check（IMP-09⑧）**：standard 档默认只报告不阻断；strict 档须用户显式声明且非零退出码即阻断；扩展名映射表见 agent-autopilot Phase 2（锚 `scripts/hooks/quality-gate.js:57-131` + `hooks/README.md:151-154`；hook 形态不移植）
+- **每步收尾跑 formatter check**：standard 档默认只报告不阻断；strict 档须用户显式声明且非零退出码即阻断；扩展名映射表见 agent-autopilot Phase 2（锚 `scripts/hooks/quality-gate.js:57-131` + `hooks/README.md:151-154`；hook 形态不移植）
 - 可并行的步错峰派多个 executor；碰同一文件的步串行
 
 ### 4. test-engineer（MEDIUM）——测试锁行为

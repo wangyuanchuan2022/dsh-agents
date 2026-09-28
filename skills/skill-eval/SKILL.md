@@ -3,29 +3,6 @@ name: skill-eval
 description: "触发：沉淀技能、写个技能、技能入库、要不要建技能、技能重复｜English: save a skill, skill quality gate, dedupe skills｜技能沉淀前质量闸：把会话经验写成新技能入库（skill_manage create）之前，先跑 grep 重叠检查（对既有技能库+记忆轨，实际执行不凭印象）→ 四态裁决（Save / Improve / Absorb / Drop，附引用核对结果的理由）→ Save 后写后校验（frontmatter 契约 / description 逐字一致 / 待确认队列终态），任一校验失败不报成功。定位=memory-consolidate 的姊妹技能：memory-consolidate 整理既有记忆轨，本技能守「新技能入库」这道门，是 skill_manage create 的前置闸。Use when 会话结束想把经验沉淀为技能、准备 skill_manage create、判断新经验该新建技能还是并入既有技能、或怀疑要写的内容与库内重叠。中文触发：沉淀技能、写个技能、技能入库、要不要建技能、技能重复、Absorb 还是新建。English triggers: save a skill, skill quality gate, dedupe against existing skills, absorb into existing skill, before skill_manage create."
 ---
 
-<!-- DSH-ADAPT-HEADER BEGIN（移植层新增块：frontmatter 契约化 + ECC→DSH 映射表。本件为种子合成新技能（IMP-21②）：从 ECC learn-eval 种子段提炼流程骨架，宿主设施换 DSH 原语。）
-
-metadata:
-  origin: ECC-seeded synthesis
-  ecc-source:
-    - ecc-analysis/src/ECC-main/commands/learn-eval.md:80-127（质量闸：逐项清单 + 整体裁决 + 裁决分支确认流 + 写后校验；sha256-16 130CA626905237A4）
-    - ecc-analysis/src/ECC-main/commands/learn-eval.md:143-145（设计理由：前身五维逐项定档累加制被 ECC 侧整体废弃，改清单+整裁——本技能继承该废弃决策）
-  ported: IMP-21② · P1 · ecc-analysis batch2 → staging/skill-eval/
-  positioning: memory-consolidate 姊妹技能；skill_manage create 的前置闸
-  verdict-discipline: 四态定性整裁。任何情况下不引入逐维定档累加制（ECC 前身设计，已废弃，理由见 ecc-source 第二条：把定性信号压成档位标签会丢细节、累加结果误导汇总）
-
-## ECC→DSH 适配映射表（种子段落宿主设施 → DSH 原语）
-
-| ECC 宿主设施（种子段落） | DSH 对位 |
-|---|---|
-| grep `~/.claude/skills/` 与项目 `.claude/skills/` 查内容重叠 | DSH 技能库四根扫描：项目 `.dsh/skills`、`.agents/skills` → 用户 `~/.dsh/skills` → `~/.agents/skills`（grep 工具逐根检索，frontmatter+正文都查） |
-| 查 MEMORY.md（global/project）重叠 | memory 工具 list（memory 全局轨 + 当前项目 key 轨）关键词过滤 |
-| 写 `~/.claude/skills/<name>/SKILL.md` | skill_manage create（走待确认队列 `~/.dsh/memories/pending-skills/<name>/`；采纳=整目录 rename 入库，面板或 approve API） |
-| Absorb = append 既有技能 SKILL.md | skill_manage patch（库内技能）；部署位技能改部署文件、走 staging→verify→拷回链路 |
-| 写后校验：YAML 可解析 / name 与目录一致 / description 非空且 Use when 开头 | DSH 写后校验六项（§4，另含 skill_manage create 的 description 逐字一致契约与待确认队列终态核对） |
-| metadata: origin 散字段 | 收进本头部注释块（DSH frontmatter 契约仅 name+description） |
--->
-
 # Skill Eval（技能沉淀前质量闸）
 
 ## 0. 何时跑 / 何时别跑

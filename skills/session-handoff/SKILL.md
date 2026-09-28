@@ -3,27 +3,6 @@ name: session-handoff
 description: "触发：会话交接、换会话继续、跨天收工、上下文要满了、写交接文档、接手别人的活｜English: session handoff, continue in a new session, context running out, write a handoff｜DSH 会话交接：把一个会话的工作状态提炼成八节交接文档（What We Are Building / What WORKED·带证据 / What Did NOT Work+确切原因 / What Has NOT Been Tried Yet / Current State of Files / Decisions Made / Blockers & Open Questions / Exact Next Step），供接手会话或新会话全量吸收后继续；含同一目录多份交接文档时的候选排序判据（只对自动发现排序、显式路径直读不替换）。不自建会话存储——DSH 已有 session.jsonl.zstd 全量转录，交接文档只承担「意图与判断层」。Use when 会话上下文快耗尽、跨天续做、把工作移交另一会话或子会话、或接手别人的交接文档。中文触发：交接、会话接续、换会话继续、跨天收工、handoff、接手别人的活、写交接文档。English triggers: session handoff, hand off work to another session, resume from a handoff, context is running out, continue tomorrow, absorb a handoff."
 ---
 
-<!-- DSH-ADAPT-HEADER BEGIN（移植层新增块：frontmatter 契约化 + ECC→DSH 映射表。本件为种子合成新技能（IMP-21③，B 报告候选 3 降配版）：八节格式与候选排序判据自 ECC 种子段移植，存储面全部换 DSH 原语。）
-
-metadata:
-  origin: ECC-seeded synthesis
-  ecc-source:
-    - ecc-analysis/src/ECC-main/commands/save-session.md:70-180（八节会话文件格式种子；sha256-16 A9488A8819D6C65F）
-    - ecc-analysis/src/ECC-main/commands/resume-session.md:56-68（候选排序判据种子；sha256-16 B09BCB22FEB10ADB）
-  ported: IMP-21③ · P1 · ecc-analysis batch2 → staging/session-handoff/
-  storage-note: 不自建会话存储——DSH 已有 ~/.dsh/sessions/<工作区目录>/session-<id>/session.jsonl.zstd 全量转录（zstd 压缩 JSONL，compaction 不清除盘明细）；交接文档是提炼层不是存储层，引入第二套全局会话存储=双写冲突（PLAN §5.2 同判）
-
-## ECC→DSH 适配映射表（种子段落宿主设施 → DSH 原语）
-
-| ECC 宿主设施（种子段落） | DSH 对位 |
-|---|---|
-| `~/.claude/session-data/` 全局会话文件目录 | **不建等价目录**：交接文档落任务书/组织者指定路径（缺省 `<项目>/agent-out/handoff/`），文件名 `YYYY-MM-DD-<slug>-handoff.md` |
-| session.tmp 会话文件（Claude 自存格式） | session.jsonl.zstd 全量转录（只读取证；导出器=course/export_chat.py；zstandard 必须 stream_reader） |
-| /save-session 收尾写盘 + 展示给用户确认 | 本技能 §2 八节格式落盘 + de_broadcast 点对点告知接手方/组织者（有 ORG ID 一律直投） |
-| /resume-session 开工吸收 + SESSION LOADED 简报 | 本技能 §4 吸收协议（同款固定简报格式）+ de_session wake 接手会话 |
-| 候选排序对象 session.tmp 文件 | 同一交接目录里的多份 .md 交接文档（判据语义逐条对应，见 §3） |
--->
-
 # Session Handoff（会话交接八节格式）
 
 ## 0. 定位与边界
@@ -52,11 +31,11 @@ metadata:
 
 ## 2. What WORKED (with evidence)
 （只列确认有效的，每条带证据：测试绿/实测输出/返回码/截图。
-  没有证据的移到第 4 节。没有则写「Nothing confirmed working yet」。）
+ 没有证据的移到第 4 节。没有则写「Nothing confirmed working yet」。）
 
 ## 3. What Did NOT Work (and why)
 （最重要的一节：每个失败尝试写确切原因。「报了 X 错因为 Y」有用，「没用」没用。
-  缺此节，接手会话必然盲目重踩失败路径。）
+ 缺此节，接手会话必然盲目重踩失败路径。）
 - **<尝试>** — 失败因为：<确切原因/报错原文>
 （还没有失败就写「No failed approaches yet.」）
 
@@ -77,7 +56,7 @@ metadata:
 
 ## 8. Exact Next Step
 （下一步唯一最重要的事，精确到零思考开工。
-  未定则写「未定——先看第 4/7 节再定向」。）
+ 未定则写「未定——先看第 4/7 节再定向」。）
 ```
 
 - **八节齐全**：不省节，空节如实写「无」——不完整的交接比诚实的空节更糟。
@@ -105,11 +84,11 @@ SESSION LOADED: <实际解析路径>
 PROJECT: <项目/主题>
 WHAT WE'RE BUILDING:（用自己话 2-3 句）
 CURRENT STATE:
-  Working: <确认有效 N 项>
-  In Progress: <进行中文件>
-  Not Started: <计划未动>
+ Working: <确认有效 N 项>
+ In Progress: <进行中文件>
+ Not Started: <计划未动>
 WHAT NOT TO RETRY:
-  <逐条失败尝试+确切原因——此节必回显，哪怕「None」>
+ <逐条失败尝试+确切原因——此节必回显，哪怕「None」>
 OPEN QUESTIONS / BLOCKERS: <逐条>
 NEXT STEP: <原文下一步；未定义则提示先看第 4/7 节>
 ```

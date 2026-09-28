@@ -2,10 +2,10 @@
 name: opensource-sanitize
 description: "触发：发布前扫描、脱敏检查、推送把关、publish-scan、开源前把关｜English: publish scan, sanitize before publishing, secret scan｜发布前脱敏机检与卫生巡检——六类扫描（secrets/PII/内部路径/危险文件/配置完整性/git 历史）+ 三值裁定（PASS/FAIL/PASS-WITH-WARNINGS，single CRITICAL=FAIL），配套确定性工具 publish-scan.mjs；含 repo-onboard 第 3 阶段（AGENTS.md 生成，每条命令实测存在为硬门）。触发：公开推送前把关、开源 fork 发布前脱敏核查、工作区敏感信息巡检，用户说「发布前扫描/脱敏检查/publish-scan/推送把关/ sanitize」时使用。"
 metadata:
-  source: ECC v2.2.2 agents/opensource-sanitizer.md:8-197 + agents/opensource-packager.md:253（repo-onboard 第 3 阶段硬门）
-  tool: dsh-agents/tools/publish-scan.mjs（零依赖 node 直跑，秘密模式与 IMP-03 同源 memory-vault-format.js:49-60）
-  anchors: sanitizer:31-197 六类扫描；sanitizer:196 single CRITICAL=FAIL；packager:253 命令实测硬门
-  ported: 2026-09-26 ECC 批次2 IMP-20（S7），全量保真移植 + DSH 适配标注
+ source: ECC v2.2.2 agents/opensource-sanitizer.md:8-197 + agents/opensource-packager.md:253（repo-onboard 第 3 阶段硬门）
+ tool: dsh-agents/tools/publish-scan.mjs
+ anchors: sanitizer:31-197 六类扫描；sanitizer:196 single CRITICAL=FAIL；packager:253 命令实测硬门
+ ported: 2026-09-26 ECC 批次2 IMP-20（S7），全量保真移植 + DSH 适配标注
 ---
 
 # Open-Source Sanitizer（发布前脱敏机检，DSH 移植版）
@@ -15,12 +15,10 @@ metadata:
 | ECC 原文设施 | DSH 等价 | 说明 |
 |---|---|---|
 | agent 工具 Read/Grep/Glob/Bash | read/grep/glob/pwsh | ECC :4 tools 行 |
-| 逐文件正则扫描（Step1-3） | `node dsh-agents/tools/publish-scan.mjs --repo <dir>` | 确定性机检（十类秘密模式与 IMP-03 同源 memory-vault-format.js:49-60）+ 本技能保留 ECC 全部 20+ 模式作 agent 级复核清单 |
+| 逐文件正则扫描（Step1-3） | `node dsh-agents/tools/publish-scan.mjs --repo <dir>` | 确定性机检+ 本技能保留 ECC 全部 20+ 模式作 agent 级复核清单 |
 | `git log -p \| grep`（Step6） | `publish-scan.mjs --git-history` 或 pwsh 直跑 | fd-stdio 沙箱安全通道 |
 | 生成 SANITIZATION_REPORT.md | write 工具落盘（路径按任务书/缺省决策表） | 输出格式见下文 Output Format |
 | model: sonnet（ECC :5） | dsh-agents 档位路由（本技能无专属角色，按任务书派发） | 定档存疑登记见批次对照报告 |
-
-【适配：ECC 面向"fork 后待发布目录"；DSH 增加两层定位——对工作区全量跑=卫生巡检（雷达，发布面=git tracked 文件），对即将 push 的单仓/暂存跑=放行门（闸，ECC 原文语义）。】
 
 ## 一、你的角色（ECC :17-27 全文保真）
 
@@ -48,7 +46,7 @@ metadata:
 node dsh-agents/tools/publish-scan.mjs --repo <dir> --git-history --out report.json
 # 卫生巡检（对整个工作区；untracked/未入库文件的命中降级 WARNING=发布面之外，仍列示）
 node dsh-agents/tools/publish-scan.mjs --repo <workspace> --max-files 200000 \
-  --extra-ignore <缓存目录> --exclude <第三方镜像/**> --allow <waivers.json> --out report.json
+ --extra-ignore <缓存目录> --exclude <第三方镜像/**> --allow <waivers.json> --out report.json
 ```
 
 - 退出码：0 = PASS / PASS-WITH-WARNINGS；1 = FAIL；2 = 用法/IO 错误（响亮）。
@@ -59,7 +57,7 @@ node dsh-agents/tools/publish-scan.mjs --repo <workspace> --max-files 200000 \
 
 机检是**第一道确定性防线**；机检 PASS 不免人工复核（ECC :195 偏执原则——误报可接受，漏报不可接受），机检 FAIL 则按下文六类逐项定位。
 
-## 四、Workflow（ECC :29-137 全量保真；【适配：】为 DSH 行内标注）
+## 四、Workflow（ECC :29-137 全量保真；为 DSH 行内标注）
 
 ### Step 1: Secrets Scan（CRITICAL——任一命中 = FAIL）
 
@@ -97,8 +95,6 @@ pattern: SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}
 pattern: key-[A-Za-z0-9]{32}
 ```
 
-【适配：机检工具的秘密模式与 IMP-03 同源（memory-vault-format.js:49-60 十类：sk-/Stripe live/npm_/hf_/gh[pors]_/github_pat_/AIza/xox/AKIA·ASIA/PEM 私钥块）；上述 ECC 模式作为 agent 级复核清单保留全量。】
-
 #### Heuristic Patterns（WARNING——人工复核，不自动 FAIL）
 
 ```
@@ -123,15 +119,13 @@ pattern: ssh\s+[a-z]+@[0-9.]+
 severity: CRITICAL
 ```
 
-【适配：DSH 增补 CN 手机号特征 `1[3-9]\d{9}`（13800138000 官方示例号降级 WARNING）；127.0.0.0/8 回环=文档化本机代理白名单恒 WARNING。】
-
 ### Step 3: Internal References Scan（CRITICAL）
 
 ```
 # Absolute paths to specific user home directories
-pattern: /home/[a-z][a-z0-9_-]*/  (anything other than /home/user/)
-pattern: /Users/[A-Za-z][A-Za-z0-9_-]*/  (macOS home directories)
-pattern: C:\\Users\\[A-Za-z]  (Windows home directories)
+pattern: /home/[a-z][a-z0-9_-]*/ (anything other than /home/user/)
+pattern: /Users/[A-Za-z][A-Za-z0-9_-]*/ (macOS home directories)
+pattern: C:\\Users\\[A-Za-z] (Windows home directories)
 severity: CRITICAL
 
 # Internal secret file references
@@ -139,8 +133,6 @@ pattern: \.secrets/
 pattern: source\s+~/\.secrets/
 severity: CRITICAL
 ```
-
-【适配：DSH 增补本机用户名规则（运行时解析 USERNAME/USER/os.userInfo，不硬编码——防工具自身入库泄名）；文档面（.md/.txt 等纯文档）命中降级 WARNING=人工复核，可执行/配置面保持 CRITICAL。】
 
 ### Step 4: Dangerous Files Check（CRITICAL——存在即 FAIL）
 
@@ -156,13 +148,11 @@ sessions/
 node_modules/, __pycache__/, .venv/, venv/
 ```
 
-【适配：工具分两级——凭证类（.env/密钥/credentials/SSH 私钥/.secrets 目录）CRITICAL；产物类（*.map/__pycache__/venv 等）WARNING。发布流水线（本技能执行的 fork 审计）仍按 ECC 原文「存在即 FAIL」逐项人工判定；.env.example/.env.sample/.env.template 豁免。】
-
 ### Step 5: Configuration Completeness（WARNING）
 
 验证：
 - `.env.example` 存在
-- 代码引用的每个环境变量在 `.env.example` 有条目【适配：变量级双向比对为 agent 级检查，机检记 skipped+复跑口径】
+- 代码引用的每个环境变量在 `.env.example` 有条目
 - `docker-compose.yml`（若存在）使用 `${VAR}` 语法而非硬编码值
 
 ### Step 6: Git History Audit
@@ -177,8 +167,6 @@ git log --oneline | wc -l
 git log -p | grep -iE '(password|secret|api.?key|token)' | head -20
 ```
 
-【适配：机检 `--git-history` 显式开启（默认 skipped+原因+复跑命令留痕）；多提交仓库默认 WARNING、`--strict-single-commit` 升 CRITICAL——长生命周期开发仓与单提交发布 fork 分口径，ECC 硬规则保留在发布流程侧。】
-
 ## 五、repo-onboard 第 3 阶段：AGENTS.md 生成硬门（锚 packager:253）
 
 开源/对外交付仓库的 onboarding 文档（AGENTS.md/CLAUDE.md/README 的上手段）生成阶段，执行以下硬门（ECC opensource-packager.md:250-257 Rules 相关条目全量保真）：
@@ -187,7 +175,7 @@ git log -p | grep -iE '(password|secret|api.?key|token)' | head -20
 - Never include internal references in generated files（生成文件里不得含内部引用——本技能 Step1-6 扫描项全部适用）。
 - Read the actual project code to understand it——不臆测架构；wrong commands are worse than no commands（错误的命令比没有命令更糟）。
 - 若项目已有好文档，enhance 而非 replace。
-- 【适配：DSH 侧生成物为 AGENTS.md（DSH 的项目指示文件）而非 CLAUDE.md；命令实测用 pwsh 直跑验证（工作目录、参数逐条复现），不能只核对字符串存在。】
+-
 
 ## 六、误报与中间档人工复核口径（任务书钉死的正则误报处置）
 
@@ -200,15 +188,15 @@ git log -p | grep -iE '(password|secret|api.?key|token)' | head -20
 5. **provenance 豁免**：.publish-scan-allow.json 逐条 {id,glob,reason}，被豁免发现仍列示、报告单列 waived 数——豁免≠否认，全部供人工复核。
 6. 测试 fixture 类内网 IP（如桩函数返回 192.168.1.50）经人工确认非真实基础设施后走豁免通道，不静默改规则。
 
-## 七、Output Format（ECC :139-180 全文保真；【适配：】为 DSH 标注）
+## 七、Output Format（ECC :139-180 全文保真；为 DSH 标注）
 
-生成 `SANITIZATION_REPORT.md` 落盘到项目目录【适配：DSH 用 write 工具落盘到任务书指定路径，缺省按决策表 `<cwd>/agent-out/`】：
+生成 `SANITIZATION_REPORT.md` 落盘到项目目录：
 
 ```markdown
 # Sanitization Report: {project-name}
 
 **Date:** {date}
-**Auditor:** opensource-sanitizer v1.0.3【适配：机检工具版本】
+**Auditor:** opensource-sanitizer v1.0.3
 **Verdict:** PASS | FAIL | PASS WITH WARNINGS
 
 ## Summary
@@ -243,8 +231,6 @@ git log -p | grep -iE '(password|secret|api.?key|token)' | head -20
 {If WARNINGS: "Project passes critical checks. Review {N} warnings before release."}
 ```
 
-【适配：机检 JSON（--out）附于报告后或引用其路径；waived 条目单列一节供人工复核；skip 项（git-history 未开/env 覆盖率 agent 级）逐条 skipped+原因+复跑命令，不得计入通过项。】
-
 ## 八、Examples（ECC :182-187 全文保真）
 
 ### Example: Scan a sanitized Node.js project
@@ -254,7 +240,7 @@ Output: `SANITIZATION_REPORT.md` — PASS WITH WARNINGS（README 里一个硬编
 
 ## 九、Rules（ECC :189-197 全文保真）
 
-- **Never** display full secret values——截断为前 4 字符 + "..."【适配：机检统一掩码为前缀+`...`，报告永不落明文】
+- **Never** display full secret values——截断为前 4 字符 + "..."
 - **Never** modify source files——只生成报告（SANITIZATION_REPORT.md）
 - **Always** scan every text file，不只扫已知扩展名
 - **Always** check git history，即使是全新仓库

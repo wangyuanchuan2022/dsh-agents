@@ -3,23 +3,6 @@ name: error-handling
 description: "触发：错误处理、重试策略、熔断、错误类型设计、错误边界、用户可见报错｜English: error handling, retries, circuit breaker, error types, error boundary｜Patterns for robust error handling across TypeScript, Python, and Go. Covers typed errors, error boundaries, retries, circuit breakers, and user-facing error messages. Use when designing error types, retries, circuit breakers, or user-facing failure messages in TypeScript, Python, or Go."
 ---
 
-<!-- DSH-ADAPT-HEADER BEGIN（移植层新增块：frontmatter 契约化 + ECC→DSH 映射表。剥离本块与 frontmatter 后，正文与 ECC 原件逐字一致——仅含行内【适配：…】标注，一字未删。校验：node verify-fidelity-56.mjs）
-
-metadata:（ECC frontmatter 散字段收编于此——DSH frontmatter 契约仅 name+description）
-  origin: ECC
-  ecc-source: ecc-analysis/src/ECC-main/skills/error-handling/SKILL.md（ECC v2.2.2，sha256-16 E8EEC6756C950B57）
-  ported: IMP-16⑤ · P2 · ecc-analysis batch2 → staging/error-handling/
-
-## ECC→DSH 适配映射表（宿主设施 → DSH 原语）
-
-| ECC 宿主设施（正文原样保留） | DSH 对位 |
-|---|---|
-| metadata: origin: ECC（frontmatter 散字段） | 收编进本块——DSH frontmatter 契约仅 name+description |
-| 语言层模式知识（TypeScript/Python/Go 代码样本） | 正文零宿主设施耦合（移植席通读核实：无 slash 命令/sub-agent/hooks/CLAUDE.md 引用），原样适用 |
-| 「Before merging any code」清单触发时机 | DSH 对位=提交/评审前质量门：agent-review-squad 盲评 + verifier 新鲜证据（见行内适配） |
-| 代码样本内 logger / console.error | 示例代码原样保留（非宿主设施）；DSH 脚本日志对位=诊断走 stderr、stdout 留协议通道纪律 |
--->
-
 # Error Handling Patterns
 
 Consistent, robust error handling patterns for production applications.
@@ -47,43 +30,43 @@ Consistent, robust error handling patterns for production applications.
 ```typescript
 // Define an error hierarchy for your domain
 export class AppError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string,
-    public readonly statusCode: number = 500,
-    public readonly details?: unknown,
-  ) {
-    super(message)
-    this.name = this.constructor.name
-    // Maintain correct prototype chain in transpiled ES5 JavaScript.
-    // Required for `instanceof` checks (e.g., `error instanceof NotFoundError`)
-    // to work correctly when extending the built-in Error class.
-    Object.setPrototypeOf(this, new.target.prototype)
-  }
+ constructor(
+ message: string,
+ public readonly code: string,
+ public readonly statusCode: number = 500,
+ public readonly details?: unknown,
+ ) {
+ super(message)
+ this.name = this.constructor.name
+ // Maintain correct prototype chain in transpiled ES5 JavaScript.
+ // Required for `instanceof` checks (e.g., `error instanceof NotFoundError`)
+ // to work correctly when extending the built-in Error class.
+ Object.setPrototypeOf(this, new.target.prototype)
+ }
 }
 
 export class NotFoundError extends AppError {
-  constructor(resource: string, id: string) {
-    super(`${resource} not found: ${id}`, 'NOT_FOUND', 404)
-  }
+ constructor(resource: string, id: string) {
+ super(`${resource} not found: ${id}`, 'NOT_FOUND', 404)
+ }
 }
 
 export class ValidationError extends AppError {
-  constructor(message: string, details: { field: string; message: string }[]) {
-    super(message, 'VALIDATION_ERROR', 422, details)
-  }
+ constructor(message: string, details: { field: string; message: string }[]) {
+ super(message, 'VALIDATION_ERROR', 422, details)
+ }
 }
 
 export class UnauthorizedError extends AppError {
-  constructor(reason = 'Authentication required') {
-    super(reason, 'UNAUTHORIZED', 401)
-  }
+ constructor(reason = 'Authentication required') {
+ super(reason, 'UNAUTHORIZED', 401)
+ }
 }
 
 export class RateLimitError extends AppError {
-  constructor(public readonly retryAfterMs: number) {
-    super('Rate limit exceeded', 'RATE_LIMITED', 429)
-  }
+ constructor(public readonly retryAfterMs: number) {
+ super('Rate limit exceeded', 'RATE_LIMITED', 429)
+ }
 }
 ```
 
@@ -93,33 +76,33 @@ For operations where failure is expected and common (parsing, external calls):
 
 ```typescript
 type Result<T, E = AppError> =
-  | { ok: true; value: T }
-  | { ok: false; error: E }
+ | { ok: true; value: T }
+ | { ok: false; error: E }
 
 function ok<T>(value: T): Result<T> {
-  return { ok: true, value }
+ return { ok: true, value }
 }
 
 function err<E>(error: E): Result<never, E> {
-  return { ok: false, error }
+ return { ok: false, error }
 }
 
 // Usage
 async function fetchUser(id: string): Promise<Result<User>> {
-  try {
-    const user = await db.users.findUnique({ where: { id } })
-    if (!user) return err(new NotFoundError('User', id))
-    return ok(user)
-  } catch (e) {
-    return err(new AppError('Database error', 'DB_ERROR'))
-  }
+ try {
+ const user = await db.users.findUnique({ where: { id } })
+ if (!user) return err(new NotFoundError('User', id))
+ return ok(user)
+ } catch (e) {
+ return err(new AppError('Database error', 'DB_ERROR'))
+ }
 }
 
 const result = await fetchUser('abc-123')
 if (!result.ok) {
-  // TypeScript knows result.error here
-  logger.error('Failed to fetch user', { error: result.error })
-  return
+ // TypeScript knows result.error here
+ logger.error('Failed to fetch user', { error: result.error })
+ return
 }
 // TypeScript knows result.value here
 console.log(result.value.email)
@@ -131,51 +114,51 @@ console.log(result.value.email)
 import { NextRequest, NextResponse } from 'next/server'
 
 function handleApiError(error: unknown): NextResponse {
-  // Known application error
-  if (error instanceof AppError) {
-    return NextResponse.json(
-      {
-        error: {
-          code: error.code,
-          message: error.message,
-          ...(error.details ? { details: error.details } : {}),
-        },
-      },
-      { status: error.statusCode },
-    )
-  }
+ // Known application error
+ if (error instanceof AppError) {
+ return NextResponse.json(
+ {
+ error: {
+ code: error.code,
+ message: error.message,
+ ...(error.details ? { details: error.details } : {}),
+ },
+ },
+ { status: error.statusCode },
+ )
+ }
 
-  // Zod validation error
-  if (error instanceof z.ZodError) {
-    return NextResponse.json(
-      {
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Request validation failed',
-          details: error.issues.map(i => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      },
-      { status: 422 },
-    )
-  }
+ // Zod validation error
+ if (error instanceof z.ZodError) {
+ return NextResponse.json(
+ {
+ error: {
+ code: 'VALIDATION_ERROR',
+ message: 'Request validation failed',
+ details: error.issues.map(i => ({
+ field: i.path.join('.'),
+ message: i.message,
+ })),
+ },
+ },
+ { status: 422 },
+ )
+ }
 
-  // Unexpected error — log details, return generic message
-  console.error('Unexpected error:', error)
-  return NextResponse.json(
-    { error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } },
-    { status: 500 },
-  )
+ // Unexpected error — log details, return generic message
+ console.error('Unexpected error:', error)
+ return NextResponse.json(
+ { error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } },
+ { status: 500 },
+ )
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    // ... handler logic
-  } catch (error) {
-    return handleApiError(error)
-  }
+ try {
+ // ... handler logic
+ } catch (error) {
+ return handleApiError(error)
+ }
 }
 ```
 
@@ -185,37 +168,37 @@ export async function POST(req: NextRequest) {
 import { Component, ErrorInfo, ReactNode } from 'react'
 
 interface Props {
-  fallback: ReactNode
-  onError?: (error: Error, info: ErrorInfo) => void
-  children: ReactNode
+ fallback: ReactNode
+ onError?: (error: Error, info: ErrorInfo) => void
+ children: ReactNode
 }
 
 interface State {
-  hasError: boolean
-  error: Error | null
+ hasError: boolean
+ error: Error | null
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { hasError: false, error: null }
+ state: State = { hasError: false, error: null }
 
-  static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error }
-  }
+ static getDerivedStateFromError(error: Error): State {
+ return { hasError: true, error }
+ }
 
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    this.props.onError?.(error, info)
-    console.error('Unhandled React error:', error, info)
-  }
+ componentDidCatch(error: Error, info: ErrorInfo) {
+ this.props.onError?.(error, info)
+ console.error('Unhandled React error:', error, info)
+ }
 
-  render() {
-    if (this.state.hasError) return this.props.fallback
-    return this.props.children
-  }
+ render() {
+ if (this.state.hasError) return this.props.fallback
+ return this.props.children
+ }
 }
 
 // Usage
 <ErrorBoundary fallback={<p>Something went wrong. Please refresh.</p>}>
-  <MyComponent />
+ <MyComponent />
 </ErrorBoundary>
 ```
 
@@ -225,20 +208,20 @@ export class ErrorBoundary extends Component<Props, State> {
 
 ```python
 class AppError(Exception):
-    """Base application error."""
-    def __init__(self, message: str, code: str, status_code: int = 500):
-        super().__init__(message)
-        self.code = code
-        self.status_code = status_code
+ """Base application error."""
+ def __init__(self, message: str, code: str, status_code: int = 500):
+ super().__init__(message)
+ self.code = code
+ self.status_code = status_code
 
 class NotFoundError(AppError):
-    def __init__(self, resource: str, id: str):
-        super().__init__(f"{resource} not found: {id}", "NOT_FOUND", 404)
+ def __init__(self, resource: str, id: str):
+ super().__init__(f"{resource} not found: {id}", "NOT_FOUND", 404)
 
 class ValidationError(AppError):
-    def __init__(self, message: str, details: list[dict] | None = None):
-        super().__init__(message, "VALIDATION_ERROR", 422)
-        self.details = details or []
+ def __init__(self, message: str, details: list[dict] | None = None):
+ super().__init__(message, "VALIDATION_ERROR", 422)
+ self.details = details or []
 ```
 
 ### FastAPI Global Exception Handler
@@ -251,19 +234,19 @@ app = FastAPI()
 
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"error": {"code": exc.code, "message": str(exc)}},
-    )
+ return JSONResponse(
+ status_code=exc.status_code,
+ content={"error": {"code": exc.code, "message": str(exc)}},
+ )
 
 @app.exception_handler(Exception)
 async def generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    # Log full details, return generic message
-    logger.exception("Unexpected error", exc_info=exc)
-    return JSONResponse(
-        status_code=500,
-        content={"error": {"code": "INTERNAL_ERROR", "message": "An unexpected error occurred"}},
-    )
+ # Log full details, return generic message
+ logger.exception("Unexpected error", exc_info=exc)
+ return JSONResponse(
+ status_code=500,
+ content={"error": {"code": "INTERNAL_ERROR", "message": "An unexpected error occurred"}},
+ )
 ```
 
 ## Go
@@ -277,39 +260,39 @@ import "errors"
 
 // Sentinel errors for type-checking
 var (
-    ErrNotFound    = errors.New("not found")
-    ErrUnauthorized = errors.New("unauthorized")
-    ErrConflict     = errors.New("conflict")
+ ErrNotFound = errors.New("not found")
+ ErrUnauthorized = errors.New("unauthorized")
+ ErrConflict = errors.New("conflict")
 )
 
 // Wrap errors with context — never lose the original
 func (r *UserRepository) FindByID(ctx context.Context, id string) (*User, error) {
-    user, err := r.db.QueryRow(ctx, "SELECT * FROM users WHERE id = $1", id)
-    if errors.Is(err, sql.ErrNoRows) {
-        return nil, fmt.Errorf("user %s: %w", id, ErrNotFound)
-    }
-    if err != nil {
-        return nil, fmt.Errorf("querying user %s: %w", id, err)
-    }
-    return user, nil
+ user, err := r.db.QueryRow(ctx, "SELECT * FROM users WHERE id = $1", id)
+ if errors.Is(err, sql.ErrNoRows) {
+ return nil, fmt.Errorf("user %s: %w", id, ErrNotFound)
+ }
+ if err != nil {
+ return nil, fmt.Errorf("querying user %s: %w", id, err)
+ }
+ return user, nil
 }
 
 // At the handler level, unwrap to determine response
 func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
-    user, err := h.service.GetUser(r.Context(), chi.URLParam(r, "id"))
-    if err != nil {
-        switch {
-        case errors.Is(err, domain.ErrNotFound):
-            writeError(w, http.StatusNotFound, "not_found", err.Error())
-        case errors.Is(err, domain.ErrUnauthorized):
-            writeError(w, http.StatusForbidden, "forbidden", "Access denied")
-        default:
-            slog.Error("unexpected error", "err", err)
-            writeError(w, http.StatusInternalServerError, "internal_error", "An unexpected error occurred")
-        }
-        return
-    }
-    writeJSON(w, http.StatusOK, user)
+ user, err := h.service.GetUser(r.Context(), chi.URLParam(r, "id"))
+ if err != nil {
+ switch {
+ case errors.Is(err, domain.ErrNotFound):
+ writeError(w, http.StatusNotFound, "not_found", err.Error())
+ case errors.Is(err, domain.ErrUnauthorized):
+ writeError(w, http.StatusForbidden, "forbidden", "Access denied")
+ default:
+ slog.Error("unexpected error", "err", err)
+ writeError(w, http.StatusInternalServerError, "internal_error", "An unexpected error occurred")
+ }
+ return
+ }
+ writeJSON(w, http.StatusOK, user)
 }
 ```
 
@@ -317,45 +300,45 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 
 ```typescript
 interface RetryOptions {
-  maxAttempts?: number
-  baseDelayMs?: number
-  maxDelayMs?: number
-  retryIf?: (error: unknown) => boolean
+ maxAttempts?: number
+ baseDelayMs?: number
+ maxDelayMs?: number
+ retryIf?: (error: unknown) => boolean
 }
 
 async function withRetry<T>(
-  fn: () => Promise<T>,
-  options: RetryOptions = {},
+ fn: () => Promise<T>,
+ options: RetryOptions = {},
 ): Promise<T> {
-  const {
-    maxAttempts = 3,
-    baseDelayMs = 500,
-    maxDelayMs = 10_000,
-    retryIf = () => true,
-  } = options
+ const {
+ maxAttempts = 3,
+ baseDelayMs = 500,
+ maxDelayMs = 10_000,
+ retryIf = () => true,
+ } = options
 
-  let lastError: unknown
+ let lastError: unknown
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn()
-    } catch (error) {
-      lastError = error
-      if (attempt === maxAttempts || !retryIf(error)) throw error
+ for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+ try {
+ return await fn()
+ } catch (error) {
+ lastError = error
+ if (attempt === maxAttempts || !retryIf(error)) throw error
 
-      const jitter = Math.random() * baseDelayMs
-      const delay = Math.min(baseDelayMs * 2 ** (attempt - 1) + jitter, maxDelayMs)
-      await new Promise(resolve => setTimeout(resolve, delay))
-    }
-  }
+ const jitter = Math.random() * baseDelayMs
+ const delay = Math.min(baseDelayMs * 2 ** (attempt - 1) + jitter, maxDelayMs)
+ await new Promise(resolve => setTimeout(resolve, delay))
+ }
+ }
 
-  throw lastError
+ throw lastError
 }
 
 // Usage: retry transient network errors, not 4xx
 const data = await withRetry(() => fetch('/api/data').then(r => r.json()), {
-  maxAttempts: 3,
-  retryIf: (error) => !(error instanceof AppError && error.statusCode < 500),
+ maxAttempts: 3,
+ retryIf: (error) => !(error instanceof AppError && error.statusCode < 500),
 })
 ```
 
@@ -365,22 +348,22 @@ Map error codes to human-readable messages. Keep technical details out of user-v
 
 ```typescript
 const USER_ERROR_MESSAGES: Record<string, string> = {
-  NOT_FOUND: 'The requested item could not be found.',
-  UNAUTHORIZED: 'Please sign in to continue.',
-  FORBIDDEN: "You don't have permission to do that.",
-  VALIDATION_ERROR: 'Please check your input and try again.',
-  RATE_LIMITED: 'Too many requests. Please wait a moment and try again.',
-  INTERNAL_ERROR: 'Something went wrong on our end. Please try again later.',
+ NOT_FOUND: 'The requested item could not be found.',
+ UNAUTHORIZED: 'Please sign in to continue.',
+ FORBIDDEN: "You don't have permission to do that.",
+ VALIDATION_ERROR: 'Please check your input and try again.',
+ RATE_LIMITED: 'Too many requests. Please wait a moment and try again.',
+ INTERNAL_ERROR: 'Something went wrong on our end. Please try again later.',
 }
 
 export function getUserMessage(code: string): string {
-  return USER_ERROR_MESSAGES[code] ?? USER_ERROR_MESSAGES.INTERNAL_ERROR
+ return USER_ERROR_MESSAGES[code] ?? USER_ERROR_MESSAGES.INTERNAL_ERROR
 }
 ```
 
 ## Error Handling Checklist
 
-Before merging any code that touches error handling: 【适配：DSH 对位=提交/评审前质量门——agent-review-squad 盲评 + verifier 新鲜证据；本清单可作 code-reviewer 角色检查项】
+Before merging any code that touches error handling:
 
 - [ ] Every `catch` block handles, re-throws, or logs — no silent swallowing
 - [ ] API errors follow the standard envelope `{ error: { code, message } }`
