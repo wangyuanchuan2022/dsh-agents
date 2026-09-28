@@ -16,8 +16,8 @@ import {
 import { composeTaskbook, preflight, stamp, dedupeEvidencePath } from '../lib/taskbook.js'
 import { loadPersona, listPersonaFiles, splitFrontmatter } from '../lib/persona.js'
 import { listPresets } from '../lib/spawn.js'
-import { resolveConfig, apply } from '../lib/index.js'
-import { createTiersApi } from '../lib/settings.js'
+import { resolveConfig, apply, Config } from '../lib/index.js'
+import { createTiersApi, CONFIG_SCHEMA } from '../lib/settings.js'
 import { CONFIG_ENDPOINT, createConfigHandler } from '../lib/http-config.js'
 import { mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -809,14 +809,115 @@ await testEndpoint('端点：settings 缺席时 PATCH 报可读错误（degrade 
   assert.equal(get.json().settingsAvailable, false, 'GET 仍可读（回落 cordis 配置）')
 })
 
+// ── 新宿主（0.1.7+）settings forms 形态：describe/update/mutate 路径 ───────
+/** 假 SettingsForms：单个 entry（ns=dsh-agents）的 config + revision，可注入一次冲突。 */
+function fakeSettingsForms({ tiers = { HIGH: { provider: 'prov-x', model: 'model-x' } }, conflictOnce = false } = {}) {
+  let value = { tiers }
+  let revision = 1
+  let conflictPending = conflictOnce
+  const calls = { update: [], mutate: [], configure: [] }
+  const conflict = () => { const e = new Error('settings conflict'); e.code = 'SETTINGS_CONFLICT'; return e }
+  return {
+    calls,
+    describe: () => [{ ns: 'dsh-agents', autoGenerate: true, schema: null, value, revision, applies: 'live' }],
+    configure: (presentation) => { calls.configure.push(presentation); return () => {} },
+    update: async (ns, patch, expectedRevision) => {
+      calls.update.push({ ns, patch, expectedRevision })
+      if (conflictPending) { conflictPending = false; revision += 1; throw conflict() }
+      if (ns !== 'dsh-agents') throw new Error(`unexpected ns ${ns}`)
+      if (expectedRevision !== undefined && expectedRevision !== revision) { revision += 1; throw conflict() }
+      value = { ...value, ...patch, tiers: { ...(value.tiers ?? {}), ...(patch.tiers ?? {}) } }
+      revision += 1
+    },
+    mutate: async (ns, ops, expectedRevision) => {
+      calls.mutate.push({ ns, ops, expectedRevision })
+      if (expectedRevision !== undefined && expectedRevision !== revision) { revision += 1; throw conflict() }
+      for (const op of ops) if (op.op === 'unset' && op.path.join('.') === 'tiers') delete value.tiers
+      revision += 1
+    },
+  }
+}
+
+/** 用 forms 形态假宿主跑一个端点用例（回传 settings 以便断言写入调用）。 */
+async function testEndpointForms(title, fn, options) {
+  const settings = fakeSettingsForms(options)
+  const { ctx } = fakeCtx({ settings })
+  const tiersApi = createTiersApi(ctx, resolveTierTable({ HIGH: { provider: 'prov-x', model: 'model-x' } }))
+  const handler = createConfigHandler({ tiersApi })
+  try {
+    await fn(handler, tiersApi, settings)
+    passed += 1
+  } catch (error) {
+    failures.push(`${title}: ${error.message}`)
+  }
+}
+
+await testEndpointForms('新宿主 forms：hasScope=true（可写）、无 register 作用域、抑制宿主自动页、档位从 entry config 读出', async (handler, tiersApi, settings) => {
+  assert.equal(tiersApi.hasScope(), true, 'describe+update 可用即视为可写（否则设置卡降级为不可用）')
+  assert.equal(tiersApi.getScope(), null, '新宿主没有 register 作用域')
+  assert.deepEqual(settings.calls.configure.at(-1), { auto: false }, '自带设置卡 → 必须抑制宿主为同一 entry 自动生成的表单页')
+  const res = fakeRes()
+  await handler(fakeReq(), res)
+  assert.equal(res.statusCode, 200)
+  const body = res.json()
+  assert.equal(body.settingsAvailable, true)
+  assert.equal(body.tiers.HIGH.provider, 'prov-x')
+  assert.equal(body.sources.HIGH, 'cordis 配置基底')
+})
+
+await testEndpointForms('新宿主 forms：PATCH 改档走 update(ns, patch, revision) 并即时回读', async (handler, tiersApi, settings) => {
+  const res = fakeRes()
+  await handler(fakeReq({ method: 'PATCH', body: { tier: 'MEDIUM', provider: 'glm-pro', model: 'glm-5.3' } }), res)
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json().tiers.MEDIUM.provider, 'glm-pro')
+  const last = settings.calls.update.at(-1)
+  assert.equal(last.ns, 'dsh-agents')
+  assert.equal(last.patch.tiers.MEDIUM.model, 'glm-5.3')
+  assert.equal(typeof last.expectedRevision, 'number', '必须带 describe() 的 revision 做乐观并发')
+})
+
+await testEndpointForms('新宿主 forms：revision 冲突自动重试一次后成功（不落 400）', async (handler, tiersApi, settings) => {
+  const res = fakeRes()
+  await handler(fakeReq({ method: 'PATCH', body: { tier: 'LOW', provider: 'p2', model: 'm2' } }), res)
+  assert.equal(res.statusCode, 200)
+  assert.equal(settings.calls.update.length, 2, '首次 SETTINGS_CONFLICT 应重试而不是失败')
+  assert.equal(res.json().tiers.LOW.model, 'm2')
+}, { conflictOnce: true })
+
+await testEndpointForms('新宿主 forms：resetAll 走 mutate(unset tiers) 回落 bundle 基底', async (handler, tiersApi, settings) => {
+  const res = fakeRes()
+  await handler(fakeReq({ method: 'PATCH', body: { resetAll: true } }), res)
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(settings.calls.mutate.at(-1).ops, [{ op: 'unset', path: ['tiers'] }])
+  assert.equal(res.json().tiers.HIGH.provider, 'prov-x', 'unset 后回落 cordis 基底')
+})
+
+test('entry Config：导出 schema 且三档标 volatile（否则宿主 describe() 直接跳过本 entry）', () => {
+  assert.ok(Config !== undefined, 'lib/index.js 必须导出 Config（宿主从 entry 模块读取）')
+  assert.equal(Config, CONFIG_SCHEMA, 'index.js 的 Config 必须就是 settings.js 的 CONFIG_SCHEMA')
+  const tiers = CONFIG_SCHEMA.dict?.tiers
+  assert.ok(tiers, 'Config 必须声明 tiers')
+  for (const tier of ['LOW', 'MEDIUM', 'HIGH']) {
+    assert.equal(tiers.dict?.[tier]?.meta?.volatile, true, `${tier} 必须标 volatile（describe() 只回报 volatile 字段）`)
+    assert.ok(tiers.dict[tier].dict?.provider && tiers.dict[tier].dict?.model, `${tier} 必须声明 provider/model`)
+  }
+  assert.equal(CONFIG_SCHEMA.dict?.allowSpawn?.meta?.volatile, true)
+  assert.equal(CONFIG_SCHEMA.dict?.clarifyMode?.meta?.volatile, true)
+  // 普通配置也必须声明：schemastery 按 schema 归一 config，漏声明会让这些值丢失
+  for (const key of ['roleOverrides', 'defaultPreset', 'agentOutSubdir']) {
+    assert.ok(CONFIG_SCHEMA.dict?.[key], `Config 必须声明 ${key}（否则 loader 归一后配置丢失）`)
+  }
+})
+
 // ── 浏览器半（lib/client.js）：模块加载器工厂格式 + 设置卡注册 ─────────────
-test('client 半：__ModuleLoader__ 工厂格式、无 import、注册 settings.plugin.item 卡', () => {
+test('client 半：__ModuleLoader__ 工厂格式、无 import、注册 settings.plugins.tab 卡', () => {
   const src = readFileSync(fileURLToPath(new URL('../lib/client.js', import.meta.url)), 'utf8')
   assert.ok(src.startsWith("window.__ModuleLoader__.load({ id: 'dsh-agents', factory:"), '必须是懒 CJS 工厂格式（宿主 bundle 纯度门）')
   assert.ok(src.includes("require('react')"), 'React 经宿主 seed 模块 require')
   assert.ok(!/\bimport\s[\s"'{]/.test(src), '浏览器半不得有 import 语句')
-  assert.ok(src.includes("name: 'settings.plugin.item'"), '必须注册进设置页插件卡槽位')
-  assert.ok(src.includes("key: 'dsh-agents'"), '卡 key 必须等于 settings 命名空间')
+  assert.ok(src.includes("name: 'settings.plugins.tab'"), '必须注册进宿主 0.1.7+ 的插件设置页槽位（settings.plugins.tab；旧 settings.plugin.item 已不存在）')
+  assert.ok(src.includes("id: 'dsh-agents'"), 'tab id 必须等于 settings 命名空间')
+  assert.ok(/label:\s*\(\)\s*=>/.test(src), 'list 槽位必须给 label 才会在「插件」页出现行标题')
   assert.ok(src.includes("inject: ['slots']"))
   assert.ok(src.includes(CONFIG_ENDPOINT), '卡片数据面必须指向插件端点')
   assert.ok(src.includes("createElement('select'"), 'provider/model 必须用下拉（与输入框模型选择同源）')
