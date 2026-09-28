@@ -46,6 +46,7 @@ complete task brief — plus 23 workflow skills that orchestrate them end to end
 - **三档模型路由**（LOW / MEDIUM / HIGH ← haiku / sonnet / opus），档位可被用户层覆盖（设置页或 `agent_roles set`），解析优先级明确、可查来源。
 - **只读角色有明确边界**——上游标注 `disallowedTools: Write, Edit` 的 **9 个角色**（explore · analyst · architect · verifier · code-reviewer · security-reviewer · critic · document-specialist · scientist）在任务书里写成只读顾问条款，任务书同时注明这只是文字约束（见[已知限制](#已知限制)）。
 - **任务书八节结构** + **派活前置三问**（副作用关键词 fail-closed 告警）。
+- **评审/验证席的上下文隔离（两层机制）**——**会话层**：每席都是全新会话，不继承派活方对话历史；**材料层**：`blind` 席（code-reviewer / security-reviewer）不得获得作者自评**与其他席位产出**，`isolated` 席（critic / code-simplifier / verifier）不得获得作者自评；任务书自动写入「上下文隔离契约」，并对下发的材料做**泄漏机检**（命中「我已经实现并验证过」「另一席说没问题」这类文本时 fail-closed 告警并回传 `isolationLeaks`）。
 - **23 件工作流技能**：路由入口 1 + 流水线 4 + 协作 5 + 方法论 13。
 - **11 份评审清单**按扩展名/专项路由（go / ts / python / kotlin / rust / csharp / cpp / sql / pytorch / a11y / performance）。
 - **两个确定性机检工具**：`crgate`（评审证据链 freeze/anchor/finalize）与 `publish-scan`（发布前脱敏六类扫描 + 三值裁定）。
@@ -134,6 +135,8 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 8. **Claude Code → DSH 工具映射**：`lsp_diagnostics`→pwsh 跑检查、`TodoWrite`→`todo_write`、`Task(...)`→`de_session spawn`、tmux→pwsh 后台任务等。
 
 另有**派活前置三问**（方向与「失败也照常执行」相反，这里**不派才是安全默认**）：① 这事哪个会话能做？② 目标会话有没有对应工具与数据？③ 是否在要求对方做它做不到的副作用（写库/删数据/发消息/装依赖）？任务文本命中副作用关键词时自动告警（fail-closed）。
+
+评审/验证类角色的任务书还会在角色卡之后自动插入 **1.1 上下文隔离契约**（见[特性](#特性)与[已知限制](#已知限制)）——先立约束再给材料，并声明故意未提供的项（作者自评、其他席位结论）。
 
 模板正本：`docs/task-brief-v3.md`——本节是结构概览，条款以正本为准。
 
@@ -274,6 +277,7 @@ dsh-agents/
 5. **档位是默认值不是强制**：可以越档派活，越档会记入返回并在任务书里留理由位（便于事后审计，不阻拦）。
 6. **`agent_spawn` 依赖宿主 `agents` 服务**；`workspaceRegistry` 缺失时不影响创建，只是不挂左侧工作区分组。
 7. **档位表随配置变化**：README 里给的是出厂基底，真实生效值以 `agent_roles action=tiers` 的当次回显为准。
+8. **上下文隔离是「硬会话层 + 软材料层」**：会话层由 `agent_spawn` 硬保证（每次派活全新会话）；材料层靠**机检告警**而非阻断——组织者坚持把作者自评塞进任务书时，工具会点名命中原文但不会拒绝派活。此时该席结论**不应作为独立评审采信**（评审席自身仍须按隔离契约标注污染并只采信可核验证据）。
 
 ## 许可与致谢
 

@@ -9,7 +9,7 @@
  *     组任务书到 agents.create + followup + attach 的完整链路。
  */
 import assert from 'node:assert/strict'
-import { ROLES, getRole, roleIds, normalizeTier, filterRoles } from '../lib/roles.js'
+import { ROLES, getRole, roleIds, normalizeTier, filterRoles, isolationOf } from '../lib/roles.js'
 import {
   DEFAULT_TIERS, TIER_INTENT, resolveTierTable, resolveRoleOverrides, resolveRoute, resolveProviderForModel, listConfiguredRoutes, filterUsableCatalog,
 } from '../lib/routing.js'
@@ -339,6 +339,83 @@ test('三问恒为 3 条；副作用动作命中告警；越档有理由位', ()
   assert.ok(raised.warnings.some((w) => w.includes('越档')))
 })
 
+// ── ④b 上下文隔离（评审/验证席） ──────────────────────────────────────────
+test('隔离模式映射：blind=并行盲评席 / isolated=独立评审验证席 / 其余 shared', () => {
+  const byMode = {}
+  for (const role of ROLES) (byMode[isolationOf(role)] ??= []).push(role.id)
+  assert.deepEqual(byMode.blind.sort(), ['code-reviewer', 'security-reviewer'], '并行盲评席只有这两席')
+  assert.deepEqual(byMode.isolated.sort(), ['code-simplifier', 'critic', 'verifier'], '独立评审/验证席三席')
+  assert.equal((byMode.shared ?? []).length, 14, '其余 14 个角色不适用隔离')
+  assert.equal(byMode.blind.length + byMode.isolated.length + byMode.shared.length, ROLES.length)
+  assert.equal(isolationOf('code-reviewer'), 'blind', '接受 id 字符串')
+  assert.equal(isolationOf('ghost'), 'shared', '未知 id 视作 shared（不抛错）')
+  // 实现类角色不得被误标为隔离（否则组织者不敢给必要上下文）
+  for (const id of ['executor', 'debugger', 'planner', 'analyst']) {
+    assert.equal(isolationOf(getRole(id)), 'shared', `${id} 应为 shared`)
+  }
+})
+
+test('任务书：盲评/独立席带「上下文隔离契约」，实现类角色不带', () => {
+  const table = resolveTierTable(undefined)
+  const build = (id, extra = {}) => {
+    const role = getRole(id)
+    return composeTaskbook({
+      role, persona: loadPersona(role), route: resolveRoute({ role, tierTable: table }), task: '审查 lib/spawn.js 的改动', ...extra,
+    })
+  }
+  const blind = build('code-reviewer')
+  assert.ok(blind.includes('### 1.1 上下文隔离契约'), '盲评席必须带隔离契约小节')
+  assert.ok(blind.includes('**blind（并行盲评席）**'))
+  assert.ok(blind.includes('其他评审席的产出与结论'), 'blind 必须显式声明不给其他席位产出')
+  assert.ok(blind.includes('全新会话'), '须声明会话层隔离')
+  assert.ok(blind.includes('隔离污染'), '须给污染处置条款')
+  assert.ok(blind.indexOf('### 1.1 上下文隔离契约') < blind.indexOf('## 二、职责与边界'), '隔离契约须在职责/材料之前')
+
+  const isolated = build('verifier')
+  assert.ok(isolated.includes('**isolated（独立评审/验证席）**'))
+  assert.ok(!isolated.includes('其他评审席的产出与结论'), 'isolated 席不该被声明为「不给同席材料」')
+
+  const shared = build('executor')
+  assert.equal(shared.includes('上下文隔离契约'), false, '实现类角色不渲染隔离契约')
+})
+
+test('隔离泄漏机检：作者自评/其他席位结论命中告警，干净材料不误报', () => {
+  const role = getRole('code-reviewer')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const clean = preflight({ role, task: '审查 src/a.js 的改动，按 P0/P1/P2 分级并给 文件:行号', route })
+  assert.equal(clean.isolation.mode, 'blind')
+  assert.deepEqual(clean.isolation.leaks, [])
+  assert.ok(clean.warnings.some((w) => w.includes('材料机检未发现泄漏')), '干净时须有正向声明（可审计）')
+
+  const author = preflight({ role, task: '这是我已经实现并验证过的改动，请复核', route })
+  assert.ok(author.isolation.leaks.some((l) => l.kind === 'author-rationale'), '作者自评必须被检出')
+  assert.ok(author.warnings.some((w) => w.includes('隔离泄漏（作者自评/理由）')))
+
+  const peer = preflight({ role, task: '按另一席的评审结论补查遗漏', route })
+  assert.ok(peer.isolation.leaks.some((l) => l.kind === 'peer-output'), '其他席位结论必须被检出')
+  assert.ok(peer.warnings.some((w) => w.includes('盲评被锚定')))
+
+  // 泄漏可以从任意将写进任务书的文本进入（context/statusQuo/deliverable/acceptance）
+  const viaContext = preflight({ role, task: '审查改动', route, extraTexts: ['作者说明：这部分是我实现的核心逻辑'] })
+  assert.ok(viaContext.isolation.leaks.length > 0, 'extraTexts 里也要能检出（正文之外的入口）')
+
+  // isolated 席：作者自评算泄漏，他人的席位结论不算（critic 本就要汇总裁决）
+  const critic = getRole('critic')
+  const criticRoute = resolveRoute({ role: critic, tierTable: resolveTierTable(undefined) })
+  const criticPeer = preflight({ role: critic, task: '汇总两份盲评报告并裁决', route: criticRoute, extraTexts: ['另一席的报告见 agent-out/code-reviewer.md'] })
+  assert.equal(criticPeer.isolation.mode, 'isolated')
+  assert.deepEqual(criticPeer.isolation.leaks, [], 'critic 拿到两份盲评报告是设计允许的')
+  const criticAuthor = preflight({ role: critic, task: '评审这份改动', route: criticRoute, extraTexts: ['我的方案是先重构再补测试'] })
+  assert.ok(criticAuthor.isolation.leaks.some((l) => l.kind === 'author-rationale'))
+
+  // 实现类角色不做隔离机检（避免噪音）
+  const exec = getRole('executor')
+  const execRoute = resolveRoute({ role: exec, tierTable: resolveTierTable(undefined) })
+  const execPre = preflight({ role: exec, task: '我已经实现了 X，继续补 Y', route: execRoute })
+  assert.equal(execPre.isolation.mode, 'shared')
+  assert.deepEqual(execPre.isolation.leaks, [])
+})
+
 // ── ⑤ 配置校验 ────────────────────────────────────────────────────────────
 test('配置校验：非法值大声失败，合法值规范化', () => {
   const ok = resolveConfig({ clarifyMode: 'autonomous', defaultPreset: 'standard', agentOutSubdir: 'out' })
@@ -482,7 +559,7 @@ await testAsync('agent_spawn：dryRun 不创建；正式派活走 create+followu
 
   const requester = {
     options: { provider: 'glm-pro', model: 'glm-5.3-flash' },
-    session: { header: { cwd: 'D:\\tools\\deepsek_harness' }, requestHeader: () => ({ config: { provider: 'glm-pro', model: 'glm-5.3-flash' } }) },
+    session: { header: { cwd: 'D:\\work\\demo' }, requestHeader: () => ({ config: { provider: 'glm-pro', model: 'glm-5.3-flash' } }) },
   }
   const real = await tool.execute({ role: 'executor', task: '实现 X' }, { agent: requester })
   assert.equal(real.ok, true)
@@ -495,7 +572,7 @@ await testAsync('agent_spawn：dryRun 不创建；正式派活走 create+followu
   const createCall = created[0]
   assert.equal(createCall.sessionId, real.sessionId)
   assert.deepEqual(createCall.agentOptions, { provider: DEFAULT_TIERS.MEDIUM.provider, model: DEFAULT_TIERS.MEDIUM.model })
-  assert.equal(createCall.meta.cwd, 'D:\\tools\\deepsek_harness')
+  assert.equal(createCall.meta.cwd, 'D:\\work\\demo')
   assert.equal(createCall.seed[0].seq, 0, 'seed 事件 seq 必须从 0 开始')
   const followup = created.find((entry) => entry.followup)
   assert.ok(followup, '必须 followup 派发任务书')
@@ -632,7 +709,7 @@ await testAsync('workspace 挂接：服务经深度解析可达时 spawn 自动�
   const { ctx, tools } = fakeCtx({ workspaceRegistry: registry })
   apply(ctx, {})
   const r = await tools.get('agent_spawn').execute(
-    { role: 'explore', task: '找 X', cwd: 'D:\\tools\\deepsek_harness' },
+    { role: 'explore', task: '找 X', cwd: 'D:\\work\\demo' },
     { agent: null },
   )
   assert.equal(r.ok, true, r.message)
@@ -656,7 +733,7 @@ await testAsync('workspace 挂接（2026-09-14 时机勘误）：apply 时服务
   apply(ctx, {})
   ctx.workspaceRegistry = registry // 服务后到：宿主 Service 异步 init 完成
   const r = await tools.get('agent_spawn').execute(
-    { role: 'explore', task: '找 X', cwd: 'D:\\tools\\deepsek_harness' },
+    { role: 'explore', task: '找 X', cwd: 'D:\\work\\demo' },
     { agent: null },
   )
   assert.equal(r.ok, true, r.message)

@@ -60,7 +60,7 @@ body_hash: D3E39B05
  </Constraints>
 
  <Investigation_Protocol>
- 0) 【范围冻结——新增】优先用确定性工具冻结分母与身份：`node D:\tools\deepsek_harness\dsh-agents\tools\crgate.mjs freeze --repo <目录> [--from <ref> --to <ref> | --commit <sha> | --all] --out <spec 路径>`。三种模式：range（`--from/--to`，自动取 merge-base——审特性分支时不会把主干新改动算进来）；commit（`--commit <sha>`，单提交 vs 第一父提交，根提交 vs 空树——用于历史提交审查）；scan（`--all`，全量审计陌生仓库，git 仓库取全部跟踪+未忽略文件，非 git 目录做文件树遍历，无需 git 历史）。产出 spec.json：reviewable/excluded 文件清单、排除理由、身份哈希。。排除理由取封闭枚举：用户指定排除 / 二进制或生成物 / 与本次改动无关 / 超出规模上限 / 工具不可达。任务书已提供范围信封（spec）时逐项核对，不一致以任务书为准并在报告声明。清单一旦冻结不得中途扩圈。同时按扩展名判定本次改动涉及的语言，加载对应语言清单（见 <Language_Checklist_Routing>）。
+ 0) 【范围冻结——新增】优先用确定性工具冻结分母与身份：`node <本插件目录>/tools/crgate.mjs freeze --repo <目录> [--from <ref> --to <ref> | --commit <sha> | --all] --out <spec 路径>`（`crgate.mjs` 随 dsh-agents 分发，`<本插件目录>` 按你的安装位置替换）。三种模式：range（`--from/--to`，自动取 merge-base——审特性分支时不会把主干新改动算进来）；commit（`--commit <sha>`，单提交 vs 第一父提交，根提交 vs 空树——用于历史提交审查）；scan（`--all`，全量审计陌生仓库，git 仓库取全部跟踪+未忽略文件，非 git 目录做文件树遍历，无需 git 历史）。产出 spec.json：reviewable/excluded 文件清单、排除理由、身份哈希。。排除理由取封闭枚举：用户指定排除 / 二进制或生成物 / 与本次改动无关 / 超出规模上限 / 工具不可达。任务书已提供范围信封（spec）时逐项核对，不一致以任务书为准并在报告声明。清单一旦冻结不得中途扩圈。同时按扩展名判定本次改动涉及的语言，加载对应语言清单（见 <Language_Checklist_Routing>）。
  1) 跑 `git diff` 查看近期改动。聚焦冻结清单内的文件。
  2) 阶段 1——规格符合性（必须先通过）：实现是否覆盖全部需求？它解决的是不是对的问题？有无遗漏？有无多余？提出请求的人能认出这就是他们请求的东西吗？
  3) 阶段 2——代码质量（仅在阶段 1 通过后进行）：对每个改动文件用 pwsh 跑类型检查。用 grep 检测问题模式：console.log、空 catch、硬编码密钥。套用评审清单——注意清单是有序的（见 <Review_Checklist> 的优先级声明），并已与语言清单合并。

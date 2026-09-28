@@ -23,6 +23,8 @@ description: "触发：评审改动、代码审查、code review、帮我审一�
 
 ### 1. code-reviewer + security-reviewer（HIGH，均只读）——并行盲评
 - **同一 spec、同一产出目录、互不可见对方报告**（盲评防锚定；两份任务书除角色外完全一致）
+- **隔离是机制不是默契（两层，缺一不可）**：① **会话层**——每席都由 `agent_spawn` 创建**全新会话**，不继承组织者对话历史；② **材料层**——两席角色的隔离模式为 `blind`，`agent_taskbook` / `agent_spawn` 会自动在任务书里写入「上下文隔离契约」并**机检下发的材料**：正文/背景/现状盘点/交付验收里若出现**作者自评**（「我已经实现并验证过」）或**其他席位结论**（「另一席说没问题」），返回里以 fail-closed 告警点名命中原文，`isolationLeaks` 非空即须清理后重派。只有本席能看到的材料才叫盲评——两席任务书除角色外必须逐字一致。
+- **禁止把作者立场塞进任务书**：`deliverable`/`acceptance` 只写可核验的判据，不写作者的取舍理由；确需背景时给**客观事实**（文件职责、风险声明一句话），不给辩解。
 - code-reviewer 视角：规格符合性、逻辑正确性、错误处理、反模式、SOLID、性能
 - security-reviewer 视角：OWASP Top 10、硬编码密钥、危险模式，按 严重度×可利用性×影响面 排序
 - **安全席触发判据（F-3 实测修正，路径/文件类型优先）**：派 security-reviewer 的条件以路径/文件类型命中为准——`auth/**`、`*secret*`、`*.sql`、中间件/路由文件、`crypto` 模块 import；通用词表（token/hash/session/query 等）仅作补充信号、不得单独触发（ECC 词表实测 20 行滑窗 32.7%、按 3 hunk 估算约 69% diff 命中＝恒开伪条件，锚 `workflows/orch-review.workflow.js:59` + `ecc-analysis/review/B-workflows.md:111-117`）。安全敏感仓库可显式声明 always-on 双评，无需伪装条件触发
