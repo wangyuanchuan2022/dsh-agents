@@ -23,14 +23,14 @@ description: "触发：长任务循环、跑多轮、心跳巡检、循环卡死
 ### 源 2 — `loop-design-check`（判断层 → 本技能 §B 全文）
 
 - origin: ECC
-- ecc-source: `ecc-analysis/src/ECC-main/skills/loop-design-check/SKILL.md`（ECC v2.2.2，sha256-16 **FC929D24CDBF2349**）
+- ecc-source: `ecc-analysis/src/ECC-main/skills/loop-design-check/SKILL.md`
 - ported: IMP-16① · P0 · ecc-analysis batch2 → staging/loop-design-check/
 - 保真校验（源件声明）: 剥离头部适配块与 frontmatter 后，正文与 ECC 原件逐字一致——仅含行内标注，一字未删。校验：`node verify-fidelity.mjs`
 
 ### 源 3 — `autonomous-loops`（模式层 → 本技能 §C 全文）
 
 - origin: ECC（三节移植 + 行内适配；§C-7/§C-8 为 DSH 侧改写/新增）
-- ecc-source: `ecc-analysis/src/ECC-main/skills/autonomous-loops/SKILL.md`（ECC v2.2.2；sha256-16 **C2DB797295500B9C**）
+- ecc-source: `ecc-analysis/src/ECC-main/skills/autonomous-loops/SKILL.md`
  - §1 Sequential Pipeline（原件 :41-107）
  - §5 The De-Sloppify Pattern（原件 :318-377）
  - §6 Ralphinho / RFC-Driven DAG Orchestration（原件 :380-545，含 :470「评审者永不评审自己写的代码」关键设计行）
@@ -66,7 +66,7 @@ description: "触发：长任务循环、跑多轮、心跳巡检、循环卡死
 |---|---|
 | `npx ecc loop-status --json`（CLI 扫描 ~/.claude/projects 转录找僵死信号） | de_session status/list 巡检 + 本技能 §A-2 状态快照文件（跨会话只读） |
 | `--watch` / `--watch-count`（有界刷新流） | pwsh 后台心跳任务（run_in_background=true）+ job_output 领取（有界由 tool-jobs 唤醒预算承担） |
-| `--exit-code`（ECC 语义：2=发现僵死信号 / 1=无法扫描转录） | 语义按 DSH 口径重定义：2=熔断 / 1=未完成 / 0=完成（§A-2.3） |
+| `--exit-code` | 语义按 DSH 口径重定义：2=熔断 / 1=未完成 / 0=完成（§A-2.3） |
 | `--write-dir ~/.claude/loops`（index.json + per-session JSON 快照） | `<项目>/loop-state/`（任务书指定路径优先）：index.json + <session-id>.json |
 | `.claude/plans/` runbook 落盘 | 任务书/计划文件 + loop-state 停止条件文件（§A-1.2） |
 | `ECC_HOOK_PROFILE` 未禁用检查 | DSH 无 hooks——改查：完成判据机器可判（跑本技能 §B 四条件门）+ 档位路由合规（agent_roles action=tiers，禁越档）+ 消耗额度项成本核算书已批 |
@@ -180,7 +180,7 @@ description: "触发：长任务循环、跑多轮、心跳巡检、循环卡死
 ### §B 头部适配块（源 2 头部原文保留：ECC→DSH 映射表 + DSH 侧补充）
 
 metadata（源 2 的 ECC frontmatter 散字段收编处——DSH frontmatter 契约仅 name+description）：
-`origin: ECC`；`ecc-source: ecc-analysis/src/ECC-main/skills/loop-design-check/SKILL.md（ECC v2.2.2，sha256-16 FC929D24CDBF2349）`；`ported: IMP-16① · P0 · ecc-analysis batch2 → staging/loop-design-check/`
+`origin: ECC`；`ecc-source: ecc-analysis/src/ECC-main/skills/loop-design-check/SKILL.md`；`ported: IMP-16① · P0 · ecc-analysis batch2 → staging/loop-design-check/`
 
 **ECC→DSH 适配映射表（宿主设施 → DSH 原语）**
 
@@ -191,7 +191,7 @@ metadata（源 2 的 ECC frontmatter 散字段收编处——DSH frontmatter 契
 | `/schedule` / cron | Windows 计划任务（Register-ScheduledTask；沙箱内 schtasks 必挂，建议交用户终端） |
 | Claude Code sub-agents（main Claude dispatching plan/build/judge） | de_session spawn 三角色子会话 + 组织者合成 |
 | CLAUDE.md（常驻规则文件） | ~/.dsh/AGENTS.md（全局）+ 项目 AGENTS.md + memory 轨 |
-| `autonomous-loops` / `continuous-agent-loop`（ECC 机制层技能，本库未移植） | 合并后即**本技能 §C 模式层**（§C-1 顺序流水线 / §C-5 清理遍 / §C-6 DAG 编排 / §C-7 选型树 / §C-8 硬门）；运行时机制层由 goal 工具 / ralph / de_session wake + 心跳承载（§A） |
+| `autonomous-loops` / `continuous-agent-loop` | 合并后即**本技能 §C 模式层**（§C-1 顺序流水线 / §C-5 清理遍 / §C-6 DAG 编排 / §C-7 选型树 / §C-8 硬门）；运行时机制层由 goal 工具 / ralph / de_session wake + 心跳承载（§A） |
 | hooks / MCP / claude CLI | 本件零依赖（源件 C 报告宿主依赖扫描确认），无需降级 |
 
 **DSH 循环原语对照（源件 C 报告 A-1 改进点①）**
@@ -349,7 +349,7 @@ The naive loop and the reviewed loop differ by four lines of constraint — and 
 
 # §C 模式层 — 选哪种循环形态、怎么编排（源 3 `autonomous-loops` §1/§5/§6/§7/§8/§9 全文；源 3 原标题：`Autonomous Loops（DSH 三节移植版）`）
 
-> **范围声明**（源 3 移植范围，DP-2 裁决 B 案；合并后范围不变）：本节只含 ECC 原件 §1/§5/§6 三节 + DSH 侧选项树（§C-7）+ 硬门（§C-8）+ 源 3 References（§C-9）。原件其余各节（§2/§3/§4/决策矩阵原文）未移植，理由见头部 scope-basis（见「溯源」节）。原件头部退役声明（:10-13）转抄：`autonomous-loops` is retained for compatibility only; the canonical skill name is now `continuous-agent-loop`（ECC 上游）——本移植接受该滞后风险，取的是 §1/§5/§6 的模式价值而非版本时效。
+> **范围声明**（源 3 移植范围，DP-2 裁决 B 案；合并后范围不变）：本节只含 ECC 原件 §1/§5/§6 三节 + DSH 侧选项树（§C-7）+ 硬门（§C-8）+ 源 3 References（§C-9）。原件其余各节（§2/§3/§4/决策矩阵原文）未移植，理由见头部 scope-basis（见「溯源」节）。原件头部退役声明（:10-13）转抄：`autonomous-loops` is retained for compatibility only; the canonical skill name is now `continuous-agent-loop`——本移植接受该滞后风险，取的是 §1/§5/§6 的模式价值而非版本时效。
 
 ### §C 头部适配映射表（源 3 头部原文保留：正文原样保留处 → DSH 原语）
 

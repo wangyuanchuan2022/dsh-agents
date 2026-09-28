@@ -5,8 +5,6 @@ description: "触发：视觉判定、截图比对、UI 还原度、视觉保真
 
 # 视觉判定（visual-verdict）
 
-> 全量移植自 OMC visual-verdict v5.4.0（77 行，近 1:1）。OMC→DSH 映射：截图生成用 playwright（DSH 沙箱内驱动进程需 danger-full-access 提权）；verdict 落盘 `docs/verify/visual-verdict-{slug}.json`（不用 `.verify/` 临时目录——DSH 跨回合会清空临时目录，verdict 必须跨回合可追溯）。
-
 ## 目的
 把生成 UI 截图与一张或多张参考图对比，返回可驱动下一轮编辑的严格 JSON verdict。
 

@@ -10,7 +10,6 @@ description: "触发：修个 bug、报错了、行为不对、构建失败、�
 > ⚠️ 工作区纪律：子会话不传 cwd（继承用户派发任务的工作区）；项目子目录路径在任务书里用相对前缀表达（详见 agent-autopilot「工作区纪律」）。
 
 ## Step 0 · 尺寸分级
-> 锚 ECC `skills/orch-pipeline/SKILL.md:39-54` + `ecc-analysis/review/B-workflows.md` §3 M-1。三信号取最高档；分级结果一行写进任务书（可审计，用户可覆盖）。
 
 | 档 | 信号 | 相位掩码（对应下方步骤号） |
 |---|---|---|
@@ -19,7 +18,7 @@ description: "触发：修个 bug、报错了、行为不对、构建失败、�
 | standard | 多文件 / 修复可能引内部接口调整 / 现象有歧义 | 0 → 1 → 2 →(2b 视升级条件)→ 3 → 4 |
 | large/跨切 | 修复引出多文件重构或跨系统改动 | **不修**——转 agent-feature / agent-autopilot（既有条款） |
 
-- **tie-breaker：缺陷触及安全面（鉴权/注入/密钥）或公共 API/契约 ⇒ 至少 standard**，且 tracer 升级条件从严（锚 `orch-pipeline/SKILL.md:52-54`）
+- **tie-breaker：缺陷触及安全面（鉴权/注入/密钥）或公共 API/契约 ⇒ 至少 standard**，且 tracer 升级条件从严
 
 ## 执行顺序
 

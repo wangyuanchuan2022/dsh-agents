@@ -5,7 +5,6 @@ description: "触发：需求访谈、帮我问清楚、别假设、我有个模
 
 # 需求访谈（requirement-interview）
 
-> 全量移植自 OMC deep-interview（Ouroboros 启发的苏格拉底访谈 + 数学化含糊度门控）。
 > **OMC→DSH 设施映射表**（下文所有机制按此映射执行，无降级）：
 > | OMC 设施 | DSH 对应 |
 > |---|---|

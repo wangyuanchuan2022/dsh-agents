@@ -7,7 +7,7 @@ description: "触发：盘点技能、技能审查、技能质量、该退休哪
 
 对 DSH 技能库做质量盘点的命令式流程：质量检查表 + 整体 AI 判断。两模式：Quick Scan（仅自上次运行以来变更的技能）与 Full Stocktake（全盘）。
 
-## 范围与扫描根（ECC :12-32 重写）
+## 范围与扫描根
 
 盘点目标为 **DSH 四根**（优先级降序）：
 
@@ -20,7 +20,7 @@ description: "触发：盘点技能、技能审查、技能质量、该退休哪
 
 Phase 1 开工时必须**显式列出**找到了哪些根、各扫到多少文件（:21 原文纪律："At the start of Phase 1, the command explicitly lists which paths were found and scanned."）。要盘点特定项目，就在该项目根目录发起；项目无技能目录时只盘用户级（:32 语义对应）。
 
-## 模式（ECC :34-41 保留）
+## 模式
 
 | 模式 | 触发 | 时长 |
 |------|---------|---------|
@@ -29,12 +29,12 @@ Phase 1 开工时必须**显式列出**找到了哪些根、各扫到多少文�
 
 Results 缓存：`<项目>/agent-out/skill-stocktake-results.json`（缓存与断点续跑语义保留，C 改造点④）。
 
-## Quick Scan 流程（ECC :43-56 重写）
+## Quick Scan 流程
 
 只重评自上次运行以来变更的技能（5–10 min）：
 
 1. 读 results 缓存；
-2. 对四根做 mtime diff（ECC 原版跑 quick-diff.sh，脚本不分发 → pwsh 只读比对：当前 mtime vs results.json 记录的 mtime）；
+2. 对四根做 mtime diff；
 3. diff 为空 → 报告「自上次运行以来无变更」并停止；
 4. 只用 Phase 2 同一标准重评变更件；
 5. 未变更技能结转上次结果；
@@ -43,9 +43,9 @@ Results 缓存：`<项目>/agent-out/skill-stocktake-results.json`（缓存与�
 
 ## Full Stocktake 流程
 
-### Phase 1 — 盘点（ECC :60-75 重写）
+### Phase 1 — 盘点
 
-扫描四根：枚举技能文件、提取 frontmatter、收集 mtime（ECC 原版跑 scan.sh，pwsh 只读等价命令）。呈现扫描摘要与库存表，格式对齐 ECC 原文（找到/未找到逐根标注）：
+扫描四根：枚举技能文件、提取 frontmatter、收集 mtime。呈现扫描摘要与库存表，格式对齐 ECC 原文（找到/未找到逐根标注）：
 
 ```
 Scanning:
@@ -61,14 +61,14 @@ Scanning:
 |-------|--------|---------|-------------|
 ```
 
-### Phase 2 — 质量评价（ECC :77-145 重写 + 逐字保留段）
+### Phase 2 — 质量评价
 
 启动批评席子会话，携带完整库存与检查表：
 - [ ] Freshness of technical references verified (use WebSearch if tool names / CLI flags / APIs are present)
 - [ ] Usage frequency considered
 ```
 
-裁决判据（ECC :116-124 原文保留）：
+裁决判据：
 
 | Verdict | Meaning |
 |---------|---------|
@@ -99,7 +99,7 @@ Scanning:
  - Good: `"mtime updated but content unchanged. Unique Python reference explicitly imported by rules/python/; no overlap found."`
 ```
 
-### Phase 3 — 汇总表（ECC :147-150 重写）
+### Phase 3 — 汇总表
 
 ECC 原表头保留（:149）：
 
@@ -108,16 +108,16 @@ ECC 原表头保留（:149）：
 |-------|--------|---------|--------|
 ```
 
-### Phase 4 — 处置（ECC :152-162 保留）
+### Phase 4 — 处置
 
 1. **Retire / Merge**：逐文件给出详尽论证后再向用户确认：发现了什么具体问题（重叠/过时/引用失效等）；什么替代物覆盖同一需求（Retire 指到既有技能/规则，Merge 指到目标文件与要整合的内容）；移除的影响面（依赖技能、AGENTS.md/记忆引用、受影响工作流）。
 2. **Improve**：给出具体改进建议与理由（如「430→200 行，因 X/Y 节与某技能重复」）；用户决定是否执行。
 3. **Update**：给出核验过来源的更新内容。
-4.检查 AGENTS.md/记忆轨规模，超限提议压缩（ECC 原文为 MEMORY.md >100 行提议压缩，DSH 对位为全局记忆条目膨胀时的 memory-consolidate 处理）。
+4.检查 AGENTS.md/记忆轨规模，超限提议压缩。
 
 归档/删除操作永远需要用户显式确认（:194 原文纪律）。
 
-## Results 文件模式（ECC :164-189 保留 + 路径适配）
+## Results 文件模式
 
 `evaluated_at` 必须是评价完成时刻的真实 UTC 时间（ECC :168-169 原文纪律：经命令取 `date -u +%Y-%m-%dT%H:%M:%SZ` 形态，**不得**用 `T00:00:00Z` 一类日期近似值充数。）：
 
@@ -141,7 +141,7 @@ ECC 原表头保留（:149）：
 }
 ```
 
-## Notes（ECC :191-195 保留）
+## Notes
 
 - 评价是盲评：同一检查表适用于所有技能，不论来源（ECC、自研、自动提取）
 - 归档/删除操作永远需要用户显式确认

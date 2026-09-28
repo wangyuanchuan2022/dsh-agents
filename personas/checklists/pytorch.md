@@ -1,7 +1,6 @@
 # PyTorch 评审清单（code-reviewer v2 伴随资产）
 
 > 总原则：precision over recall。与语言清单（python.md）叠加加载（不互斥），发现同等定级。
-> 来源：ECC agents/pytorch-build-resolver.md:99-106（锚 :105）全量保真提炼（只加头部映射与行内标注，未删原文语义）。
 
 ## 所有权边界
 
@@ -17,7 +16,7 @@
 5. **总是先用小批量测试**（`batch_size=2`）（小批量优先）。
 6. **修根因优先于压症状**。
 
-## 二、常见伴随模式（ECC 同文记忆修复建议）
+## 二、常见伴随模式
 
 7. 验证循环未包 `with torch.no_grad():`（显存浪费/梯度泄漏）。
 8. 缺 `del tensor; torch.cuda.empty_cache()` 的显存回收点。

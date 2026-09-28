@@ -5,8 +5,6 @@ description: "触发：清理代码、去 slop、deslop、代码太臃肿、过�
 
 # AI 屎山清理（ai-slop-cleaner）
 
-> 全量移植自 OMC ai-slop-cleaner v5.4.0（145 行）。OMC 设施映射：测试/质量门命令按本机实际工具链跑（node 直跑文件方式）；Ralph 集成 → DSH goal 循环收尾清理。
-
 ## 用途
 对「能跑但感觉臃肿、重复、测试弱、过度抽象」的代码做有界清理：不漂移范围、不改变预期行为。`--review` 提供仅评审模式。
 

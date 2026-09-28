@@ -10,7 +10,6 @@ description: "触发：加个功能、实现一个功能、新增特性、给项
 > ⚠️ 工作区纪律：子会话不传 cwd（继承用户派发任务的工作区）；项目子目录路径在任务书里用相对前缀表达（详见 agent-autopilot「工作区纪律」）。
 
 ## Step 0 · 尺寸分级
-> 锚 ECC `skills/orch-pipeline/SKILL.md:39-54` + `ecc-analysis/review/B-workflows.md` §3 M-1。三信号取最高档；分级结果一行写进任务书（可审计，用户可覆盖）。
 
 | 档 | 信号 | 相位掩码（对应下方执行顺序步骤号） |
 |---|---|---|
@@ -19,7 +18,7 @@ description: "触发：加个功能、实现一个功能、新增特性、给项
 | standard | 2-5 文件 / 可能新增内部模块 / 一个真实取舍 | 全 6 步标准跑 |
 | large | 跨切面 / 新外部依赖·公共 API / 多个开放问题 | 全 6 步 + planner 加 architect 交叉评审 + 评估拆批 |
 
-- **tie-breaker：触碰安全面或公共 API/契约 ⇒ 至少 standard**（security-reviewer 并行双评必派），与文件数无关（锚 `orch-pipeline/SKILL.md:52-54`）
+- **tie-breaker：触碰安全面或公共 API/契约 ⇒ 至少 standard**（security-reviewer 并行双评必派），与文件数无关
 
 ## 执行顺序
 
@@ -36,7 +35,7 @@ description: "触发：加个功能、实现一个功能、新增特性、给项
 
 ### 3. executor（MEDIUM）——逐步实现
 - 每步一个任务书：文件范围 + 完成判据 + 最小 diff 纪律
-- **每步收尾跑 formatter check**：standard 档默认只报告不阻断；strict 档须用户显式声明且非零退出码即阻断；扩展名映射表见 agent-autopilot Phase 2（锚 `scripts/hooks/quality-gate.js:57-131` + `hooks/README.md:151-154`；hook 形态不移植）
+- **每步收尾跑 formatter check**：standard 档默认只报告不阻断；strict 档须用户显式声明且非零退出码即阻断；扩展名映射表见 agent-autopilot Phase 2
 - 可并行的步错峰派多个 executor；碰同一文件的步串行
 
 ### 4. test-engineer（MEDIUM）——测试锁行为

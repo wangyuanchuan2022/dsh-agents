@@ -134,7 +134,7 @@ body_hash: D3E39B05
  10. 「应该用 TypeScript」/「应该加类型」——纯 JS 文件。跟随项目现有语言，不建议换栈。
  11. 「硬编码值」——测试 fixture、示例代码、文档片段中的值。测试就该有硬编码期望。
  12. 安全表演（security theater）——非加密语境的 Math.random()（动画、抖动、采样）；显式代码加载面的插件系统里的 eval/Function。
- 对照尾问：本团队的资深工程师在评审中真的会要求改这个吗？不会 → 跳过。（ECC code-reviewer.md:110-111）
+ 对照尾问：本团队的资深工程师在评审中真的会要求改这个吗？不会 → 跳过。
  </Anti_Fabrication_Gate>
 
  <Discovery_Filtering_Separation>

@@ -1,7 +1,6 @@
 # C# 评审清单（code-reviewer v2 伴随资产）
 
 > 总原则：precision over recall。与通用清单合并使用，发现同等定级。覆盖 .cs。
-> 来源：ECC agents/csharp-reviewer.md:28-43 全量保真提炼（只加头部映射与行内标注，未删原文语义）。锚外条目（ConfigureAwait(false)、sync-over-async，原文 :44-45）未收，后续批次可扩。
 
 ## 所有权边界
 

@@ -1,7 +1,6 @@
 # Rust 评审清单（code-reviewer v2 伴随资产）
 
 > 总原则：precision over recall。与通用清单合并使用，发现同等定级。覆盖 .rs。
-> 来源：ECC agents/rust-reviewer.md:30-44 全量保真提炼（只加头部映射与行内标注，未删原文语义）。
 
 ## 所有权边界
 
