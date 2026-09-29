@@ -716,4 +716,4 @@ DSH 侧关联（合并版更新）：本技能 §A 机制层三段式/ 本技能
 - **全量保真**：三源每个实质小节在合并版中均有落点；未删内容。
 - **跨技能引用内部化**：源件中所有「见 loop-design-check 技能 / 见 agent-loop 技能 / 见 autonomous-loops 技能」类引用均已改写为「本技能 §X」；对外部技能（ai-slop-cleaner 等）的引用保持不变。
 - **节号即接口**：本件节号（§A-1.2 / §A-2.3 / §A-3 / §B-3 / §B-4 / §C-5 / §C-8 等）被正文多处交叉引用；改动节号必须同步改写全部引用点。
-- **源 3 上游滞后风险**：ECC 上游已把 canonical 换为 `continuous-agent-loop`（见「溯源」节 upstream-retired）；如将来在本机移植 `continuous-agent-loop`，模式层应与其对齐后择优合并，勿双份并存。
+- **上游滞后提示**：ECC 上游已将 canonical 换为 `continuous-agent-loop`；如将来移植该件，模式层应与其对齐后择优合并，勿双份并存。

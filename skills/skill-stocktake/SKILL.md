@@ -80,7 +80,7 @@ Scanning:
 
 评价是**整体 AI 判断**，不是数值打分（:126 原文纪律）。导向维度四条（:126-130 保留）：Actionability（有能立即行动的代码/命令/步骤）、Scope fit（名称/触发/内容对齐，不宽不窄）、Uniqueness（价值不可被 AGENTS.md/记忆/其他技能替代）、Currency（技术引用在当前环境可用）。
 
-**判定理由质量要求（承重段 · ECC :132-145 全量逐字保留）**：
+**判定理由质量要求（承重段，勿改写）**：
 
 ```
 **Reason quality requirements** — the `reason` field must be self-contained and decision-enabling:

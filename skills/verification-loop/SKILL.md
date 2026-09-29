@@ -7,13 +7,13 @@ description: "触发：收尾核验、完工检查、六相验证、验证报告
 
 DSH 会话/交付物的完整验证系统。
 
-## 对象声明（承重段 · ECC :3）
+## 对象声明（承重段，勿改写）
 
 ECC 原文锚定：
 
 > :3 — "A comprehensive verification system for Claude Code sessions. Use when verifying a Claude Code session's work before claiming it is complete."
 
-## 六相验证（承重段 · ECC :21-90 逐相在场）
+## 六相验证（承重段，勿改写）
 
 > 每相的命令为 ECC 原文命令；行给出 DSH/Windows 侧参数化与替代。命令中的 runner 按项目实际解析（先探测再替换，同 tdd-workflow Step 0）。
 
@@ -81,7 +81,7 @@ Review each changed file for:
 - Missing error handling
 - Potential edge cases
 
-## 输出格式（承重段 · ECC :95-111 逐字保留）
+## 输出格式（承重段，勿改写）
 
 跑完全部六相后，产出验证报告，格式**逐字保留**如下：
 
@@ -107,7 +107,7 @@ Issues to Fix:
 
 ECC 原文语义保留：长会话每 15 分钟或在重大改动后跑一轮验证；设心智检查点——每完成一个函数后、每完成一个组件后、进入下一任务前。ECC 原文给出的入口为 `Run: /verify`。
 
-## 与 hooks 的集成（承重段 · ECC :126-129）
+## 与 hooks 的集成（承重段，勿改写）
 
 ECC 原文锚定：
 
