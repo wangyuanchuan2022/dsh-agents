@@ -8,59 +8,22 @@ description: "触发：长任务循环、跑多轮、心跳巡检、循环卡死
 > **一句话定位**：一个技能同时回答三个问题——「循环怎么起、怎么巡检、怎么熔断」（§A）、「这个循环的目标本身对不对、会不会跑飞」（§B）、「该选哪种循环形态」（§C）。
 > **使用顺序建议**：先用 §B 判断「该不该建这个循环、目标是否机器可判」，再用 §C 选形态，最后用 §A 起循环并巡检；已经在跑循环、怀疑它卡死时，直接跳 §A-2/§A-3。
 
-## 溯源（三源合并记录，逐条列出）
+## 本文件导航（节号 ↔ 三层结构）
 
-### 源 1 — `agent-loop`（机制层 → 本技能 §A 全文）
-
-- origin: ECC-seeded synthesis
-- ecc-source:
- - `ecc-analysis/src/ECC-main/commands/loop-start.md:26-30`（Required Safety Checks 三条种子；sha256-16 **FA36F7396F07E70E**）
- - `ecc-analysis/src/ECC-main/commands/loop-status.md:52-72`（跨会话快照与退出码种子；sha256-16 **74CA3FF7A7249F5D**）
- - `D:\python\projects\guji\kb\docs\dsh_heartbeat_wake_budget.md`（心跳纪律三要素原文出处，2026-09-08）
-- ported: IMP-21① · P1 · ecc-analysis batch2 → staging/agent-loop/
-- sibling（合并前）: loop-design-check（判断层：目标可判定性/五崩法/红线）——**本件是机制层，两件配套用**；合并后该 sibling 内容即本技能 §B。
-
-### 源 2 — `loop-design-check`（判断层 → 本技能 §B 全文）
-
-- origin: ECC
-- ecc-source: `ecc-analysis/src/ECC-main/skills/loop-design-check/SKILL.md`
-- ported: IMP-16① · P0 · ecc-analysis batch2 → staging/loop-design-check/
-- 保真校验（源件声明）: 剥离头部适配块与 frontmatter 后，正文与 ECC 原件逐字一致——仅含行内标注，一字未删。校验：`node verify-fidelity.mjs`
-
-### 源 3 — `autonomous-loops`（模式层 → 本技能 §C 全文）
-
-- origin: ECC（三节移植 + 行内适配；§C-7/§C-8 为 DSH 侧改写/新增）
-- ecc-source: `ecc-analysis/src/ECC-main/skills/autonomous-loops/SKILL.md`
- - §1 Sequential Pipeline（原件 :41-107）
- - §5 The De-Sloppify Pattern（原件 :318-377）
- - §6 Ralphinho / RFC-Driven DAG Orchestration（原件 :380-545，含 :470「评审者永不评审自己写的代码」关键设计行）
- - Anti-Patterns #1（原件 :589）硬门原文保留（本技能 §C-8）
-- upstream-retired: 上游退役声明（原件 :10-13）：autonomous-loops 在 ECC 上游自宣「仅保留一版以兼容，canonical 已换 continuous-agent-loop」——本移植存在版本滞后风险，属已知并接受。
-- scope-basis: 移植范围依据 C-S-4 + 组织者 DP-2 裁决（PLAN-improvement §4，B 案：只移植本件 §1/§5/§6 三节）。未移植部分：§2 NanoClaw / §3 Infinite Agentic Loop / §4 Continuous Claude PR Loop（依赖 ECC 专有载体 claw.js 与 continuous-claude CLI，DSH 无对应宿主）；原「Choosing the Right Pattern」决策矩阵不保留原文，改写为 §C-7 DSH 原语选项树。
-- ported: ecc-analysis batch2 → staging/autonomous-loops/
-
-### 合并说明（本件新增，非源件内容）
-
-- 合并动机（用户拍板）：三技能同源于 ECC v2.2.2 移植，互引密集（源 3 引源 1 §A.2/§C，源 1 引源 2 为配套），合并为一个技能消除跨技能引用加载开销。
-- 合并后部署名 = `agent-loop`（单一技能承载机制/判断/模式三层）。
-- 映射与改写纪律：源节 → 合并版目标节的逐条对照表、未删节证明与字节账见同目录 `merge-report.md`。
-
-## 本文件导航（合并版节号 ↔ 源节号）
-
-| 合并版 | 源 | 源内节号 |
+| 节 | 层 | 内容概要 |
 |---|---|---|
-| §A 机制层 | 源 1 `agent-loop` | 0 总览 / A loop-start / B loop-status / C guard / D 心跳纪律 / E 反模式 |
-| §B 判断层 | 源 2 `loop-design-check` | Premise / When to use / Red-line premise / Action 1（Step 0-5）/ Action 2 五崩法+三红线 / Worked example / One-line close / Lineage |
-| §C 模式层 | 源 3 `autonomous-loops` | §1 顺序流水线 / §5 De-Sloppify / §6 DAG 编排 / §7 选型树 / §8 硬门与反模式 / §9 References |
-| §D 部署与触发 | 合并版新增 | — |
+| §A 机制层 | 机制 | 0 总览 / A loop-start / B loop-status / C guard / D 心跳纪律 / E 反模式 |
+| §B 判断层 | 判断 | Premise / When to use / Red-line premise / Action 1（Step 0-5）/ Action 2 五崩法+三红线 / Worked example / One-line close / Lineage |
+| §C 模式层 | 模式 | §1 顺序流水线 / §5 De-Sloppify / §6 DAG 编排 / §7 选型树 / §8 硬门与反模式 / §9 References |
+| §D 部署与触发 | 部署 | 合并版新增 |
 
 ---
 
-# §A 机制层 — 循环怎么起、怎么巡检、怎么熔断（源 1 `agent-loop` 全文；源 1 原标题：`Agent Loop（DSH 自主循环三段式）`）
+# §A 机制层 — 循环怎么起、怎么巡检、怎么熔断
 
 > 机制层技能：管「循环怎么起、怎么巡检、怎么熔断」。「循环目标本身对不对、会不会跑飞」的判断层见**本技能 §B**——两层配套，本节不重复判断层内容。
 
-### §A 头部适配映射表（源 1 头部「ECC→DSH 适配映射表」原样保留：种子段落宿主设施 → DSH 原语）
+### §A 头部适配映射表（种子段落宿主设施 → DSH 原语）
 
 | ECC 宿主设施（种子段落） | DSH 对位 |
 |---|---|
@@ -173,14 +136,11 @@ description: "触发：长任务循环、跑多轮、心跳巡检、循环卡死
 
 ---
 
-# §B 判断层 — 目标对不对、会不会跑飞（源 2 `loop-design-check` 全文；源 2 原标题：`Loop Design + Review`）
+# §B 判断层 — 目标对不对、会不会跑飞
 
 > 判断层负责「WRITE 一个循环（该不该建、目标能不能机器判、选哪种类型、选哪套骨架）」与「REVIEW 一个循环（五崩法 + 可判定性/边界/回退/评审独立 + 红线）」。机制实现（怎么起、怎么巡检、怎么熔断）见**本技能 §A**；循环形态与编排模式见**本技能 §C**。
 
-### §B 头部适配块（源 2 头部原文保留：ECC→DSH 映射表 + DSH 侧补充）
-
-metadata（源 2 的 ECC frontmatter 散字段收编处——DSH frontmatter 契约仅 name+description）：
-`origin: ECC`；`ecc-source: ecc-analysis/src/ECC-main/skills/loop-design-check/SKILL.md`；`ported: IMP-16① · P0 · ecc-analysis batch2 → staging/loop-design-check/`
+### §B 头部适配块（ECC→DSH 映射表 + DSH 侧补充）
 
 **ECC→DSH 适配映射表（宿主设施 → DSH 原语）**
 
@@ -340,18 +300,16 @@ The naive loop and the reviewed loop differ by four lines of constraint — and 
 
 ---
 
-### §B-7 Lineage（源 2 尾部原文保留）
+### §B-7 Lineage
 
 > Lineage: Wiener's two-level feedback (*The Human Use of Human Beings*, 1950) for the judgment/execution split and red lines; the plan/build/judge pattern from Anatoli's *Loops explained* and Addy's *Loop Engineering*.
 > Mechanism layer (how to wire the loop architecture): see **本技能 §C**。This skill does not re-implement mechanism; it covers goal definition and runaway prevention only.
 
 ---
 
-# §C 模式层 — 选哪种循环形态、怎么编排（源 3 `autonomous-loops` §1/§5/§6/§7/§8/§9 全文；源 3 原标题：`Autonomous Loops（DSH 三节移植版）`）
+# §C 模式层 — 选哪种循环形态、怎么编排
 
-> **范围声明**（源 3 移植范围，DP-2 裁决 B 案；合并后范围不变）：本节只含 ECC 原件 §1/§5/§6 三节 + DSH 侧选项树（§C-7）+ 硬门（§C-8）+ 源 3 References（§C-9）。原件其余各节（§2/§3/§4/决策矩阵原文）未移植，理由见头部 scope-basis（见「溯源」节）。原件头部退役声明（:10-13）转抄：`autonomous-loops` is retained for compatibility only; the canonical skill name is now `continuous-agent-loop`——本移植接受该滞后风险，取的是 §1/§5/§6 的模式价值而非版本时效。
-
-### §C 头部适配映射表（源 3 头部原文保留：正文原样保留处 → DSH 原语）
+### §C 头部适配映射表（正文原样保留处 → DSH 原语）
 
 | ECC 宿主设施（正文原样保留处） | DSH 对位 |
 |---|---|
@@ -690,9 +648,9 @@ Pipeline stages for the same unit **share** a worktree, preserving state (contex
 
 配套判据：任何循环启动前必须有 max-runs / max-cost / max-duration / completion-signal 之一落盘为停止条件（§C-8 硬门）；DSH 侧补充两条——消耗额度的批量循环先出成本核算书；批量并行 spawn 前跑 agent_roles action=tiers 确认档位。
 
-## §C-8 硬门与反模式（#1 原文 :589 逐字保留；#2-#6 承自原件 Anti-Patterns #2-#6，配 DSH 落点）
+## §C-8 硬门与反模式（#1 为硬门判据；#2-#6 为反模式条目，配 DSH 落点）
 
-1. **Infinite loops without exit conditions** — Always have a max-runs, max-cost, max-duration, or completion signal. 【硬门逐字保留。适配：DSH 落点=**本技能 §A-1.2** 停止条件落盘；四形态全缺的循环禁止启动】
+1. **Infinite loops without exit conditions** — Always have a max-runs, max-cost, max-duration, or completion signal.
 2. **No context bridge between iterations** — Each `claude -p` call starts fresh. Use `SHARED_TASK_NOTES.md` or filesystem state to bridge context.
 3. **Retrying the same failure** — If an iteration fails, don't just retry. Capture the error context and feed it to the next attempt.
 4. **Negative instructions instead of cleanup passes** — Don't say "don't do X." Add a separate pass that removes X.
@@ -718,7 +676,7 @@ DSH 侧关联（合并版更新）：本技能 §A 机制层三段式/ 本技能
 ## §D-1 部署名与替换关系
 
 - **部署名 = `agent-loop`**（frontmatter `name`）。单一技能承载三层：§A 机制层 / §B 判断层 / §C 模式层。
-- 本件**取代**原三个技能目录：`agent-loop`（机制层）、`loop-design-check`（判断层）、`autonomous-loops`（模式层）。三者内容已全量并入本件（对照表见同目录 `merge-report.md`）。
+- 本件**取代**原三个技能目录：`agent-loop`（机制层）、`loop-design-check`（判断层）、`autonomous-loops`（模式层）。三者内容已全量并入本件。
 - 部署纪律：把本件 `SKILL.md` 落到技能根的 `agent-loop/` 目录；**原 `loop-design-check/` 与 `autonomous-loops/` 目录必须同时移除或归档**——否则两个技能目录与合并件的 description 触发词重叠，同一请求会同时命中两件，回到合并前的问题（且判断层/模式层内容出现双副本漂移风险）。
 - DSH 技能根扫描 rank（本机事实）：项目 `.dsh/skills` / `.agents/skills` → 用户 `~/.dsh/skills` → `~/.agents/skills`；技能目录监听实时失效重发布，采纳/落盘后当前运行中的会话即可拾取替换版，无需重启。
 - 落盘位置在工作区外（如 `~/.agents/skills/agent-loop/`）时，DSH 沙箱需 `danger-full-access` 提权；标准作业模式=工作区内改好 → 校验 → 一次性提权拷回 → SHA256 双侧比对。
@@ -755,7 +713,7 @@ DSH 侧关联（合并版更新）：本技能 §A 机制层三段式/ 本技能
 
 ## §D-5 保真与维护纪律
 
-- **全量保真**：三源每个实质小节在合并版中均有落点；未删内容。映射对照、未映射项（如有）与字节账见同目录 `merge-report.md`。
+- **全量保真**：三源每个实质小节在合并版中均有落点；未删内容。
 - **跨技能引用内部化**：源件中所有「见 loop-design-check 技能 / 见 agent-loop 技能 / 见 autonomous-loops 技能」类引用均已改写为「本技能 §X」；对外部技能（ai-slop-cleaner 等）的引用保持不变。
 - **节号即接口**：本件节号（§A-1.2 / §A-2.3 / §A-3 / §B-3 / §B-4 / §C-5 / §C-8 等）被正文多处交叉引用；改动节号必须同步改写全部引用点。
 - **源 3 上游滞后风险**：ECC 上游已把 canonical 换为 `continuous-agent-loop`（见「溯源」节 upstream-retired）；如将来在本机移植 `continuous-agent-loop`，模式层应与其对齐后择优合并，勿双份并存。

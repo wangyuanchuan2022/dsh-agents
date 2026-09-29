@@ -2,10 +2,7 @@
 name: opensource-sanitize
 description: "触发：发布前扫描、脱敏检查、推送把关、publish-scan、开源前把关｜English: publish scan, sanitize before publishing, secret scan｜发布前脱敏机检与卫生巡检——六类扫描（secrets/PII/内部路径/危险文件/配置完整性/git 历史）+ 三值裁定（PASS/FAIL/PASS-WITH-WARNINGS，single CRITICAL=FAIL），配套确定性工具 publish-scan.mjs；含 repo-onboard 第 3 阶段（AGENTS.md 生成，每条命令实测存在为硬门）。触发：公开推送前把关、开源 fork 发布前脱敏核查、工作区敏感信息巡检，用户说「发布前扫描/脱敏检查/publish-scan/推送把关/ sanitize」时使用。"
 metadata:
- source: ECC v2.2.2 agents/opensource-sanitizer.md:8-197 + agents/opensource-packager.md:253（repo-onboard 第 3 阶段硬门）
  tool: dsh-agents/tools/publish-scan.mjs
- anchors: sanitizer:31-197 六类扫描；sanitizer:196 single CRITICAL=FAIL；packager:253 命令实测硬门
- ported: 2026-09-26 ECC 批次2 IMP-20（S7），全量保真移植 + DSH 适配标注
 ---
 
 # Open-Source Sanitizer（发布前脱敏机检，DSH 移植版）
