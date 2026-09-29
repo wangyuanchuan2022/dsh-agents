@@ -247,6 +247,27 @@ test('v3 §3a：statusQuo 提供时渲染现状盘点（含对账说明行），
   assert.ok(!composeTaskbook({ ...base, statusQuo: '   ' }).includes('现状盘点'), '空白 statusQuo 视同缺省')
 })
 
+// IMP-26a P1 后续批（hunter 双席探针回归，2026-09-30）：六参数显式 null 不得渲染字面量
+// "null"（String(null)==="null" 骗过 trim 非空判定）；organizer 空白串三态归一；
+// autonomous 无路径降级出口改 L4 run 级失败申报（与禁提问条款不再矛盾）。
+test('IMP-26a 修复：六参数 null 穿透不渲染 + organizer 空白串归一 + autonomous 降级 L4 语义', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const persona = loadPersona(role)
+  const base = { role, persona, route, task: 't' }
+  const nullText = composeTaskbook({ ...base, context: null, statusQuo: null, confirmedFindings: null, deliverable: null, acceptance: null, defaults: null, clarifyMode: 'autonomous' })
+  assert.ok(!nullText.includes('### 背景与上下文'), 'null context 视同缺省（不得渲染该小节）')
+  assert.ok(!nullText.includes('### 现状盘点'), 'null statusQuo 视同缺省')
+  assert.ok(!nullText.includes('### confirmed_findings'), 'null confirmedFindings 视同缺省')
+  assert.ok(!nullText.includes('验收标准（组织者判定用）'), 'null acceptance 视同缺省')
+  assert.ok(!nullText.includes('null'), '全文不得出现字面量 null（六参数穿透已闭合）')
+  const blankOrg = composeTaskbook({ ...base, organizer: '   ' })
+  assert.ok(blankOrg.includes('未携带组织者会话 ID'), '空白串 organizer 须触发缺省警示（不得渲染空白收件地址）')
+  const autoNoPath = composeTaskbook({ ...base, clarifyMode: 'autonomous' })
+  assert.ok(autoNoPath.includes('run_failure=cwd_missing'), 'autonomous 无路径降级出口须指向 L4 run 级失败申报')
+  assert.ok(!autoNoPath.includes('索要工作目录'), 'autonomous 降级文案不得残留「索要工作目录」的提问语义')
+})
+
 test('v3 §5.1/§5.2：交付状态三值字段 + skip 必留痕', () => {
   const role = getRole('executor')
   const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
