@@ -3,8 +3,9 @@ name: agent-review-squad
 description: "触发：评审改动、代码审查、code review、帮我审一下、合并前检查、安全审查、挑毛病｜English: code review, review my changes, pre-merge check, security review｜评审小队（agent-review-squad，编排 dsh-agents 的 4 个 sub agent）：code-reviewer（质量/逻辑/SOLID/性能）与 security-reviewer（OWASP/密钥/危险模式）对同一 diff 并行独立盲评（P0/P1/P2 + 文件:行号 + 【改进点】），critic 做最终质量闸门汇总裁决（不仅评审「有什么」还指出「缺什么」，误批代价高于误驳），可选 code-simplifier 出行为不变简化建议交 executor 落地。只读评审 + 组织者合成，评审报告落盘双条件核销。适用于：合并前评审、里程碑验收、安全敏感改动审查。触发：用户说「评审这些改动/code review/帮我审一下/合并前检查」，或 agent-autopilot/agent-feature 的 Phase 4 需要外部评审火力。v2（OCR 确定性工程增强）：规格信封/覆盖账闭合/critic 删除闸门/锚定机检/现行性标注/人可复述最小结论。"
 ---
 
-# 评审小队（agent-review-squad）v2.1
+# 评审小队（agent-review-squad）v2.2
 
+> v2.2 新增（M-1 流程硬化，锚 `ecc-analysis/batch3/imp13/critic-verdict.md:215`——IMP-13 复跑 critic 移交项）：CF-24 信封 glob 核对、并行批次所有权划界、分母基准统一（scan 基准=信封声明对象根）、anchor severity 映射与零发现告警、关账前漂移复验步、产出格式补断言鉴别力自查字段。均带行内锚点。
 > v2.1新增：评审面复用路由表（单一事实源）、发现归属表、CRITICAL 安全停审、对抗验证步（fail-closed）、实际达成模式三值字段、视觉交付接 visual-verdict、修复回路新鲜评审者与模型家族标注；安全触发判据按 F-3 实测收窄（路径/文件类型优先）。改动均带行内锚点。
 > 编排 4 角色：code-reviewer + security-reviewer（并行盲评）→ critic（汇总裁决）→ 可选 code-simplifier（简化建议）。
 > 专项对象按评审面复用路由表扩席（派席只认本表，禁临时造席）：如 silent-failure-hunter 作第 5 席并行盲评（静默失败专项）、rag-reviewer 接 RAG/检索管线、spec-miner 接 brownfield 规格提取、harness-optimizer 接 harness/流水线演进评测。
@@ -17,7 +18,9 @@ description: "触发：评审改动、代码审查、code review、帮我审一�
 - [ ] **评审对象**（三选一，钉死不可漂移）：① 未提交改动（workspace）② 提交/区间（给出 resolved SHA，如 `--commit <sha>` 或 `--from <ref> --to <ref>`）③ 陌生仓库全量审计（scan，`--all`）
 - [ ] **产出目录**：`review/<批次>/`（预先新建，不得复用历史批次；review/、review2/… 递增）
 - [ ] **风险声明**（封闭枚举）：auth / 输入处理 / 密钥凭据 / 数据迁移 / 行为兼容 / 无
-- [ ] **规格信封（覆盖分母）**：`crgate.mjs freeze --repo <目录> [--from --to | --commit <sha> | --all] --out review/<批次>/review-spec.json`——spec.json 即两席共用的覆盖分母（reviewable/excluded 文件清单 + 排除理由 + 身份三哈希），两份任务书**引用同一路径同一哈希**。组织者未预先产出时，由评审员按人格协议第 0 步自产并回填本路径
+- [ ] **规格信封（覆盖分母）**：`crgate.mjs freeze --repo <目录> [--from --to | --commit <sha> | --all] --out review/<批次>/review-spec.json`——spec.json 即两席共用的覆盖分母（reviewable/excluded 文件清单 + 排除理由 + 身份三哈希），两份任务书**引用同一路径同一哈希**。组织者未预先产出时，由评审员按人格协议第 0 步自产并回填本路径。**分母基准统一（M-1）**：scan/freeze 的 repo 基准 = **信封声明的对象根**（IMP-13 实证 A 席以包目录、B 席以仓库根，两席分母不可直接比较）；包外文件（如 tests/run.mjs）暂进不了机检账，由组织者在信封里人工声明 `--extra` 式清单（crgate --extra 为已登记工具缺口，落地前靠人工声明）
+- [ ] **信封实物核对（CF-24，M-1）**：派活前对信封里描述的对象做一次 glob 实测核对（路径、扩展名、目录归属）——IMP-13 三席同遇「信封写 `lib\*.mjs` 实为 `.js`、tests 在包外」偏差；**信封以 glob 实测为准**，不符即改信封再冻结，禁止评审员开工后自行脑补修正
+- [ ] **所有权划界（M-1）**：多批次并行时，任务书/信封必须显式声明本批判次的**所有权边界**（哪些目录/文件归本批判，哪些归并行批）——IMP-13 实证冻结后对象目录被并行批次写入（lib/checks 五工具漂移进冻结窗口外），未划界则漂移面无处归属
 - [ ] **评审上下文**：改动意图（这些文件是干嘛的）、风险声明落成一句话背景
 
 ## 执行顺序
@@ -31,9 +34,9 @@ description: "触发：评审改动、代码审查、code review、帮我审一�
 - **安全席触发判据（F-3 实测修正，路径/文件类型优先）**：派 security-reviewer 的条件以路径/文件类型命中为准——`auth/**`、`*secret*`、`*.sql`、中间件/路由文件、`crypto` 模块 import；通用词表（token/hash/session/query 等）仅作补充信号、不得单独触发（ECC 词表实测 20 行滑窗 32.7%、按 3 hunk 估算约 69% diff 命中＝恒开伪条件，锚 `workflows/orch-review.workflow.js:59` + `ecc-analysis/review/B-workflows.md:111-117`）。安全敏感仓库可显式声明 always-on 双评，无需伪装条件触发
 - **发现归属表（cross-cutting 默认归 security-reviewer）**：一条发现同时命中两席领域时按本表定席，防双席重复报同一问题稀释信号——① 跨切面发现（一个改动同时引入质量与安全问题，如新增的注入点、未校验的迁移）→ **默认归 security-reviewer**，code-reviewer 只在逻辑正确性面独立呈现；② 纯质量面 → code-reviewer；③ 归属争议 → 双席各自原始报告照常落盘，critic 合并时裁决归属，不预合并
 - **CRITICAL 安全即停审**：任一席在盲评中发现 CRITICAL 级安全问题（可利用的注入/密钥泄漏/认证绕过类）→ 立即停止本席后续分析面、`de_broadcast(wake:true)` 告知组织者；critic 收到后**优先处置**（先于去重与覆盖闭合），裁决「续审 / 升级用户 / 转修复回路」。停审不是丢弃——本席已产出发现照常落盘归档
-- 统一产出格式：P0/P1/P2 分级 + 文件:行号 证据 + 【改进点】小节 + **覆盖账**（spec 每项落四态之一：reviewed / skipped(封闭枚举理由+复跑方式) / blocked(原因+复跑命令) / waived(引用用户指示原文)）+ **评审身份块**（head_sha / selection_hash / spec_sha / 语言清单 / 模型 / **实际达成模式**）
+- 统一产出格式：P0/P1/P2 分级 + 文件:行号 证据 + 【改进点】小节 + **覆盖账**（spec 每项落四态之一：reviewed / skipped(封闭枚举理由+复跑方式) / blocked(原因+复跑命令) / waived(引用用户指示原文)）+ **评审身份块**（head_sha / selection_hash / spec_sha / 语言清单 / 模型 / **实际达成模式** / **断言鉴别力自查**）——「断言鉴别力自查」字段（M-1）：报告含解析/分类/闸门/测试类发现时，逐条自报对模板 §7.1 断言鉴别力条款的自查结果（元素数达标/负向必红配齐/真实输入全量跑），字段化后可机检（IMP-13 B 席自查出 glob 2 元素违反条款①，机制有效但无落点字段）
 - **实际达成模式（三值字段，必带）**：评审身份块必须记录本次评审的实际达成模式——`实机`（真实运行了被审对象）/ `截图`（渲染取证但未交互）/ `仅代码`（纯静态审阅）+ 降级理由。凡未实机运行，必须显式声明降级原因（如沙箱不可起服务），**不得把静态审阅悄悄算作实机核验**
-- **锚定机检门（交付前置，不可省）**：报告落盘后运行 `crgate.mjs anchor --repo <目录> --report <报告> --spec <spec> --strict`（历史审查加 `--at <被审提交>`），exit 0 才算交付完成，anchor-report.json 随批次归档
+- **锚定机检门（交付前置，不可省）**：报告落盘后运行 `crgate.mjs anchor --repo <目录> --report <报告> --spec <spec> --strict`（历史审查加 `--at <被审提交>`），exit 0 才算交付完成，anchor-report.json 随批次归档。**severity 映射（M-1）**：anchor 判 UNANCHORED 的发现按 CRITICAL 级处置（证据不可锚定＝发现不可复核）；**零发现告警（M-1）**：任一席零发现时必须在报告显式声明「零发现合法」（引 code-reviewer v2.3 误报清单条款）并附覆盖账 complete 佐证，静默零发现视同未审
 - 派活错峰 15s，两份并行跑
 
 ### 2. critic（HIGH，只读）——最终质量闸门
@@ -54,6 +57,7 @@ description: "触发：评审改动、代码审查、code review、帮我审一�
  5. **放行**
  - 以下说法等价于放行：可疑 / 我无法验证 / 低价值 / 这段代码我看着没问题 / 换我不会提
  - **现行性标注**（历史审查场景）：verdict 对每条发现核对「当前 HEAD 是否仍存在」（read 当前文件确认），已被后续提交修复的项标「已修复于 <提交>」，不参与现行裁定——历史归因与现行性分列，不可混写
+ - **关账前漂移复验（M-1）**：verdict 落盘前对冻结对象做一次哈希/mtime 复验（crgate 身份哈希比对或 Get-FileHash 抽验）——冻结后对象被并行批次写入时，verdict 必须显式声明「本裁决适用冻结时点 <哈希/时间戳>，漂移新增面（逐项列出）不在覆盖账内、由 ORG 裁决归属」（IMP-13 实证：冻结后 lib/checks 五工具漂移，三席结论仅适用冻结时点；漂移面不得静默混入现行裁决）
 - 产出：`review/<批次>/verdict.md`（评审身份块 + 总裁决 + **覆盖状态** + 分流清单 + 盲区说明 + **人可复述的最小结论 ≤5 条**——每条一句话，脱离 AI 报告也能被人复述清楚）
 
 ### 2b. 对抗验证（verifier 席，MEDIUM，只读）——CRITICAL/HIGH 逐条过验证
