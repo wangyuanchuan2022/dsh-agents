@@ -15,6 +15,23 @@ description: "触发：自动实现整个项目、全自动做完、从想法到
 - 报告路径防撞车：同一流水线多 executor 并行时，任务书里显式给 evidencePath 并带步骤后缀（如 `agent-out\executor-step4-report.md`）。
 - **档位路由输出两字段**：降级路径手动选档或任何非标派活时，任务书角色档位行必须补记两字段——**置信度**（高/中/低 + 一句理由）与**失败回退档**（首选失败时降到哪档/升到哪席）。主路径 agent_spawn 的任务书由插件合成，两字段由组织者校对时补记；任务书模板层固定两列由任务书批次另行处置（该文件不归本批所有权）
 
+## 选角触发表（主动选角，无需用户点名）
+> 来源：ECC AGENTS.md「Agent Orchestration」节 9 条触发规则按 DSH 语境映射（对照源 `ecc-analysis\src\ECC-main\AGENTS.md:52-63`）。单一事实源纪律：新增/调整席一律改 squad「评审面复用路由表」，本表只引用已注册席 id（roles.js 23 席），不自造席；ECC 无对应席的规则如实标注映射落点，不硬凑。
+
+| # | 触发特征 | DSH 角色（id） | 备注 |
+|---|---|---|---|
+| 1 | 复杂特性请求 | `planner` | HIGH；Phase 1 常规派活 |
+| 2 | 刚写完/改完代码 | `code-reviewer` | HIGH 只读；Phase 4 必派（>20 文件或架构级改动硬触发） |
+| 3 | 缺陷修复 或 新特性（ECC→tdd-guide） | `debugger` ＋ `test-engineer` | DSH 无 tdd-guide 席，拆两席：修复→debugger（MEDIUM，Phase 2 兜底）；测试先行→test-engineer（MEDIUM，Phase 3，引用 tdd-workflow 技能） |
+| 4 | 架构决策 | `architect` | HIGH 只读；Phase 1 复杂边界加派评审 |
+| 5 | 安全敏感代码 | `security-reviewer` | HIGH 只读；触发判据按 squad F-3 路径/文件类型优先（auth/**、*secret*、*.sql、中间件/路由文件、crypto import），通用词表仅补充信号 |
+| 6 | brownfield 项目接手（老库规格提取） | `spec-miner` | HIGH 只读（新席 2026-09-29）；产出 specs/<capability>/spec.md + id 锚纪律 |
+| 7 | 自主循环/循环监控（ECC→loop-operator） | 组织者引 `agent-loop` 技能自任 | DSH 无 loop-operator 席，不自造；循环内卡死诊断升级 `tracer`（MEDIUM） |
+| 8 | harness 配置可靠性与成本 | `harness-optimizer` | HIGH（新席 2026-09-29）；读写限插件/技能/预设面 |
+| 9 | RAG/检索管线改动 | `rag-reviewer` | HIGH 只读（新席 2026-09-29）；与 scientist 边界：检索配置与评估覆盖归 rag-reviewer，统计推断归 scientist |
+
+**补充条目（DSH 侧，源=squad 路由表、非 ECC 9 条）**：静默失败嫌疑（测试绿了但功能漏跑）→ `silent-failure-hunter`（MEDIUM 只读，新席 2026-09-29；「沉默即通过」专项，可作第 5 席并行盲评）。
+
 ## 回收与监控（全程）
 - 每个角色会话的硬性完成标准双条件：**报告落盘 agent-out/ + de_broadcast(wake:true) 回组织者**，缺一即未完成。
 - 组织者用 `de_session action=status/list` 做角色回收核对；长任务配心跳闹钟（pwsh 后台 sleep 300-360s）兜底。

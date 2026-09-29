@@ -7,6 +7,7 @@ description: "触发：评审改动、代码审查、code review、帮我审一�
 
 > v2.1新增：评审面复用路由表（单一事实源）、发现归属表、CRITICAL 安全停审、对抗验证步（fail-closed）、实际达成模式三值字段、视觉交付接 visual-verdict、修复回路新鲜评审者与模型家族标注；安全触发判据按 F-3 实测收窄（路径/文件类型优先）。改动均带行内锚点。
 > 编排 4 角色：code-reviewer + security-reviewer（并行盲评）→ critic（汇总裁决）→ 可选 code-simplifier（简化建议）。
+> 专项对象按评审面复用路由表扩席（派席只认本表，禁临时造席）：如 silent-failure-hunter 作第 5 席并行盲评（静默失败专项）、rag-reviewer 接 RAG/检索管线、spec-miner 接 brownfield 规格提取、harness-optimizer 接 harness/流水线演进评测。
 > 派活方式、回收监控与 `agent-autopilot` 一致（主路径 agent_spawn / 降级 de_session+personas）。本技能只写差异。
 > ⚠️ 工作区纪律：子会话不传 cwd（继承用户派发任务的工作区）；项目子目录路径在任务书里用相对前缀表达（详见 agent-autopilot「工作区纪律」）。
 > 🔧 确定性闸门工具：`node D:\tools\deepsek_harness\dsh-agents\tools\crgate.mjs`（随 dsh-agents 插件分发；用法见其 --help）。
