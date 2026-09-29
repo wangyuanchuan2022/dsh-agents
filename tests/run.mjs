@@ -66,16 +66,16 @@ function fakeCtx(overrides = {}) {
 }
 
 // ── ① 角色注册表 ──────────────────────────────────────────────────────────
-test('角色共 19 个且 id 唯一', () => {
-  assert.equal(ROLES.length, 19)
-  assert.equal(new Set(roleIds()).size, 19)
+test('角色共 23 个且 id 唯一', () => {
+  assert.equal(ROLES.length, 23)
+  assert.equal(new Set(roleIds()).size, 23)
   for (const role of ROLES) assert.match(role.id, /^[a-z][a-z0-9-]*$/, `id 不合法：${role.id}`)
 })
 
-test('档位分布与 OMC 原文一致（opus 7 / sonnet 10 / haiku 2）', () => {
+test('档位分布与来源一致（opus 10 / sonnet 11 / haiku 2；批次3 ECC 扩展 MEDIUM +1、HIGH +3）', () => {
   const byTier = (t) => ROLES.filter((r) => r.tier === t).length
-  assert.equal(byTier('HIGH'), 7, 'HIGH(opus) 数量')
-  assert.equal(byTier('MEDIUM'), 10, 'MEDIUM(sonnet) 数量')
+  assert.equal(byTier('HIGH'), 10, 'HIGH(opus) 数量')
+  assert.equal(byTier('MEDIUM'), 11, 'MEDIUM(sonnet) 数量')
   assert.equal(byTier('LOW'), 2, 'LOW(haiku) 数量')
 })
 
@@ -84,16 +84,16 @@ test('档位别名与泳道过滤', () => {
   assert.equal(normalizeTier('SONNET'), 'MEDIUM')
   assert.equal(normalizeTier('opus'), 'HIGH')
   assert.equal(normalizeTier('nope'), null)
-  assert.deepEqual(filterRoles({ lane: 'review' }).map((r) => r.id).sort(), ['code-reviewer', 'code-simplifier', 'critic', 'security-reviewer'])
+  assert.deepEqual(filterRoles({ lane: 'review' }).map((r) => r.id).sort(), ['code-reviewer', 'code-simplifier', 'critic', 'rag-reviewer', 'security-reviewer', 'silent-failure-hunter'])
   assert.deepEqual(filterRoles({ tier: 'haiku' }).map((r) => r.id).sort(), ['explore', 'writer'])
-  assert.equal(filterRoles({ lane: 'build', tier: 'HIGH' }).length, 3) // analyst/planner/architect
+  assert.equal(filterRoles({ lane: 'build', tier: 'HIGH' }).length, 5) // analyst/planner/architect/harness-optimizer/spec-miner
 })
 
 test('只读角色集合与 OMC disallowedTools 一致', () => {
   const readonly = ROLES.filter((r) => r.readonly).map((r) => r.id).sort()
   assert.deepEqual(readonly, [
     'analyst', 'architect', 'code-reviewer', 'critic', 'document-specialist',
-    'explore', 'scientist', 'security-reviewer', 'verifier',
+    'explore', 'rag-reviewer', 'scientist', 'security-reviewer', 'silent-failure-hunter', 'spec-miner', 'verifier',
   ])
 })
 
@@ -324,6 +324,117 @@ test('v3 新条款断言注入必红：删掉对应条款后各谓词变假（�
   }
 })
 
+// ── ③d IMP-26a（DP-1 修复 + 只读白名单注入） ───────────────────────────────
+test('IMP-26a ① 完成广播带（wake:true）与 L4 同口径；organizer 缺失附直投地址警示', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const persona = loadPersona(role)
+  const withOrg = composeTaskbook({ role, persona, route, task: 't', organizer: 'session-org-1' })
+  // 精确锚点：回收契约行也含「完成广播」字样，必须锚定第七节广播条款行本体
+  const broadcastLine = withOrg.split('\n').find((l) => l.includes('完成广播：`de_broadcast`'))
+  assert.ok(broadcastLine, '须存在「完成广播：de_broadcast」条款行')
+  assert.ok(broadcastLine.includes('（wake:true）'), '完成广播条款必须带（wake:true）（DP-1 P1-2：inject 不唤醒）')
+  assert.ok(broadcastLine.includes('`session-org-1`'), 'organizer 必须渲染为直投收件地址')
+  assert.ok(withOrg.includes('（wake:true）广播卡点'), '同文本内 L4 条款仍带（wake:true）——两处同口径')
+  const noOrg = composeTaskbook({ role, persona, route, task: 't' })
+  const noOrgLine = noOrg.split('\n').find((l) => l.includes('完成广播：`de_broadcast`'))
+  assert.ok(noOrgLine, '须存在「完成广播：de_broadcast」条款行')
+  assert.ok(noOrgLine.includes('（wake:true）'), '无 organizer 时 wake:true 不缺席')
+  assert.ok(noOrgLine.includes('未携带组织者会话 ID') && noOrgLine.includes('禁止群发'), '无 organizer 须附「向派活方索取直投地址」警示')
+})
+
+test('IMP-26a ② 澄清超时口径字面一致：生成面与模板正本同为 5 分钟（单测钉住两边）', () => {
+  const genSrc = readFileSync(fileURLToPath(new URL('../lib/taskbook.js', import.meta.url)), 'utf8')
+  const docSrc = readFileSync(fileURLToPath(new URL('../docs/task-brief-v3.md', import.meta.url)), 'utf8')
+  const genMatch = /超过\s*(\d+)\s*分钟无回音/.exec(genSrc)
+  const docMatch = /超时 <N=(\d+)> 分钟/.exec(docSrc)
+  assert.ok(genMatch, '生成面须含「超过 N 分钟无回音」字面')
+  assert.ok(docMatch, '正本须含「超时 <N=x> 分钟」占位')
+  assert.equal(genMatch[1], docMatch[1], `生成面（${genMatch[1]} 分钟）与正本（${docMatch[1]} 分钟）口径必须一致（DP-1 P1-3）`)
+  assert.equal(genMatch[1], '5', '统一取值=5（对齐正本；如改值须两侧同改并同步本断言）')
+})
+
+await testAsync('IMP-26a ③ organizer/statusQuo/confirmedFindings 进两工具 schema 且透传渲染', async () => {
+  const { ctx, tools } = fakeCtx()
+  apply(ctx, {})
+  for (const name of ['agent_taskbook', 'agent_spawn']) {
+    const props = tools.get(name).parameters.properties
+    for (const key of ['organizer', 'statusQuo', 'confirmedFindings']) {
+      assert.equal(props[key]?.type, 'string', `${name} 缺 ${key} 参数（DP-1 P1-A/B 死参数修复）`)
+    }
+  }
+  const tool = tools.get('agent_taskbook')
+  const r = await tool.execute({
+    role: 'code-reviewer', task: '增量评审',
+    statusQuo: '| 盘点项 | 结果 |\n|---|---|\n| 上轮产出 | review/r1.md |',
+    confirmedFindings: '1. src/a.js:10 - `foo()` 未判空 - 结论：已修复\n2. src/b.js:20 - `bar()` 越界 - 结论：已修复\n3. src/c.js:30 - `baz()` 泄漏 - 结论：已修复',
+    organizer: 'session-org-9', evidencePath: 'D:\\tmp\\r2.md',
+  })
+  assert.equal(r.ok, true, r.message ?? '')
+  assert.ok(r.taskbook.includes('### 现状盘点（派活前对账）'), 'statusQuo 须经工具面渲染 §3a 小节')
+  assert.ok(r.taskbook.includes('| 上轮产出 | review/r1.md |'), 'statusQuo 正文原样透传')
+  assert.ok(r.taskbook.includes('### confirmed_findings（上一轮已结论清单'), 'confirmedFindings 须经工具面渲染 §9.1 块')
+  for (const line of ['1. src/a.js:10', '2. src/b.js:20', '3. src/c.js:30']) {
+    assert.ok(r.taskbook.includes(line), `已结论清单 ≥3 元素逐条透传：${line}`)
+  }
+  assert.ok(r.taskbook.includes('不得因清单存在而止步') && r.taskbook.includes('免查需凭证'), '否定式指令与免查凭证条款自动附加')
+  assert.ok(r.taskbook.includes('`session-org-9`'), 'organizer 经工具面渲染为广播收件地址')
+})
+
+test('IMP-26a ④ v3.1 三节落地：§5.3/§6.2 两模式固定携带，§9.1 缺省不渲染', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const persona = loadPersona(role)
+  for (const mode of ['interactive', 'autonomous']) {
+    const text = composeTaskbook({ role, persona, route, task: 't', clarifyMode: mode })
+    assert.ok(text.includes('三层失败分类（未完成步骤必须落层申报，禁止混用）'), `${mode}：§5.3 三层失败分类条款缺席（DP-1 P1-1）`)
+    for (const marker of ['attempt 级', 'item 级', 'run 级', 'run_failure=', 'skipped(封闭枚举理由)+复跑命令']) {
+      assert.ok(text.includes(marker), `${mode}：§5.3 缺要素 ${marker}`)
+    }
+    assert.ok(text.includes('### 三档熔断与收尾宽限轮'), `${mode}：§6.2 小节缺席`)
+    assert.ok(text.includes('这是第二次连续失败，修参数或交付') && text.includes('最后一轮只能交付'), `${mode}：§6.2 三档反馈/收尾宽限语义缺失`)
+  }
+  const plain = composeTaskbook({ role, persona, route, task: 't' })
+  assert.ok(!plain.includes('confirmed_findings（上一轮已结论清单'), 'confirmedFindings 缺省时 §9.1 块不渲染')
+})
+
+test('IMP-26a ⑤ 产出路径兜底链闭合：无路径渲染降级出口，硬门①不悬空；null 不串化', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const persona = loadPersona(role)
+  const interactive = composeTaskbook({ role, persona, route, task: 't', clarifyMode: 'interactive' })
+  assert.ok(interactive.includes('产出落盘路径：⚠️ **未指定**'), '无路径须渲染显式警示行（DP-1 F-4）')
+  assert.ok(interactive.includes('向组织者索要明确路径'), 'interactive 降级出口=向组织者索要路径')
+  assert.ok(!interactive.includes('到上面指定路径'), '无路径时硬门①不得悬空引用「上面指定路径」')
+  assert.ok(interactive.includes('路径未预置'), '硬门①须改用降级措辞')
+  const auto = composeTaskbook({ role, persona, route, task: 't', clarifyMode: 'autonomous' })
+  assert.ok(auto.includes('按下方「缺省决策表」的产出路径行取默认落点'), 'autonomous 降级出口=缺省决策表')
+  assert.ok(!auto.includes('`null`'), 'evidencePath=null 不得串化渲染字面 null')
+  const withPath = composeTaskbook({ role, persona, route, task: 't', evidencePath: 'D:\\tmp\\out.md' })
+  assert.ok(withPath.includes('到上面指定路径') && !withPath.includes('⚠️ **未指定**'), '有路径时硬门①保持原措辞且不渲染警示')
+})
+
+test('IMP-26a 白名单：readonly 角色自动携带、可写角色不携带（全角色分类断言 ≥3 元素）', () => {
+  const table = resolveTierTable(undefined)
+  let readonlyCount = 0
+  for (const role of ROLES) {
+    const text = composeTaskbook({ role, persona: loadPersona(role), route: resolveRoute({ role, tierTable: table }), task: 't' })
+    const has = text.includes('### 只读工具白名单（readonly 硬边界）')
+    assert.equal(has, role.readonly === true, `${role.id}（readonly=${role.readonly}）白名单携带状态错误`)
+    if (role.readonly === true) {
+      readonlyCount += 1
+      for (const marker of ['`grep`', '`cat`', '`ls`', '`read`', '`git log`', '`git diff`', '`git show --no-pager`']) {
+        assert.ok(text.includes(marker), `${role.id} 白名单缺允许项 ${marker}`)
+      }
+      for (const ban of ['`rm` 等删除类命令', '`git push` 等远端/仓库状态变更', '`npm install` 等依赖安装']) {
+        assert.ok(text.includes(ban), `${role.id} 白名单缺禁止项 ${ban}`)
+      }
+      assert.ok(text.includes('说明意图') && text.includes('确认后方可执行'), `${role.id} 缺「说明意图后请求确认」出口`)
+    }
+  }
+  assert.ok(readonlyCount >= 3, `readonly 角色应 ≥3 个，实际 ${readonlyCount}`)
+})
+
 // ── ④ 派活前置三问 ────────────────────────────────────────────────────────
 test('三问恒为 3 条；副作用动作命中告警；越档有理由位', () => {
   const role = getRole('executor')
@@ -343,9 +454,9 @@ test('三问恒为 3 条；副作用动作命中告警；越档有理由位', ()
 test('隔离模式映射：blind=并行盲评席 / isolated=独立评审验证席 / 其余 shared', () => {
   const byMode = {}
   for (const role of ROLES) (byMode[isolationOf(role)] ??= []).push(role.id)
-  assert.deepEqual(byMode.blind.sort(), ['code-reviewer', 'security-reviewer'], '并行盲评席只有这两席')
+  assert.deepEqual(byMode.blind.sort(), ['code-reviewer', 'security-reviewer', 'silent-failure-hunter'], '并行盲评席三席（批次3 静默失败专项加入）')
   assert.deepEqual(byMode.isolated.sort(), ['code-simplifier', 'critic', 'verifier'], '独立评审/验证席三席')
-  assert.equal((byMode.shared ?? []).length, 14, '其余 14 个角色不适用隔离')
+  assert.equal((byMode.shared ?? []).length, 17, '其余 17 个角色不适用隔离（批次3 harness-optimizer/spec-miner 为 shared：演进评测需见配置全貌与基线、规格提取为产物型工作）')
   assert.equal(byMode.blind.length + byMode.isolated.length + byMode.shared.length, ROLES.length)
   assert.equal(isolationOf('code-reviewer'), 'blind', '接受 id 字符串')
   assert.equal(isolationOf('ghost'), 'shared', '未知 id 视作 shared（不抛错）')
@@ -513,7 +624,7 @@ await testAsync('agent_roles：list / show / tiers 三个动作', async () => {
   apply(ctx, {})
   const list = await tools.get('agent_roles').execute({ action: 'list', lane: 'review' })
   assert.equal(list.ok, true)
-  assert.equal(list.roles.length, 4)
+  assert.equal(list.roles.length, 6)
   assert.equal(typeof list.now, 'number')
 
   const show = await tools.get('agent_roles').execute({ action: 'show', role: 'critic' })

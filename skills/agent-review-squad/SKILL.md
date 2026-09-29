@@ -88,10 +88,10 @@ description: "触发：评审改动、代码审查、code review、帮我审一�
 | 视觉/UI 交付保真 | critic 强制走 `visual-verdict` 技能 | 现有技能非角色（GAN 纪律③） |
 | 数据库 / SQL / 迁移面 | security-reviewer（数据迁移风险声明）+ `personas/checklists/sql.md` | 清单落位后生效 |
 | RAG / 检索管线 | rag-reviewer（HIGH，只读；批次3 波1 已建席 2026-09-29） | 与 scientist 边界写死：检索配置与评估覆盖归 rag-reviewer，统计推断归 scientist；人格含 guji 本地条款 G-1..G-5 |
-| brownfield 规格提取 | **未建席（批次3 spec-miner）→ 暂不适用** | 建席后接表 |
+| brownfield 规格提取 | spec-miner（HIGH，只读；批次3 波2 已建席 2026-09-29） | 产出约定：<repo>/specs/<capability>/spec.md + id 锚纪律；与 analyst（前瞻设计）/explore（代码勘察）边界：只做「从既有代码提取规格」 |
 | 静默失败专项（绿了但漏跑） | silent-failure-hunter（MEDIUM，只读；批次3 波1 已建席 2026-09-29） | 可作第 5 席并行盲评（入 BLIND_ROLES）；「沉默即通过」专项 SP-1..5；最终席位编排以组织者与任务书为准（非排他） |
 | 文档一致性（新契约/门禁需持久文档） | critic 在盲区清单提示 → 由组织者派 `writer`/`document-specialist` | 不占评审席 |
-| harness/流水线演进评测 | **未建席（批次3 harness-optimizer）→ 暂不适用** | 建席后接表 |
+| harness/流水线演进评测 | harness-optimizer（HIGH，读写限插件/技能/预设面；批次3 波2 已建席 2026-09-29） | 含 eval-harness 内联化素材（三类 Grader/pass@k-pass^k/反模式/最佳实践）；DSH 等价物先行（pwsh 只读清单） |
 
 ## 合并判定（v2：双轨正交，分列输出）
 - **交付等级**（由覆盖闭合度决定）：complete（分母全 reviewed）/ partial（有 skipped/blocked/waived 且理由齐备——必须列明未覆盖范围与原因）/ failed（有缺项或结构错误）。partial 不是失败，但必须显式声明，不得沉默。
