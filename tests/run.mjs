@@ -268,6 +268,17 @@ test('IMP-26a 修复：六参数 null 穿透不渲染 + organizer 空白串归�
   assert.ok(!autoNoPath.includes('索要工作目录'), 'autonomous 降级文案不得残留「索要工作目录」的提问语义')
 })
 
+// DP-1 P2-9/F-15 修复回归：composeTaskbook 库层入参守卫（注入必红——坏入参必须响亮报错）
+test('IMP-26a P2 批：composeTaskbook 入参守卫四态 throws', () => {
+  const role = getRole('executor')
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
+  const persona = loadPersona(role)
+  assert.throws(() => composeTaskbook({ persona, route, task: 't' }), /role/, '缺 role 须抛错')
+  assert.throws(() => composeTaskbook({ role, persona, task: 't' }), /route/, '缺 route 须抛错（P2-9 裸崩溃改有信息报错）')
+  assert.throws(() => composeTaskbook({ role, persona, route, task: '  ' }), /task/, '空白 task 须抛错')
+  assert.throws(() => composeTaskbook({ role, persona, route, task: 't', clarifyMode: 'autnomous' }), /clarifyMode/, '拼错的 clarifyMode 须抛错（不得静默回落 interactive）')
+})
+
 test('v3 §5.1/§5.2：交付状态三值字段 + skip 必留痕', () => {
   const role = getRole('executor')
   const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
