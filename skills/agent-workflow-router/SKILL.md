@@ -1,6 +1,6 @@
 ---
 name: agent-workflow-router
-description: "触发：不知道用哪个流程、有哪些工作流、怎么派活、组队做、一键跑完、多角色协作、agent 工作流怎么起、帮我选个流程、这活该谁干、从哪开始｜English: which workflow, workflow router, route to agent pipeline, how to start, pick a skill｜route to agent pipeline, workflow router, pick a skill, how to start. 本技能是 22 件 Agent 工作流技能的路由入口层：按用户意图把请求接到对应技能（全自动实现→agent-autopilot／加功能→agent-feature／修 bug→agent-bugfix／评审→agent-review-squad／需求模糊→requirement-interview／重大方案→consensus-plan／清理→ai-slop-cleaner／长任务循环→agent-loop／收尾核验→verification-loop／交接→session-handoff 等），并固化派活前置三问、档位现场确认、消息纪律、工作区纪律与收尾沉淀五条硬协议。用户没点技能名而描述了任务时，先加载本技能选路，再加载目标技能执行。"
+description: "触发：不知道用哪个流程、有哪些工作流、怎么派活、组队做、一键跑完、多角色协作、agent 工作流怎么起、帮我选个流程、这活该谁干、从哪开始｜English: which workflow, workflow router, route to agent pipeline, how to start, pick a skill｜route to agent pipeline, workflow router, pick a skill, how to start. 本技能是 23 件 Agent 工作流技能的路由入口层：按用户意图把请求接到对应技能（全自动实现→agent-autopilot／加功能→agent-feature／修 bug→agent-bugfix／评审→agent-review-squad／需求模糊→requirement-interview／重大方案→consensus-plan／清理→ai-slop-cleaner／长任务循环→agent-loop／收尾核验→verification-loop／交接→session-handoff 等），并固化派活前置三问、档位现场确认、消息纪律、工作区纪律与收尾沉淀五条硬协议。用户没点技能名而描述了任务时，先加载本技能选路，再加载目标技能执行。"
 ---
 
 # Agent 工作流总入口（agent-workflow-router）
@@ -53,7 +53,7 @@ description: "触发：不知道用哪个流程、有哪些工作流、怎么派
 1. **派活前置三问**：这活哪个会话能做？它有对应工具与数据吗？是否要它做它做不到的副作用（写库/删数据/外发消息/装依赖）？任一不过 → 不派或改写任务。
 2. **档位现场确认**：先跑 `agent_roles action=tiers` 读**当次**解析结果（LOW/MEDIUM/HIGH → 实际 provider/model）；**禁止越档**显式指定 provider+model。
 3. **任务书预审或直接派**：`agent_taskbook(role=…, task=…)` 审稿 → `agent_spawn(role=…, task=…, evidencePath=…)` 派活（插件自动合成八节任务书）。报告类任务**必须显式传 evidencePath**。
-4. **任务书必含四条**：① 硬性完成标准双条件（**写盘落盘 + 点对点 `de_broadcast` 回报**，缺一即未完成）② 增量落盘要求（先骨架后分段追加）③ 「**完成标准未满足前不要停止工作回合**」条款 ④ **组织者会话 ID 预写**（免子会话猜）。
+4. **任务书必含四条**：① 硬性完成标准双条件（**写盘落盘 + 点对点 `de_broadcast` 回报**，缺一即未完成）② 增量落盘要求（先骨架后分段追加）③ 「**完成标准未满足前不要停止工作回合**」条款 ④ **组织者会话 ID 预写**（`agent_spawn` 的 `organizer=` 参数直传，自动注入任务书汇报节，免子会话猜；派活前对账结论 `statusQuo=`、增量轮已结论 `confirmedFindings=` 同批结构化下发）。
 5. **消息纪律**：完成/状态汇报一律**点对点直投组织者**；禁 `project:` 伪接收者与多收件人发送；一次只唤醒一个会话。
 6. **工作区纪律**：子会话**不传 cwd**（继承组织者工作区）；项目子目录用相对前缀表达，禁止指到工作区之外。
 7. **回收核对**：`de_session action=status/list` 逐席核对；**完成广播只证送达不证开工** → 双查 running + 磁盘增量；假 idle（零产出转 idle）处置=补发含硬条款的开工指令 + 再次确认 running（先例已固化）。
