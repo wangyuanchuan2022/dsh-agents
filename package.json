@@ -1,7 +1,7 @@
 {
   "name": "dsh-agents",
   "version": "0.1.0",
-  "description": "DSH 侧的 19 个专职角色 × 模型档位路由：把 oh-my-claudecode 的角色体系移植成 DSH 工具（agent_roles / agent_taskbook / agent_spawn），按角色钉死模型档位（LOW/MEDIUM/HIGH ← haiku/sonnet/opus）并一步派活。",
+  "description": "DSH 侧的 23 个专职角色 × 模型档位路由：把 oh-my-claudecode 的角色体系移植成 DSH 工具（agent_roles / agent_taskbook / agent_spawn），按角色钉死模型档位（LOW/MEDIUM/HIGH ← haiku/sonnet/opus）并一步派活。",
   "private": true,
   "type": "module",
   "main": "lib/index.js",

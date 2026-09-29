@@ -1,6 +1,6 @@
 # dsh-agents
 
-> 19 个专职角色 × 三档模型路由，装进 [DSH](https://github.com/deepseek-ai) 的多智能体工作台。
+> 23 个专职角色 × 三档模型路由，装进 [DSH](https://github.com/deepseek-ai) 的多智能体工作台。
 > 一次调用就创建一个「带角色人格 + 钉死档位模型 + 完整任务书」的子会话。
 
 `dsh-agents` turns DSH into a role-routed multi-agent workspace: 19 specialist agents, each pinned
@@ -42,7 +42,7 @@ complete task brief — plus 23 workflow skills that orchestrate them end to end
 
 ## 特性
 
-- **19 个专职角色，3 条泳道**——build（构建与分析 8）· review（评审与质量闸门 4）· domain（领域专家 7）。
+- **23 个专职角色，3 条泳道**——build（构建与分析 10）· review（评审与质量闸门 6）· domain（领域专家 7）；其中 19 个移植自 OMC，4 个为批次3 新建（rag-reviewer / silent-failure-hunter / spec-miner / harness-optimizer）。
 - **三档模型路由**（LOW / MEDIUM / HIGH ← haiku / sonnet / opus），档位可被用户层覆盖（设置页或 `agent_roles set`），解析优先级明确、可查来源。
 - **只读角色有明确边界**——上游标注 `disallowedTools: Write, Edit` 的 **9 个角色**（explore · analyst · architect · verifier · code-reviewer · security-reviewer · critic · document-specialist · scientist）在任务书里写成只读顾问条款，任务书同时注明这只是文字约束（见[已知限制](#已知限制)）。
 - **任务书八节结构** + **派活前置三问**（副作用关键词 fail-closed 告警）。
@@ -111,7 +111,7 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 | **LOW** | explore 🔒 | — | writer |
 
 🔒 = 只读角色（上游 `disallowedTools: Write, Edit`），任务书中写成只读顾问条款。
-合计：HIGH 7 · MEDIUM 10 · LOW 2 = **19 个角色**。
+合计：HIGH 11 · MEDIUM 10 · LOW 2 = **23 个角色**。
 
 档位映射分两层：
 
@@ -150,7 +150,7 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 |---|---|
 | `agent-workflow-router` | 总入口：按用户意图路由到下面 22 件之一，固化五条硬协议（派活前置三问 / 档位现场确认禁越档 / 任务书四条必含 / 点对点消息纪律 / 工作区纪律），附前置门与六条组合串联链。 |
 
-**流水线（4）**——编排本插件的 19 角色
+**流水线（4）**——编排本插件的 23 角色
 
 | 技能 | 链路 |
 |---|---|
@@ -249,7 +249,7 @@ dsh-agents/
   cordis.patch.yml         宿主插件行 + 全部可配项
   lib/
     index.js               插件入口 + 三个工具定义
-    roles.js               19 角色注册表（元数据；人格正文不在此）
+    roles.js               23 角色注册表（元数据；人格正文不在此）
     routing.js             档位路由解析 + 按模型名反查 provider + 目录体检
     persona.js             人格加载（缺文件退化 + 哈希留档）
     taskbook.js            任务书合成 + 派活前置三问
