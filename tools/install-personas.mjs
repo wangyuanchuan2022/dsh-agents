@@ -10,15 +10,30 @@
  * （role/tier/omc/source/hash 溯源）。安装期对每篇做「提取段标签计数 == 译文段
  * 标签计数」断言，不等即 exit 1 且不落盘。
  *
+ * 装配期两级断言（批次3 IMP-26c，D-5 流程防线；判据在 lib/persona-gate.js，
+ * 与 tools/verify-imp26.mjs 负向自测共用同一份代码）：
+ *  ① 注入基线节（Prompt Defense Baseline）——LEGACY_OMC_IDS 之外的角色缺失
+ *     即 fail loudly 拒装（exit 1 且不落盘任何人格，报文件名）；OMC 历史集
+ *     （19 篇，无该节）豁免。
+ *  ② 「## 不做什么」节缺失 → 打印装配警告，继续装配（非阻断——历史 persona
+ *     兼容；警告走 stderr）。
+ *
  * 用法：node tools/install-personas.mjs [--dry-run]
+ * 测试接缝：设 INSTALL_PERSONAS_ROOT=<dir> 可把安装根重定向到 fixture 树
+ *（负向自测 tools/verify-imp26.mjs 用）；缺省 = 本仓库根，行为不变。
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { ROLES, getRole } from '../lib/roles.js'
+import { personaGateFindings } from '../lib/persona-gate.js'
 
-const ROOT = dirname(fileURLToPath(import.meta.url)).replace(/[\\/]tools$/, '')
+// 测试接缝（IMP-26c）：INSTALL_PERSONAS_ROOT 重定向安装根（verify-imp26 用）；
+// 未设时 = 仓库根，行为与原先逐字节一致。
+const ROOT = process.env.INSTALL_PERSONAS_ROOT
+  ? process.env.INSTALL_PERSONAS_ROOT
+  : dirname(fileURLToPath(import.meta.url)).replace(/[\\/]tools$/, '')
 const TRANS = join(ROOT, 'review', 'trans')
 const PERSONAS = join(ROOT, 'personas')
 const APPROVED = join(ROOT, 'tools', 'approved.json')
@@ -89,6 +104,7 @@ if (approved === null || (approved !== 'all' && approved.length === 0)) {
 
 mkdirSync(PERSONAS, { recursive: true })
 let installed = 0
+let warned = 0
 const skipped = []
 // 两遍式（B-P0-1 安装期断言「不等即 exit 1 且不落盘」）：先全部解析并断言，
 // 全部通过后才统一写盘——任何一篇失败都不会留下半更新的 personas。
@@ -113,6 +129,15 @@ for (const role of ROLES) {
   if (regionTags !== null && bodyTags !== regionTags) {
     console.error(`[install-personas] 安装期断言失败：${role.id} 段标签计数不一致（提取 ${bodyTags} ≠ 译文段 ${regionTags}）——提取器疑似在译文内部小节截断，exit 1 且不落盘任何人格。`)
     process.exit(1)
+  }
+  // 装配期两级断言（IMP-26c）：error=拒装并报文件名；warn=装配警告（非阻断）。
+  for (const finding of personaGateFindings(role.id, body)) {
+    if (finding.level === 'error') {
+      console.error(`[install-personas] 安装期断言失败：${role.id}（${transPath}）——${finding.message}；fail loudly 拒装，exit 1 且不落盘任何人格。`)
+      process.exit(1)
+    }
+    warned += 1
+    console.error(`[install-personas] 装配警告：${role.id}（${transPath}）——${finding.message}；继续装配（非阻断——历史 persona 兼容）。`)
   }
   const hash = createHash('sha256').update(body, 'utf8').digest('hex').slice(0, 8).toUpperCase()
   pending.push({ role, body, hash })
@@ -142,5 +167,5 @@ for (const { role, body, hash } of pending) {
   }
   installed += 1
 }
-console.log(`[install-personas] ${dryRun ? '预演' : '完成'}：${installed} 篇；跳过 ${skipped.length} 篇${skipped.length > 0 ? `（${skipped.join('、')}）` : ''}`)
+console.log(`[install-personas] ${dryRun ? '预演' : '完成'}：${installed} 篇；跳过 ${skipped.length} 篇${skipped.length > 0 ? `（${skipped.join('、')}）` : ''}；装配警告 ${warned} 条`)
 if (installed === 0) process.exit(0)
