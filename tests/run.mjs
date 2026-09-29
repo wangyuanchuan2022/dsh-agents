@@ -573,7 +573,12 @@ await testAsync('agent_spawn：dryRun 不创建；正式派活走 create+followu
   assert.equal(createCall.sessionId, real.sessionId)
   assert.deepEqual(createCall.agentOptions, { provider: DEFAULT_TIERS.MEDIUM.provider, model: DEFAULT_TIERS.MEDIUM.model })
   assert.equal(createCall.meta.cwd, 'D:\\work\\demo')
-  assert.equal(createCall.seed[0].seq, 0, 'seed 事件 seq 必须从 0 开始')
+  // ⚠️ 2026-09-29 根因修复：不得再用 seed 注入 request/header（该事件落在 seq 0，
+  // 即任何 turn 之外；v4 要求 request/header 处于已打开的 turn 内
+  // ——dsh-session-format-v3-to-v4 lib/index.js:571/:990，否则会话日志重载时报
+  // 「request/header is outside an open turn」，即「历史加载失败」）。
+  // 运行配置一律走 agentOptions（思考等级 = AgentOptions.reasoningEffort）。
+  assert.equal(createCall.seed, undefined, '不得再传 seed（v4：request/header 必须在打开的 turn 内）')
   const followup = created.find((entry) => entry.followup)
   assert.ok(followup, '必须 followup 派发任务书')
   assert.ok(followup.followup.content[0].text.includes('角色任务书'), '首条消息应是角色任务书')
