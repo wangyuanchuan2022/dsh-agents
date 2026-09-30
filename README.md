@@ -241,6 +241,10 @@ node tests/installed-smoke.mjs        # 安装副本烟测：工具 + settings +
 > **不要用 `node --test`**：在受限沙箱（如 DSH 自身的 Windows 沙箱）里 node 的 pipe 子进程捕获会 `EPERM`，逐文件直跑是可靠方式。
 > 重启后可用 `tests/probe-boot.mjs` / `probe-catalog.mjs` / `probe-client.mjs` 探针确认宿主引导图已含本插件、工具目录与 `client.js` 均可分发。
 
+## 效果评测
+
+针对「多角色编排是否真的优于单 agent」做过一次受控对照（DeepSWE v1.1 官方任务、官方 grader 复用判分、防应试隔离）：同任务同模型下，三席编排与全路由（5 席）均通过全部 held-out 测试（43/43），单 agent 为 38/43——差距集中在需求歧义点的裁决质量。完整对照表、差异归因与边界声明见 [ARCHITECTURE.md 第 10 节](ARCHITECTURE.md#10-效果评测2026-09-30a-组关账)。
+
 ## 目录结构
 
 ```
