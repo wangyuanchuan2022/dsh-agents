@@ -57,7 +57,9 @@ const ECC_BASELINE_BLOCK = `<Prompt_Defense_Baseline>
 /** 真实 repo persona 正文（executor，含「## 不做什么」、无基线——OMC 历史集真形态）。 */
 let REAL_EXEC_BODY = null
 try {
-  REAL_EXEC_BODY = splitFrontmatter(readFileSync(join(PERSONAS_DIR, 'executor.md'), 'utf8')).body
+  // 行尾归一 LF：git restore/autocrlf 检出 CRLF 时，下方 dropBaseline/dropNoDo 的
+  // 精确串匹配（块+\n）会静默失效（2026-09-30 A-full 验收实证），夹具统一 LF 口径。
+  REAL_EXEC_BODY = splitFrontmatter(readFileSync(join(PERSONAS_DIR, 'executor.md'), 'utf8')).body.replace(/\r\n/g, '\n')
 } catch { /* personas 未安装环境：③ 层相应降级为 skip */ }
 
 /** 正常 persona 母本 = 真实 OMC 正文 + 基线块插入 <Agent_Prompt> 之后（三件套齐）。 */
@@ -186,6 +188,8 @@ try {
     if (hasPromptDefenseBaseline(body) === LEGACY_OMC_IDS.has(id)) baselineMismatches.push(id)
     if (personaGateFindings(id, body).every((x) => x.level !== 'error')) legacyNoError += 1
   }
+  // R1 说明：2026-09-30 曾误改为「仅 4 非 legacy 强制」——根因是工作树 personas 被回退到
+  // IMP-15 前态（26a 误删事故未完全恢复的残留），git restore 后 23/23 全含节，原版断言成立。
   ok('R1 真实 personas 不做什么逐篇齐备（≥19 篇全含）', realFiles.length >= 19 && withNoDo === realFiles.length, `md=${realFiles.length} withNoDo=${withNoDo}`)
   ok('R2 基线有无 == 非 legacy（逐篇判别，兼容角色数推进）', baselineMismatches.length === 0, `mismatch=${baselineMismatches.join(',')}`)
   ok('R3 真实 personas 逐篇零 error（豁免表全覆盖）', legacyNoError === realFiles.length, `legacyNoError=${legacyNoError}/${realFiles.length}`)
