@@ -256,7 +256,7 @@ status=<pending|running|blocked|done>  owner=<会话ID/角色>  evidence=<产出
 
 ## 附录 C：v3.2 增补小节 ↔ ECC 出处对照（github-coordination，只取语义不取载体）
 
-| 小节 | ECC 机制 | 源码位置（ecc-analysis/src/ECC-main） |
+| 小节 | ECC 机制 | 上游源码位置（github.com/affaan-m/everything-claude-code） |
 |---|---|---|
 | §9.2① 四字段头 | 工作单元状态字段集（status/owner/evidence/merge_gate 语义） | scripts/lib/github-coordination/state.js:14-35 |
 | §9.2② 依赖与解锁（禁正则提取） | F-1 教训：parsing 对格式漂移零防御致依赖误判 | scripts/lib/github-coordination/parsing.js:33 |

@@ -3,7 +3,7 @@
 > 23 个专职角色 × 三档模型路由，装进 [DSH](https://github.com/deepseek-ai) 的多智能体工作台。
 > 一次调用就创建一个「带角色人格 + 钉死档位模型 + 完整任务书」的子会话。
 
-`dsh-agents` turns DSH into a role-routed multi-agent workspace: 19 specialist agents, each pinned
+`dsh-agents` turns DSH into a role-routed multi-agent workspace: 23 specialist agents, each pinned
 to a model tier (LOW / MEDIUM / HIGH), spawned in a single call with a persona, a pinned model and a
 complete task brief — plus 23 workflow skills that orchestrate them end to end.
 
@@ -231,7 +231,7 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 ## 测试
 
 ```bash
-node tests/run.mjs                    # 主测试（54 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + 浏览器半/manifest 门
+node tests/run.mjs                    # 主测试（65 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + 浏览器半/manifest 门
 node tools/crgate.test.mjs            # 65 断言
 node tools/publish-scan.test.mjs      # 47 断言
 node tests/boot-schema-check.mjs      # 宿主真实校验器验收门（装前必过）
@@ -258,7 +258,7 @@ dsh-agents/
     settings-compat.js     宿主 settings 服务版本差异的兼容层
     http-config.js         设置卡数据端点
     client.js              浏览器半：设置卡
-  personas/                19 份人格正文
+  personas/                23 份人格正文（19 OMC + 4 ECC 系）
   personas/checklists/     11 份评审清单（语言 7 + 专项 4，按扩展名/专项路由）
   skills/                  23 件工作流技能（源副本）
   docs/task-brief-v3.md    任务书模板正本
@@ -282,9 +282,9 @@ dsh-agents/
 ## 许可与致谢
 
 - **本仓库自身代码**：MIT，见 [LICENSE](LICENSE)。
-- **角色体系**：移植自 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)（OMC，MIT，Copyright © 2025 Yeachan Heo）——19 个角色的定义与人格原文逐字对照翻译，按 MIT 要求保留其版权与许可全文，见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-- **任务书模板**：源自 MACAE（Microsoft，MIT）的可移植机制清单（Top1/Top5 落地项）。
-- **部分协作与方法论技能、专项评审清单、`tools/publish-scan.mjs`**：源自 [Everything Claude Code](https://github.com/affaan-m/everything-claude-code)（ECC）v2.2.2 的分析移植，全量保真 + 行内【适配】标注。
+- **角色体系**：19 个基础角色移植自 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)（OMC，MIT，Copyright © 2025 Yeachan Heo）——定义与人格原文逐字对照翻译；4 个专项角色（rag-reviewer / silent-failure-hunter / spec-miner / harness-optimizer）的方法论移植自 [Everything Claude Code](https://github.com/affaan-m/everything-claude-code)（ECC，MIT，Copyright © 2026 Affaan Mustafa）v2.2.2。各上游版权与许可全文见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+- **任务书模板**：源自 MACAE（[Multi-Agent-Custom-Automation-Engine-Solution-Accelerator](https://github.com/microsoft/Multi-Agent-Custom-Automation-Engine-Solution-Accelerator)，Microsoft，MIT）的可移植机制清单；`skills/subagent-clarify` 的工具级 HITL 机制同出 MACAE（与 OMC AskUserQuestion guard 混合来源）。
+- **部分协作与方法论技能、11 份专项/语言评审清单、`tools/publish-scan.mjs`**：源自 ECC v2.2.2 的分析移植（全量保真；移植时的适配决策记录在提交历史）。
 - **会话创建时序**：来自 `dsh-memory-evolve` 的 `de_session` 实机踩坑记录（预设挂载、provider 解析、种子序号、工作区挂接）。
 
 欢迎 issue 与 PR。若你的角色/档位配置有普适价值，也欢迎回灌成基底默认。
