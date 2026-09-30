@@ -5,13 +5,13 @@ description: "触发：评审改动、代码审查、code review、帮我审一�
 
 # 评审小队（agent-review-squad）v2.2
 
-> v2.2 新增（M-1 流程硬化，锚 `ecc-analysis/batch3/imp13/critic-verdict.md:215`——IMP-13 复跑 critic 移交项）：CF-24 信封 glob 核对、并行批次所有权划界、分母基准统一（scan 基准=信封声明对象根）、anchor severity 映射与零发现告警、关账前漂移复验步、产出格式补断言鉴别力自查字段。均带行内锚点。
+> v2.2 新增（M-1 流程硬化，源自 IMP-13 复跑 critic 移交项——本地评审档案，公开版不随分发）：CF-24 信封 glob 核对、并行批次所有权划界、分母基准统一（scan 基准=信封声明对象根）、anchor severity 映射与零发现告警、关账前漂移复验步、产出格式补断言鉴别力自查字段。均带行内锚点。
 > v2.1新增：评审面复用路由表（单一事实源）、发现归属表、CRITICAL 安全停审、对抗验证步（fail-closed）、实际达成模式三值字段、视觉交付接 visual-verdict、修复回路新鲜评审者与模型家族标注；安全触发判据按 F-3 实测收窄（路径/文件类型优先）。改动均带行内锚点。
 > 编排 4 角色：code-reviewer + security-reviewer（并行盲评）→ critic（汇总裁决）→ 可选 code-simplifier（简化建议）。
 > 专项对象按评审面复用路由表扩席（派席只认本表，禁临时造席）：如 silent-failure-hunter 作第 5 席并行盲评（静默失败专项）、rag-reviewer 接 RAG/检索管线、spec-miner 接 brownfield 规格提取、harness-optimizer 接 harness/流水线演进评测。
 > 派活方式、回收监控与 `agent-autopilot` 一致（主路径 agent_spawn / 降级 de_session+personas）。本技能只写差异。
 > ⚠️ 工作区纪律：子会话不传 cwd（继承用户派发任务的工作区）；项目子目录路径在任务书里用相对前缀表达（详见 agent-autopilot「工作区纪律」）。
-> 🔧 确定性闸门工具：`node D:\tools\deepsek_harness\dsh-agents\tools\crgate.mjs`（随 dsh-agents 插件分发；用法见其 --help）。
+> 🔧 确定性闸门工具：`node <dsh-agents 仓根>\tools\crgate.mjs`（随 dsh-agents 插件分发；用法见其 --help）。
 
 ## 输入（组织者准备）★ 派活前置校验——缺任一项派活前响亮失败并回头补齐，禁止评审员开工后瞎猜
 
@@ -31,7 +31,7 @@ description: "触发：评审改动、代码审查、code review、帮我审一�
 - **禁止把作者立场塞进任务书**：`deliverable`/`acceptance` 只写可核验的判据，不写作者的取舍理由；确需背景时给**客观事实**（文件职责、风险声明一句话），不给辩解。
 - code-reviewer 视角：规格符合性、逻辑正确性、错误处理、反模式、SOLID、性能
 - security-reviewer 视角：OWASP Top 10、硬编码密钥、危险模式，按 严重度×可利用性×影响面 排序
-- **安全席触发判据（F-3 实测修正，路径/文件类型优先）**：派 security-reviewer 的条件以路径/文件类型命中为准——`auth/**`、`*secret*`、`*.sql`、中间件/路由文件、`crypto` 模块 import；通用词表（token/hash/session/query 等）仅作补充信号、不得单独触发（ECC 词表实测 20 行滑窗 32.7%、按 3 hunk 估算约 69% diff 命中＝恒开伪条件，锚 `workflows/orch-review.workflow.js:59` + `ecc-analysis/review/B-workflows.md:111-117`）。安全敏感仓库可显式声明 always-on 双评，无需伪装条件触发
+- **安全席触发判据（F-3 实测修正，路径/文件类型优先）**：派 security-reviewer 的条件以路径/文件类型命中为准——`auth/**`、`*secret*`、`*.sql`、中间件/路由文件、`crypto` 模块 import；通用词表（token/hash/session/query 等）仅作补充信号、不得单独触发（ECC 词表实测 20 行滑窗 32.7%、按 3 hunk 估算约 69% diff 命中＝恒开伪条件，对照 ECC 上游 `workflows/orch-review.workflow.js`；本地批次2 工作流分析过程物不随公开版分发）。安全敏感仓库可显式声明 always-on 双评，无需伪装条件触发
 - **发现归属表（cross-cutting 默认归 security-reviewer）**：一条发现同时命中两席领域时按本表定席，防双席重复报同一问题稀释信号——① 跨切面发现（一个改动同时引入质量与安全问题，如新增的注入点、未校验的迁移）→ **默认归 security-reviewer**，code-reviewer 只在逻辑正确性面独立呈现；② 纯质量面 → code-reviewer；③ 归属争议 → 双席各自原始报告照常落盘，critic 合并时裁决归属，不预合并
 - **CRITICAL 安全即停审**：任一席在盲评中发现 CRITICAL 级安全问题（可利用的注入/密钥泄漏/认证绕过类）→ 立即停止本席后续分析面、`de_broadcast(wake:true)` 告知组织者；critic 收到后**优先处置**（先于去重与覆盖闭合），裁决「续审 / 升级用户 / 转修复回路」。停审不是丢弃——本席已产出发现照常落盘归档
 - 统一产出格式：P0/P1/P2 分级 + 文件:行号 证据 + 【改进点】小节 + **覆盖账**（spec 每项落四态之一：reviewed / skipped(封闭枚举理由+复跑方式) / blocked(原因+复跑命令) / waived(引用用户指示原文)）+ **评审身份块**（head_sha / selection_hash / spec_sha / 语言清单 / 模型 / **实际达成模式** / **断言鉴别力自查**）——「断言鉴别力自查」字段（M-1）：报告含解析/分类/闸门/测试类发现时，逐条自报对模板 §7.1 断言鉴别力条款的自查结果（元素数达标/负向必红配齐/真实输入全量跑），字段化后可机检（IMP-13 B 席自查出 glob 2 元素违反条款①，机制有效但无落点字段）
@@ -81,7 +81,7 @@ description: "触发：评审改动、代码审查、code review、帮我审一�
 - **收尾宽限轮**：预算收紧时的最后一轮只许提交已识别的发现、不许新开分析面
 
 ## 评审面复用路由表
-> 锚：`ecc-analysis/review/A-agents.md:241-246`（每加一个专项就重造席位＝反模式；ECC `agents/mle-reviewer.md:32-47` 的 11 行路由同型）+ network-architect「Handoff To Focused Skills」原则＝深挖交给专门面，不在评审提示里自造 runbook。
+> 锚：本地批次1 分析报告（过程物，公开版不随分发；论点=每加一个专项就重造席位＝反模式；ECC `agents/mle-reviewer.md:32-47` 的 11 行路由同型）+ network-architect「Handoff To Focused Skills」原则＝深挖交给专门面，不在评审提示里自造 runbook。
 > 本表是**唯一**派席依据：什么评审对象默认派哪席在此定死；**新增角色/席位一律先改本表再投入使用**（批次3 新角色人格必含同型「评审面复用」节并回指本表）。禁止绕开本表在任务书里临时造席。
 
 | 评审对象（触发特征） | 默认派席 | 备注 |

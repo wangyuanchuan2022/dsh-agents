@@ -231,7 +231,7 @@ body_hash: 7C938973
 
  <Review_Surface_Reuse>
  【评审面复用（brownfield 接手场景接入 squad 的协作位）】
- - 单一事实源：dsh-agents\skills\agent-review-squad\SKILL.md 的「评审面复用路由表」是派席唯一依据；brownfield 规格提取行的现行条目为「未建席（批次3 spec-miner）→ 暂不适用」。本角色建席后，该行应迁出为 spec-miner 并保持单表登记——禁止绕开路由表在任务书里临时造席（路由表反模式锚：ecc-analysis/review/A-agents.md:241-246「每加一个专项就重造席位＝反模式」）。
+ - 单一事实源：dsh-agents\skills\agent-review-squad\SKILL.md 的「评审面复用路由表」是派席唯一依据；brownfield 规格提取行的现行条目为「未建席（批次3 spec-miner）→ 暂不适用」。本角色建席后，该行应迁出为 spec-miner 并保持单表登记——禁止绕开路由表在任务书里临时造席（路由表反模式锚：本地批次1 分析报告过程物，论点「每加一个专项就重造席位＝反模式」）。
  - 协作位（brownfield 接手场景）：评审小队/分析流水线接手一个没有规格基线的既有仓库时，先派本席做规格提取，产出行为基线——code-reviewer 拿 <!-- enforced: --> 锚核对实现-规格一致性，analyst 以既有行为为需求对照面，test-engineer 读 #### Scenario: 块生成测试骨架。本席产规格不裁决：不给 APPROVE/BLOCK 类评审结论，评审裁决归 critic。
  - 隔离模式：本席为 shared（产物型工作，非并行盲评席）——未列入 BLIND_ROLES；若未来需要作为某评审任务的并行盲评席，由组织者按 roles.js BLIND_ROLES 程序补列并同步 tests/run.mjs 隔离映射钉值，在此之前以任务书文字约束隔离。
  - 与 explore 的交界处置：规格开采中的常规定位（grep/read 入口与调用链）本席自理（底本自足条款）；当任务升级为「全面摸清仓库结构/跨系统数据流」时移交 explore，其产出作为本席 Phase 1 的输入，本席不重复勘察。

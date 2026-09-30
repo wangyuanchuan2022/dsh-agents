@@ -28,7 +28,7 @@ description: "触发：DSH 排障、没反应、假死、权限被拒、EPERM、
 - 内容过滤（错误码 1301）或 provider 不稳定导致回合无声失败
 
 **诊断（Diagnostics）：**
-1. 读会话转录：`C:\Users\ycwan\.dsh\sessions\<工作区目录名>\session-<id>\session.jsonl.zstd`
+1. 读会话转录：`~/.dsh/sessions/<工作区目录名>/session-<id>/session.jsonl.zstd`
 2. python zstandard **必须用 `stream_reader`**（一次性 `decompress` 会报 `could not determine content size in frame header`）
 3. 看 `turn/end` 的 `reason.error` 与 `llm/retry` 记录——429 一目了然
 

@@ -10,13 +10,13 @@ description: "触发：自动实现整个项目、全自动做完、从想法到
 ## 派活方式（主路径 / 降级路径）
 - **主路径**：dsh-agents 插件已装（存在 `agent_spawn` 工具）→ `agent_spawn(role=<角色>, task=<任务>, evidencePath=<可选>)`。插件会自动：钉档位模型、注入人格、合成八节任务书（含交付验收与硬性完成标准双条件）、生成产出路径 `agent-out/<角色id>-<时间戳>.md`。
 - **⚠️ 工作区纪律（2026-09-12 用户规则，长期生效）**：子会话一律派在**用户派发任务的工作区**——不传 `cwd`（缺省继承组织者会话的工作区）；确需在任务书里引用项目子目录时，用相对本工作区的前缀（如 `merge-watermelon\docs\plans\x.md`）表达，不要把子会话 cwd 指进子目录。禁止把 cwd 指到工作区之外。
-- **降级路径**（无 agent_spawn 工具）：读 `D:\tools\deepsek_harness\dsh-agents\personas\<角色>.md` 人格全文 + 按 dsh-agents README 第 5 节手写八节任务书 → `de_session spawn`（**显式 provider+model**，档位表以 `agent_roles action=tiers` 实时读到的为准；同样不传 cwd，继承组织者工作区）。
+- **降级路径**（无 agent_spawn 工具）：读 `dsh-agents 仓根\personas\<角色>.md` 人格全文 + 按 dsh-agents README 第 5 节手写八节任务书 → `de_session spawn`（**显式 provider+model**，档位表以 `agent_roles action=tiers` 实时读到的为准；同样不传 cwd，继承组织者工作区）。
 - 派活前过 `agent_taskbook`（或人工三问）：这事该这个角色做吗 / 它有工具数据吗 / 是不是要它做做不到的副作用。
 - 报告路径防撞车：同一流水线多 executor 并行时，任务书里显式给 evidencePath 并带步骤后缀（如 `agent-out\executor-step4-report.md`）。
 - **档位路由输出两字段**：降级路径手动选档或任何非标派活时，任务书角色档位行必须补记两字段——**置信度**（高/中/低 + 一句理由）与**失败回退档**（首选失败时降到哪档/升到哪席）。主路径 agent_spawn 的任务书由插件合成，两字段由组织者校对时补记；任务书模板层固定两列由任务书批次另行处置（该文件不归本批所有权）
 
 ## 选角触发表（主动选角，无需用户点名）
-> 来源：ECC AGENTS.md「Agent Orchestration」节 9 条触发规则按 DSH 语境映射（对照源 `ecc-analysis\src\ECC-main\AGENTS.md:52-63`）。单一事实源纪律：新增/调整席一律改 squad「评审面复用路由表」，本表只引用已注册席 id（roles.js 23 席），不自造席；ECC 无对应席的规则如实标注映射落点，不硬凑。
+> 来源：ECC 上游 AGENTS.md「Agent Orchestration」节 9 条触发规则（github.com/affaan-m/everything-claude-code）按 DSH 语境映射。单一事实源纪律：新增/调整席一律改 squad「评审面复用路由表」，本表只引用已注册席 id（roles.js 23 席），不自造席；ECC 无对应席的规则如实标注映射落点，不硬凑。
 
 | # | 触发特征 | DSH 角色（id） | 备注 |
 |---|---|---|---|
@@ -78,7 +78,7 @@ description: "触发：自动实现整个项目、全自动做完、从想法到
 - 按计划逐任务派 `executor`（MEDIUM）：任务书带该步的文件范围与完成判据；最小可行 diff。
 - 独立任务可并行派多个 executor（错峰 15s）；文件冲突任务串行。
 - 每步完成后：
- - **formatter check**：跑本语言 formatter check——standard 档默认（只报告不阻断）；strict 档须用户显式声明，**非零退出码即阻断**（ECC 的 quality-gate 非 strict 时格式化失败只写日志、既不改变退出码也不阻断＝空门教训，锚 `scripts/hooks/quality-gate.js:96` + `ecc-analysis/review/B-workflows.md:119-126`）。扩展名映射：`.ts/.tsx/.js/.jsx`→prettier；`.py`→ruff format 或 black；`.go`→gofmt；`.rs`→rustfmt；`.cs`→dotnet format；`.cpp/.cc/.h/.hpp`→clang-format；`.kt`→ktlint
+ - **formatter check**：跑本语言 formatter check——standard 档默认（只报告不阻断）；strict 档须用户显式声明，**非零退出码即阻断**（ECC 的 quality-gate 非 strict 时格式化失败只写日志、既不改变退出码也不阻断＝空门教训，对照 ECC 上游 `scripts/hooks/quality-gate.js`）。扩展名映射：`.ts/.tsx/.js/.jsx`→prettier；`.py`→ruff format 或 black；`.go`→gofmt；`.rs`→rustfmt；`.cs`→dotnet format；`.cpp/.cc/.h/.hpp`→clang-format；`.kt`→ktlint
  - 编译/类型错误 → 派 `debugger`（MEDIUM）追根因最小修复；
  - interactive 澄清模式：executor 缺参数 → subagent-clarify 协议（广播问组织者 → ask_user → 回传；超时按任务书缺省决策表降级并标注）。
 - 每步过验收判据才勾掉（todo_write 同步真实进度）。

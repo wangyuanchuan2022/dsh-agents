@@ -1,0 +1,9 @@
+{
+  "waivers": [
+    {
+      "id": "int-win-home",
+      "glob": "skills/replica-map.json",
+      "reason": "功能性运维文件（装机双根互补分工单一事实源，skill-replica-check.ps1 依赖），含本机用户路径为其数据本体；已于公开补救中移出 git 跟踪（.gitignore 排除、仅本地维护、不随公开分发）。公开树无此文件。"
+    }
+  ]
+}
