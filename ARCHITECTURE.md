@@ -205,7 +205,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
   - **维护侧工作树账面**：同命令 + `--allow .publish-scan-allow.json` → PASS-WITH-WARNINGS（critical=0，warning=27，waived=2）。比 clone 多出的 10 条全部位于未分发的本地过程物（`review/` 对照底本 8 条 + `backup/` 快照 1 条 + replica-map.json 豁免 2 条）。
   - 豁免清单 `.publish-scan-allow.json` 仅 1 条且 reason 公开可见；注意 waiver 需显式传 `--allow`（非自动加载）。
 - **端到端复核**：干净 clone 公开仓后六模式敏感 grep（用户级路径 / 盘符绝对路径 / 会话 id / file:/// / 密钥样态 / 本地分析目录引用）**全零命中**。
-- **第三方独立扫描（gitleaks 8.30.1，2026-09-30）**：对全量 git 历史（56 commits）与活树各扫一遍（`gitleaks detect --redact` / `detect --no-git --redact`），两侧各报 **3 条命中，全部位于 `tools/publish-scan.test.mjs`（L88 / L118 / L175）**——逐条定性均为注入必红测试的显式假凭据 fixture（`placeholder body` 字样私钥块 / `sk-0123456789abcdef` 顺序占位 / `ghp_` + 字母表倒序 + `654321` 的假 token），不可用、非真实格式；与自研扫描器「凭据样态均为占位」的结论交叉一致。gitleaks 无占位识别故判 leak，自研扫描器按占位降级 warning——口径差异已记录，安全结论一致：**无真实凭据泄露**。复现命令与 fingerprint 见 gitleaks 报告（维护侧留档；外部评审者可用任意版本 gitleaks 独立复跑）。
+- **第三方独立扫描（gitleaks 8.30.1，2026-09-30）**：对全量 git 历史（56 commits）与活树各扫一遍（`gitleaks detect --redact` / `detect --no-git --redact`），两侧各报 **3 条命中，全部位于 `tools/publish-scan.test.mjs`（L88 / L118 / L175）**——逐条定性均为注入必红测试的显式假凭据 fixture（占位字样私钥块 / 顺序数字占位的 sk- 样例 / 字母表倒序拼接的假 token），不可用、非真实格式；与自研扫描器「凭据样态均为占位」的结论交叉一致。gitleaks 无占位识别故判 leak，自研扫描器按占位降级 warning——口径差异已记录，安全结论一致：**无真实凭据泄露**。复现命令与 fingerprint 见 gitleaks 报告（维护侧留档；外部评审者可用任意版本 gitleaks 独立复跑）。
 - **git 历史注记**：本仓由私有开发仓直接转公开，历史 commit 含开发期过程物（评审中间稿等）。活文件树已按上述门清理；历史面无密钥级内容（自研扫描器 git-history 层 critical=0，sk- 形态命中均确认为文档占位样态；gitleaks 独立交叉验证同结论，见上条）。历史清洗（history rewrite）为可选运维动作，经第三方扫描确认无真实泄露后**暂不执行**——评审者评估历史面时可依此口径。
 
 ### 7.3 案例一：一次评审级盘点揪出的 critical 缺陷（已修复）
