@@ -282,7 +282,7 @@ dsh-agents/
 ## 许可与致谢
 
 - **本仓库自身代码**：MIT，见 [LICENSE](LICENSE)。
-- **角色体系**：19 个基础角色移植自 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)（OMC，MIT，Copyright © 2025 Yeachan Heo）——定义与人格原文逐字对照翻译；4 个专项角色（rag-reviewer / silent-failure-hunter / spec-miner / harness-optimizer）的方法论移植自 [Everything Claude Code](https://github.com/affaan-m/everything-claude-code)（ECC，MIT，Copyright © 2026 Affaan Mustafa）v2.2.2。各上游版权与许可全文见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+- **角色体系**：18 个基础角色逐字对照翻译移植自 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)（OMC，MIT，Copyright © 2025 Yeachan Heo）——中文译文逐字对应定义与人格原文；code-reviewer 在 OMC 底本上深度改造升级为 v2.3 反编报形态（不再逐字）；4 个专项角色（rag-reviewer / silent-failure-hunter / spec-miner / harness-optimizer）的方法论移植自 [Everything Claude Code](https://github.com/affaan-m/everything-claude-code)（ECC，MIT，Copyright © 2026 Affaan Mustafa）v2.2.2。各上游版权与许可全文见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 - **任务书模板**：源自 MACAE（[Multi-Agent-Custom-Automation-Engine-Solution-Accelerator](https://github.com/microsoft/Multi-Agent-Custom-Automation-Engine-Solution-Accelerator)，Microsoft，MIT）的可移植机制清单；`skills/subagent-clarify` 的工具级 HITL 机制同出 MACAE（与 OMC AskUserQuestion guard 混合来源）。
 - **部分协作与方法论技能、11 份专项/语言评审清单、`tools/publish-scan.mjs`**：源自 ECC v2.2.2 的分析移植（全量保真；移植时的适配决策记录在提交历史）。
 - **会话创建时序**：来自 `dsh-memory-evolve` 的 `de_session` 实机踩坑记录（预设挂载、provider 解析、种子序号、工作区挂接）。

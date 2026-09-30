@@ -5,7 +5,7 @@
 上游项目（README 的「移植来源」一节亦已注明）：
 
 - [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)（OMC）——19 个基础角色
-  人格的逐字翻译/改写底本
+  人格的底本（18 个逐字翻译移植；code-reviewer 在底本上深度改造升级为 v2.3，不再逐字）
 - [everything-claude-code](https://github.com/affaan-m/everything-claude-code)（ECC）——
   4 个专项角色（rag-reviewer / silent-failure-hunter / spec-miner / harness-optimizer）的
   方法论来源、`personas/checklists/` 语言评审清单、以及 `skills/opensource-sanitize` 等技能
@@ -21,7 +21,8 @@
 
 - 来源：https://github.com/Yeachan-Heo/oh-my-claudecode
 - 许可：MIT License
-- 移植方式：逐字翻译/改写为 DSH 原语可执行的形态；对照底本（OMC 原文快照）与逐文件
+- 移植方式：逐字翻译移植为 DSH 原语可执行的形态（code-reviewer 后经深度改造升级 v2.3）；
+  对照底本（OMC 原文快照）与逐文件
   一致性核验记录见仓库内 `review/` 与移植批次档案（本地过程物，不随公开版本分发）。
 
 ```

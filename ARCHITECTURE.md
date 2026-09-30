@@ -1,22 +1,23 @@
 # ARCHITECTURE — dsh-agents 仓库全景（评审导览）
 
-> 本文面向**外部评审者**：逐部件说明本仓 98 个跟踪文件的职责、接线与质量账。
+> 本文面向**外部评审者**：逐部件说明本仓 99 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 98 文件，本文自身计入）。
+> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 99 文件，本文自身计入）。
+> 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
 
 ---
 
 ## 0. 一句话与关键数字
 
-**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 23 件工作流技能、8 个确定性工具与三层测试链。
+**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 23 件工作流技能、11 个确定性机检脚本与三层测试链。
 
 | 维度 | 数值 | 验证入口 |
 |---|---|---|
-| 跟踪文件 | 98 | `git ls-files \| Measure-Object` |
+| 跟踪文件 | 99 | `git ls-files` 计数 |
 | 角色 / 泳道 | 23（build 10 · review 6 · domain 7） | `agent_roles action=list` |
 | 工作流技能 | 23（入口 1 · 流水线 4 · 协作 5 · 方法论 13） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
-| 确定性工具 | 8（宿主注册 3 + 独立 CLI 5） | `tools/` |
+| 确定性工具 | 宿主注册 3 + `tools/` 共 11（机检脚本 8 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
 | 测试断言 | 主套件 65 + crgate 65 + publish-scan 47 + persona-gate 33 | `tests/` + `tools/*.test.mjs` |
 | 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
@@ -71,7 +72,7 @@ dsh-agents/
 - **agent_taskbook** — 只合成八节任务书不派活（先审后派）。
 - **agent_spawn** — 一步派活：解析档位 → 注入人格与任务书 → 创建标准 DSH 会话开跑。
 
-**lib/checks/ 说明**：批次3 曾交付五个独立 check 模块（memory_secret_lint / config_guard / scope_loop_guard / invisible_chars / manifest_alignment），均已并入宿主工具面验证（LIVE-VERIFIED）；现行跟踪树中它们的逻辑内联于各工具，独立模块文件不在本仓分发清单。
+**不在本仓的近亲工具**：批次3 曾交付五个独立 check 模块（memory_secret_lint / config_guard / scope_loop_guard / invisible_chars / manifest_alignment），由本机另一插件（port-kit 系）承载并经安装态活体验证——**本仓不含其源码**，LIVE-VERIFIED 是本机安装态验证记录而非本仓可复现断言，外部评审者在本仓内无法核验此行，评审时请跳过。
 
 ---
 
@@ -83,13 +84,16 @@ dsh-agents/
 
 | 档位 | build | review | domain |
 |---|---|---|---|
-| HIGH | analyst 🔒 · planner · architect 🔒 | code-reviewer 🔒 · security-reviewer 🔒 · critic 🔒 · code-simplifier | — |
-| MEDIUM | debugger · executor · verifier 🔒 · tracer | — | test-engineer · designer · qa-tester · git-master · document-specialist 🔒 · scientist 🔒 |
+| HIGH | analyst 🔒 · planner · architect 🔒 · spec-miner 🔒 · harness-optimizer | code-reviewer 🔒 · security-reviewer 🔒 · critic 🔒 · code-simplifier · rag-reviewer 🔒 | — |
+| MEDIUM | debugger · executor · verifier 🔒 · tracer | silent-failure-hunter 🔒 | test-engineer · designer · qa-tester · git-master · document-specialist 🔒 · scientist 🔒 |
 | LOW | explore 🔒 | — | writer |
 
-**血统标注**（逐字移植 vs 方法论移植，许可义务见 THIRD-PARTY-NOTICES）：
+（上表 23 角色全量；其中 ECC 系 4 角色为：spec-miner 🔒 / harness-optimizer（HIGH·build）、rag-reviewer 🔒（HIGH·review）、silent-failure-hunter 🔒（MEDIUM·review）——档位裁定记录在 `lib/roles.js` 行内注释，含对 ECC 上游定档的调整缘由。）
 
-- **OMC 逐字移植（19）**：analyst / architect / code-reviewer※ / code-simplifier / critic / debugger / designer / document-specialist / executor / explore / git-master / planner / qa-tester / scientist / security-reviewer / test-engineer / tracer / verifier / writer——OMC 上游无「注入基线」「不做什么」节，为历史形态；`lib/persona-gate.js` 的 LEGACY_OMC_IDS 豁免表即此语义（※ code-reviewer 已升 v2.3 反编报形态，见 §5）。
+**血统标注**（逐字翻译移植 / 深度改造 / 方法论移植，许可义务见 THIRD-PARTY-NOTICES）：
+
+- **OMC 逐字翻译移植（18）**：analyst / architect / code-simplifier / critic / debugger / designer / document-specialist / executor / explore / git-master / planner / qa-tester / scientist / security-reviewer / test-engineer / tracer / verifier / writer——「逐字」指中文翻译逐字对应英文原文（含行内适配注记），非逐字节复制英文原文；OMC 上游无「注入基线」「不做什么」节，为历史形态；`lib/persona-gate.js` 的 LEGACY_OMC_IDS 豁免表即此语义。
+- **OMC 底本 + 深度改造（1）**：code-reviewer——原为逐字翻译版，后升级为 v2.3 反编报形态（ECC Pre-Report Gate + 12 条误报清单 + 「零发现合法」条款），不再逐字对应上游；改造部分为本仓原创增量。
 - **ECC 方法论移植（4，批次3 新角色）**：rag-reviewer（RAG/检索管线评审）· silent-failure-hunter（静默失败盲评专项）· spec-miner（brownfield 规格提取）· harness-optimizer（harness/流水线演进评测）——含 ECC 系注入基线与「不做什么」节，且各自带「评审面复用」协作位条款（回指 squad 路由表）。
 
 ### 3.2 personas/checklists/（11 份评审清单）
@@ -130,16 +134,16 @@ dsh-agents/
 
 ---
 
-## 5. tools/ — 独立 CLI 与机检（12 文件）
+## 5. tools/ — 独立 CLI 与机检（11 文件 = 机检脚本 8 + 负向自测 2 + 数据 1）
 
 | 文件 | 职责 | 自测 |
 |---|---|---|
 | `crgate.mjs` | 评审确定性证据链：`freeze`（覆盖分母冻结+身份哈希）/ `anchor`（发现逐条锚定，`--strict` 为交付前强制门）/ `finalize`（覆盖状态机：reviewed/skipped/blocked/waived） | `crgate.test.mjs` 65 断言 |
 | `publish-scan.mjs` | 发布前脱敏机检：六类扫描（secrets/PII/内部路径/危险文件/配置完整性/git 历史）+ 三值裁定（PASS / PASS-WITH-WARNINGS / FAIL，单 CRITICAL 即 FAIL）；`--strict-tracked` 放行门、`--allow` 豁免清单（waiver={id:规则名, glob, reason}，缺 reason 响亮报错，waived 仍列示） | `publish-scan.test.mjs` 47 断言（注入必红） |
 | `install-personas.mjs` | 人格批量安装到 DSH（默认跳过已有自定义版本）；**装配期两级断言**经 `lib/persona-gate.js`：非豁免角色缺注入基线 → exit 1 不落盘并报文件名；缺「不做什么」→ 警告非阻断 | `verify-imp26.mjs` 33 断言（含 fd-stdio 跑真安装器的 E2E 层） |
-| `assemble-review.mjs` | 评审材料装配（`tools/approved.json` 记录批准来源与时间——approve 记录的可审计形态） | — |
+| `assemble-review.mjs` | 评审材料装配（`tools/approved.json` 记录批准来源与时间——approve 记录的可审计形态）。**注**：依赖 `review/original` 与 `review/trans` 目录（OMC 英文原文与中文译文的对照底本，维护侧本地过程物，不随仓分发）——clone 后可运行但产出为空对照，属内部评审过程工具非对外工具 | — |
 | `publish-sync-check.ps1` | **公开仓同步幂等 diff 门**：本地 HEAD vs origin/master 零差异 exit 0；ahead 列文件 / behind 提示 pull（fetch 走 cmd /c 静默取退出码，避 PS5 stderr 陷阱） | 冒烟 in-sync exit 0 |
-| `skill-replica-check.ps1` | 双装机根一致性机检：按 replica-map.json 逐技能 SHA256 比对（match/drift/missing/unknown 四态） | 本地运行（replica-map.json 为本地维护文件） |
+| `skill-replica-check.ps1` | 双装机根一致性机检：按 replica-map.json 逐技能 SHA256 比对（match/drift/missing/unknown 四态）。**注**：replica-map.json 含本机装机路径，已移出 git 跟踪、仅维护侧本地维护——clone 后运行会 FAIL exit 1（fail-loud，不静默），属本机运维脚本非对外工具 | 本地运行（需本地 replica-map.json） |
 | `verify-imp26.mjs` | persona-gate 负向自测四层：①判据层纯函数（真实 executor 正文+真实 ECC 基线文本）②E2E 注入必红（fd-stdio 跑真安装器，INSTALL_PERSONAS_ROOT 重定向）③真实树全量跑 ④汇总裁定 | 33 断言——2026-09-30 修复后首次 33/0（见 §7） |
 | `taskbook-26a-negative.mjs` | taskbook 六参数 null 穿透等负向断言（IMP-26a 修复的注入必红回归门） | — |
 | `approved.json` | assemble-review 的批准记录（数据文件） | — |
@@ -153,20 +157,28 @@ dsh-agents/
 | 文件 | 职责 | 当前账 |
 |---|---|---|
 | `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + 浏览器半/manifest 门 + 26a 负向组（65 断言） | **65 passed / 0 failed** |
-| `boot-schema-check.mjs` | **装前必过门**：宿主真实校验器（dsh-tools assertSupportedJsonSchema）验证三工具 parameters + output.schema；宿主包路径经 APPDATA 运行时解析（环境无关） | 六项 ALL PASS |
+| `boot-schema-check.mjs` | **装前必过门**：宿主真实校验器（dsh-tools assertSupportedJsonSchema）验证三工具 parameters + output.schema。**前置条件：本机已安装 DSH 宿主**（宿主包路径经 APPDATA 运行时解析）——无宿主环境跑不了，非 clone 即可复现门 | 六项 ALL PASS |
 | `installed-smoke.mjs` | 安装副本烟测：工具 + settings + 端点三方同源 | 安装后跑 |
 | `probe-boot.mjs` / `probe-catalog.mjs` / `probe-client.mjs` | 重启后探针：宿主引导图含本插件 / 工具目录可发现 / client.js 可分发 | 重启后跑 |
 | `verify-live.mjs` | 安装态活体验证支撑 | — |
 
 **复现命令**（clone 后）：
 
+**第一组——任何 Node 环境即可复现（四门，公开 registry 装 1 个运行时依赖）：**
+
 ```bash
-npm install                # 公开 registry 可装（1 个运行时依赖）
-node tests/run.mjs         # 65/0
-node tools/crgate.test.mjs # 65/0
-node tools/publish-scan.test.mjs  # 47/0
-node tools/verify-imp26.mjs       # 33/0
-node tests/boot-schema-check.mjs  # ALL PASS
+npm install                        # 公开 registry 可装（1 个运行时依赖）
+node tests/run.mjs                 # 65/0
+node tools/crgate.test.mjs         # 65/0
+node tools/publish-scan.test.mjs   # 47/0
+node tools/verify-imp26.mjs        # 33/0
+```
+
+**第二组——需本机已安装 DSH 宿主（安装态验证，外部评审者无宿主时跳过）：**
+
+```bash
+node tests/boot-schema-check.mjs   # ALL PASS（宿主真实校验器）
+node tests/installed-smoke.mjs     # 安装副本烟测
 ```
 
 > 已知环境注记：受限沙箱（如 DSH 自身 Windows 沙箱）内 node 的管道子进程捕获会 EPERM，逐文件直跑是可靠方式；PowerShell 5 下含中文注释的 .ps1 必须存 UTF-8 with BOM。
@@ -183,18 +195,23 @@ node tests/boot-schema-check.mjs  # ALL PASS
 | crgate 自测 | 65/0 |
 | publish-scan 自测 | 47/0（注入必红） |
 | persona-gate 自测（verify-imp26） | **33/0**（2026-09-30 修复后首次全绿） |
-| boot-schema（宿主真实校验器） | 6/6 PASS |
-| 可安装性（A-full 验收） | 干净 clone → npm install → 上列门全绿 |
+| boot-schema（宿主真实校验器） | 6/6 PASS（**需本机已安装 DSH 宿主**，非 clone 即可复现） |
+| 可安装性（A-full 验收） | 干净 clone → npm install → 第一组四门全绿（boot-schema 需宿主环境，见 §6 分组） |
 
 ### 7.2 安全与发布账
 
-- **脱敏放行门**：`publish-scan --strict-tracked` 当前裁定 **PASS-WITH-WARNINGS**（critical=0；27 条 warning 均为回环地址白名单/文档教学文本/占位样态类，已人工复核）。豁免清单 `.publish-scan-allow.json` 仅 1 条且 reason 公开可见。
+- **脱敏放行门（双口径，2026-09-30 复测）**：
+  - **公开仓 clone 账面（分发物真实账）**：`node tools/publish-scan.mjs --repo . --strict-tracked` → **PASS-WITH-WARNINGS（critical=0，warning=17）**。17 条构成：loopback 白名单 ×12（lib/http-config.js:28 端点守卫、tests/* 5 个文件的探测目标、personas/document-specialist.md:67 与 skills/opensource-sanitize 教学文本 ×4）、`.secrets` 引用 ×3（opensource-sanitize 的扫描模式教学文本）、私网 IP 教学文本 ×1——全部为回环守卫代码或脱敏方法论教学样例，无真实内网信息。
+  - **维护侧工作树账面**：同命令 + `--allow .publish-scan-allow.json` → PASS-WITH-WARNINGS（critical=0，warning=27，waived=2）。比 clone 多出的 10 条全部位于未分发的本地过程物（`review/` 对照底本 8 条 + `backup/` 快照 1 条 + replica-map.json 豁免 2 条）。
+  - 豁免清单 `.publish-scan-allow.json` 仅 1 条且 reason 公开可见；注意 waiver 需显式传 `--allow`（非自动加载）。
 - **端到端复核**：干净 clone 公开仓后六模式敏感 grep（用户级路径 / 盘符绝对路径 / 会话 id / file:/// / 密钥样态 / 本地分析目录引用）**全零命中**。
-- **git 历史注记**：本仓由私有开发仓直接转公开，历史 commit 含开发期过程物（评审中间稿等）。活文件树已按上述门清理；历史面无密钥级内容（扫描器 git-history 层 critical=0，sk- 形态命中均确认为文档占位样态）。历史清洗（history rewrite）为可选运维动作，当前未执行——评审者评估历史面时可依此口径。
+- **git 历史注记**：本仓由私有开发仓直接转公开，历史 commit 含开发期过程物（评审中间稿等）。活文件树已按上述门清理；历史面无密钥级内容（扫描器 git-history 层 critical=0，sk- 形态命中均确认为文档占位样态）。历史清洗（history rewrite）为可选运维动作，当前未执行——评审者评估历史面时可依此口径。已知局限：publish-scan 为自研扫描器，历史面结论尚未经第三方工具（如 gitleaks/trufflehog）交叉验证。
 
 ### 7.3 案例一：一次评审级盘点揪出的 critical 缺陷（已修复）
 
-编写本文前的逐文件盘点（`git ls-files` 对照文档断言）发现：`install-personas.mjs` import 的判据模块 `lib/persona-gate.js` **从未入库**（工具不可运行，且 18 份 OMC persona 的工作树副本回退到旧态——此前的误删事故只恢复了部分文件）。修复路径：按负向自测（verify-imp26 的 33 断言契约）逆向重建判据模块 + `git restore` 归位 18 文件 + 修复测试夹具的 CRLF 静默失效——修复后 verify-imp26 首次 33/0 全绿。此案例作为「文档断言 vs 盘面实测」差异审计价值的记录保留。
+编写本文前的逐文件盘点（`git ls-files` 对照文档断言）发现：`install-personas.mjs` import 的判据模块 `lib/persona-gate.js` **从未入库**（工具不可运行，且 18 份 OMC persona 的工作树副本回退到旧态——此前的误删事故只恢复了部分文件）。修复路径：按负向自测（verify-imp26 的 33 断言契约）逆向重建判据模块 + `git restore` 归位 18 文件 + 修复测试夹具的 CRLF 静默失效——修复后 verify-imp26 首次 33/0 全绿。
+
+**负面证据的自我认定**：该缺陷存在期间，主套件 65 断言全绿且未预警——主套件不覆盖「工具 import 依赖完整性」这一装配面，属测试覆盖的真实盲区；此缺陷能存活到发布前盘点才被发现，说明「测试账面绿」不能替代「逐文件断言核对」。案例按此双重含义保留：既有盘点方法论的价值，也有发布前流程存在漏洞的记录。
 
 ### 7.4 已知限制
 
@@ -206,7 +223,7 @@ node tests/boot-schema-check.mjs  # ALL PASS
 
 本仓是三个 MIT 上游的**移植与再实现**，义务履行（版权与许可全文）见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)：
 
-1. **oh-my-claudecode（OMC）**：19 个基础角色人格的逐字翻译/改写底本。
+1. **oh-my-claudecode（OMC）**：19 个基础角色人格的底本——18 份逐字翻译移植（中文译文逐字对应英文原文），1 份（code-reviewer）在底本上深度改造升级为 v2.3。
 2. **everything-claude-code（ECC）**：4 个专项角色方法论、11 份评审清单、opensource-sanitize 技能与 publish-scan 的方法论来源。
 3. **MACAE（Microsoft）**：任务书模板机制来源；subagent-clarify 的工具级 HITL 机制参考（与 OMC guard 混合来源）。
 
@@ -216,7 +233,7 @@ node tests/boot-schema-check.mjs  # ALL PASS
 
 ## 9. 评审建议路径
 
-1. **先跑后读**：§6 复现命令五门全绿是本文全部断言的可执行性前提。
+1. **先跑后读**：§6 第一组四门（Node 环境即可复现）是本文全部代码断言的可执行性前提；第二组需宿主环境。
 2. **主链路**：`lib/index.js`（工具注册）→ `lib/taskbook.js`（任务书合成与防御面）→ `lib/spawn.js`（会话创建时序）。
 3. **机制深度**：`lib/persona-gate.js` + `tools/verify-imp26.mjs`（判据与负向自测同构）；`tools/crgate.mjs`（评审证据链状态机）。
 4. **安全面**：`tools/publish-scan.mjs`（规则表）+ `.publish-scan-allow.json`（豁免与理由）。
