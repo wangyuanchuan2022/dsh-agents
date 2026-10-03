@@ -39,3 +39,30 @@
         agentOutSubdir: agent-out
         # 紧急刹车：false = 禁用 agent_spawn（agent_roles/agent_taskbook 仍可用）
         allowSpawn: true
+        # ── advisor（内置顾问；契约 docs/advisor-contract.md）────────────────
+        # 默认关：与 memory-evolve 的 advisor 语义重叠，两套不同时开。
+        advisorEnabled: false
+        # 模型回落链：下面两个键任一为空 → 回落上面 tiers.HIGH 的当前路由
+        #（**不继承会话模型**）；响应里的 modelSource 字段标示是否回落。
+        advisorProvider: null
+        advisorModel: null
+        # 数据目录（记录 records.jsonl + PATCH 落盘 config.json）
+        advisorDataDir: null
+        # 右侧面板显示开关（与评审运行解耦）
+        advisorPanelEnabled: true
+        # 送入评审的有界窗口（0 = 无上限）
+        advisorMaxMessages: 60
+        # 评审队列上限（满 = 丢最新）
+        advisorMaxQueued: 32
+        # 单次评审调用超时（ms）
+        advisorCallTimeoutMs: 90000
+        # steer 冷却：投递后 N 个主回合内降级 inject
+        advisorImmuneTurns: 2
+        # 走 steer（实时打断指导）的等级
+        advisorSteerSeverities: [nit, concern, blocker]
+        # info 级是否也注入（默认只记录不打扰）
+        advisorInfoInject: false
+        # 覆盖内置评审提示词（≤8KB，空 = 内置）
+        advisorSystemPrompt: ''
+        # 记录保留条数上限
+        advisorPersistLimit: 200

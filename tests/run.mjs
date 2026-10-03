@@ -1187,6 +1187,26 @@ test('package.json：dsh.client 声明 + exports ./client 指向存在的文件'
   assert.ok(existsSync(clientPath), `client 入口文件必须存在：${clientEntry}`)
 })
 
+// ── advisor 服务端（lib/advisor/**：配置/观察器/运行时/投递/存储/端点） ────
+// 全部用 await 包装（testAsync）：advisor 侧有同步断言也有异步链路（评审 drain），
+// await 对非 Promise 返回值同样成立。
+import * as advisorTests from './advisor.test.mjs'
+for (const suite of [
+  advisorTests.testConfig,
+  advisorTests.testObserver,
+  advisorTests.testRuntime,
+  advisorTests.testDelivery,
+  advisorTests.testStoreAndApi,
+  advisorTests.testIntegration,
+]) {
+  // advisor.test.mjs 用 t(name, fn) 收集用例，这里转成本 run.mjs 的断言器
+  const cases = []
+  suite((name, fn) => cases.push([name, fn]))
+  for (const [name, fn] of cases) {
+    await testAsync(`[advisor] ${name}`, fn)
+  }
+}
+
 // ── 汇总 ──────────────────────────────────────────────────────────────────
 console.log(`dsh-agents tests: ${passed} passed, ${failures.length} failed`)
 for (const failure of failures) console.log(`  FAIL ${failure}`)
