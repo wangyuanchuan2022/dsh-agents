@@ -102,13 +102,14 @@ dsh-agents/
 
 ---
 
-## 4. skills/ — 工作流技能（26 文件 = 23 SKILL.md + README + 2 references）
+## 4. skills/ — 工作流技能（28 文件 = 24 SKILL.md + README + replica-map.json + 2 references）
 
 全部为**纯提示词资产**（SKILL.md 单文件，description 触发词前置——DSH 技能目录只显示 description 前若干百字符）。安装：把技能目录复制到 `~/.agents/skills` 或 `~/.dsh/skills`。
 
-**入口（1）**
+**入口（2）**
 
 - `agent-workflow-router` — 总路由：按意图接到下述技能，固化五条硬协议（派活前置三问 / 档位现场确认禁越档 / 任务书四条必含 / 点对点消息纪律 / 工作区纪律）。
+- `agent-general-route` — 兜底路由：意图表逐条对不上时接管；「体量×并行×上下文×风险」四轴判据裁决派席 or 主会话单干，persona 走双通道（`agent_spawn` 角色库要方法论 / `de_session` 临时 persona 做执行创作），附派前报备、成本闸、回收双查与「何时退回流水线」自限条款。
 
 **流水线（4）**——编排本插件 23 角色
 

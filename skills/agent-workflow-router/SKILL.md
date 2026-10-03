@@ -1,6 +1,6 @@
 ---
 name: agent-workflow-router
-description: "触发：不知道用哪个流程、有哪些工作流、怎么派活、组队做、一键跑完、多角色协作、agent 工作流怎么起、帮我选个流程、这活该谁干、从哪开始｜English: which workflow, workflow router, route to agent pipeline, how to start, pick a skill｜route to agent pipeline, workflow router, pick a skill, how to start. 本技能是 23 件 Agent 工作流技能的路由入口层：按用户意图把请求接到对应技能（全自动实现→agent-autopilot／加功能→agent-feature／修 bug→agent-bugfix／评审→agent-review-squad／需求模糊→requirement-interview／重大方案→consensus-plan／清理→ai-slop-cleaner／长任务循环→agent-loop／收尾核验→verification-loop／交接→session-handoff 等），并固化派活前置三问、档位现场确认、消息纪律、工作区纪律与收尾沉淀五条硬协议。用户没点技能名而描述了任务时，先加载本技能选路，再加载目标技能执行。"
+description: "触发：不知道用哪个流程、有哪些工作流、怎么派活、组队做、一键跑完、多角色协作、agent 工作流怎么起、帮我选个流程、这活该谁干、从哪开始｜English: which workflow, workflow router, route to agent pipeline, how to start, pick a skill｜route to agent pipeline, workflow router, pick a skill, how to start. 本技能是 23 件 Agent 工作流技能的路由入口层：按用户意图把请求接到对应技能（全自动实现→agent-autopilot／加功能→agent-feature／修 bug→agent-bugfix／评审→agent-review-squad／需求模糊→requirement-interview／重大方案→consensus-plan／清理→ai-slop-cleaner／长任务循环→agent-loop／收尾核验→verification-loop／交接→session-handoff 等），并固化派活前置三问、档位现场确认、消息纪律、工作区纪律与收尾沉淀五条硬协议。用户没点技能名而描述了任务时，先加载本技能选路，再加载目标技能执行。意图表逐条对不上（活太杂/跨域/无对应流水线）→ 走兜底的 agent-general-route。"
 ---
 
 # Agent 工作流总入口（agent-workflow-router）
@@ -10,6 +10,7 @@ description: "触发：不知道用哪个流程、有哪些工作流、怎么派
 ## 0. 何时用（何时跳过）
 
 - 用户描述了「想做点什么」但**没点技能名** → 先在本技能选路（§1 意图表），再用 `skill` 加载目标技能。
+- §1 意图表**逐条对不上**（活太杂、跨多个域、或压根没有对应流水线）→ 走兜底 `agent-general-route`：它按「体量×并行×上下文×风险」四轴判据裁决派席 or 主会话单干，并双通道分配 persona。
 - 用户**直接点了技能名**（「用 autopilot」「跑一下 review-squad」）→ 跳过本技能，直接加载目标技能。
 - 用户问「有哪些工作流 / 你们怎么协作」→ 读 §1 + §2 给出路由表与前置门说明。
 
@@ -39,6 +40,7 @@ description: "触发：不知道用哪个流程、有哪些工作流、怎么派
 | Agent 工具面/动作空间设计 | `agent-harness-construction` | observation 格式与完成率 |
 | 想把经验沉淀成技能 | `skill-eval` | `skill_manage create` 前置闸 |
 | 盘点技能库质量 | `skill-stocktake` | 五态裁决 |
+| **表里都对不上 / 活太杂 / 没有对应流水线** | **`agent-general-route`（兜底）** | 四轴判据裁决「派席 or 主会话单干」；双通道给 persona（角色库方法论 / 临时 persona 执行创作）；带回「何时该退回流水线」自限条款 |
 
 ## 2. 前置门（第二跳：先补条件，再派活）
 
