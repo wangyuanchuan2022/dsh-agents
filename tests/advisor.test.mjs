@@ -17,12 +17,13 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
   resolveAdvisorConfig, resolveAdvisorModel, installAdvisor, ADVISOR_ENDPOINT,
+  resolveAdvisorDataDir, DEFAULT_ADVISOR_DATA_DIR, ADVISOR_DATA_DIR_ENV, ADVISOR_TRACE_ENV,
 } from '../lib/advisor/index.js'
 import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, findLastMessageTurnEnd, renderVisibleSurface } from '../lib/advisor/observer.js'
 import { AdvisorRuntime, parseReviewOutput, AdvisorConversation } from '../lib/advisor/runtime.js'
@@ -145,6 +146,94 @@ export function testConfig(t) {
     const r3 = resolveAdvisorModel(unconfigured, () => ({}))
     assert.equal(r3.modelSource, null)
     assert.match(r3.reason, /HIGH/)
+  })
+}
+
+// ── 1b. 数据目录锚定 + 冒烟隔离（2026-10-03 防复发回归门）─────────────────
+// 事故：早先用 join(process.cwd(), '.dsh-agents', 'advisor')，DSH 进程 cwd 是
+// C:\Users\ycwan → 数据落到用户主目录；且冒烟测试直写真实目录，遗留 config.json
+// 把评审默认打开、把模型指到 MEDIUM 档，制造了「默认值偏离」的假象。
+// 回归锁三条：路径锚定、源码级禁 cwd、构造期物理隔离。
+
+export function testDataDir(t) {
+  t('dataDir：缺省锚定稳定路径，绝不随宿主进程 cwd 漂移', () => {
+    assert.equal(resolveAdvisorDataDir(undefined), DEFAULT_ADVISOR_DATA_DIR)
+    assert.equal(resolveAdvisorDataDir(null), DEFAULT_ADVISOR_DATA_DIR)
+    assert.equal(resolveAdvisorDataDir('   '), DEFAULT_ADVISOR_DATA_DIR, '空白串等同未配置')
+    assert.ok(DEFAULT_ADVISOR_DATA_DIR.startsWith(homedir()), '默认路径必须锚在用户级 DSH 目录')
+    assert.ok(
+      !DEFAULT_ADVISOR_DATA_DIR.startsWith(process.cwd()),
+      '默认路径不得落在宿主进程 cwd 下（cwd 随启动目录漂移）',
+    )
+  })
+
+  t('dataDir：优先级 配置 > env > 稳定默认（env 是冒烟隔离的唯一入口）', () => {
+    const prev = process.env[ADVISOR_DATA_DIR_ENV]
+    try {
+      process.env[ADVISOR_DATA_DIR_ENV] = '/tmp/env-isolated-dir'
+      assert.equal(resolveAdvisorDataDir(undefined), '/tmp/env-isolated-dir', 'env 必须覆盖默认')
+      assert.equal(resolveAdvisorDataDir('/explicit/dir'), '/explicit/dir', '显式配置优先于 env')
+    } finally {
+      if (prev === undefined) delete process.env[ADVISOR_DATA_DIR_ENV]
+      else process.env[ADVISOR_DATA_DIR_ENV] = prev
+    }
+  })
+
+  t('dataDir：源码级禁止 process.cwd() 参与 advisor 目录（防漂移复发）', () => {
+    for (const rel of ['../lib/index.js', '../lib/advisor/index.js']) {
+      const src = readFileSync(new URL(rel, import.meta.url), 'utf8')
+      assert.ok(
+        !src.includes('process.cwd()'),
+        `${rel} 不得用 process.cwd() 解析 advisor 数据目录（会随 DSH 启动目录漂移）`,
+      )
+    }
+  })
+
+  t('构造期：env 指向临时目录时真实 dataDir 不被创建/改动（冒烟不得触生产状态）', () => {
+    const stampOf = (p) => {
+      try { const s = statSync(p); return { exists: true, mtimeMs: s.mtimeMs } } catch { return { exists: false, mtimeMs: 0 } }
+    }
+    const tmp = mkdtempSync(join(tmpdir(), 'advisor-datadir-'))
+    const isolated = join(tmp, 'isolated')
+    const before = stampOf(DEFAULT_ADVISOR_DATA_DIR)
+    const prevDir = process.env[ADVISOR_DATA_DIR_ENV]
+    const prevTrace = process.env[ADVISOR_TRACE_ENV]
+    try {
+      process.env[ADVISOR_DATA_DIR_ENV] = isolated
+      const advisor = installAdvisor(fakeCtx(), {}, {})
+      assert.ok(existsSync(isolated), '必须创建 env 指定的隔离目录')
+      assert.deepEqual(
+        stampOf(DEFAULT_ADVISOR_DATA_DIR), before,
+        '构造期不得触碰真实 dataDir（这正是残留 config.json 的成因）',
+      )
+      advisor.dispose()
+    } finally {
+      if (prevDir === undefined) delete process.env[ADVISOR_DATA_DIR_ENV]
+      else process.env[ADVISOR_DATA_DIR_ENV] = prevDir
+      if (prevTrace === undefined) delete process.env[ADVISOR_TRACE_ENV]
+      else process.env[ADVISOR_TRACE_ENV] = prevTrace
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  t('取证：ADVISOR_TRACE_ENV 默认关闭，未设时不产生 trace 设施', () => {
+    const prev = process.env[ADVISOR_TRACE_ENV]
+    try {
+      delete process.env[ADVISOR_TRACE_ENV]
+      const tmp = mkdtempSync(join(tmpdir(), 'advisor-trace-'))
+      process.env[ADVISOR_DATA_DIR_ENV] = tmp
+      const advisor = installAdvisor(fakeCtx(), {}, {})
+      assert.ok(
+        !existsSync(join(tmp, 'chunk-trace.jsonl')),
+        '未开启取证时不得写 chunk-trace（行为必须与取证前一致）',
+      )
+      advisor.dispose()
+      rmSync(tmp, { recursive: true, force: true })
+    } finally {
+      if (prev === undefined) delete process.env[ADVISOR_TRACE_ENV]
+      else process.env[ADVISOR_TRACE_ENV] = prev
+      delete process.env[ADVISOR_DATA_DIR_ENV]
+    }
   })
 }
 

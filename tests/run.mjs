@@ -1193,6 +1193,7 @@ test('package.json：dsh.client 声明 + exports ./client 指向存在的文件'
 import * as advisorTests from './advisor.test.mjs'
 for (const suite of [
   advisorTests.testConfig,
+  advisorTests.testDataDir,
   advisorTests.testObserver,
   advisorTests.testRuntime,
   advisorTests.testDelivery,
