@@ -294,6 +294,43 @@ export function testDataDir(t) {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  // fail-open is a hard requirement (2026-10-03): the diagnostics sink is a
+  // bypass only. A no-permission dir / full disk / unserialisable row may cost us
+  // that one log line, never the review itself.
+  t('fail-open：trace 钩子抛错不得打断评审（仍产出、仍投递、runtime 不置 error）', async () => {
+    const dir = tempDir('failopen')
+    try {
+      const messages = [msg('user', '写点代码'), msg('assistant', '好')]
+      const events = [{ type: 'step/start', data: { turn: 't1' } }]
+      const turnEnd = { type: 'turn/end', seq: 20, data: { turn: 't1', reason: { kind: 'completed' } } }
+      const agent = fakeAgent('sess-fo')
+      agent.session = { id: 'sess-fo', deriveMessages: () => messages, ownEvents: () => [...events, turnEnd] }
+      const { ctx, emit } = fakeCtx()
+      ctx.agents.get = () => agent
+      const llm = fakeLlm('{"notes":[{"severity":"concern","text":"先补测试"}]}')
+      let traceCalls = 0
+      const explodingTrace = () => { traceCalls += 1; throw new Error('simulated: disk full / no permission') }
+      const installed = installAdvisor(ctx, { advisorEnabled: true }, {
+        dataDir: dir,
+        resolveLlm: () => llm,
+        tierTableOf: () => ({ HIGH: { provider: 'h', model: 'hm' } }),
+        trace: explodingTrace,
+      })
+      emit('agent/created', { agent })
+      emit('session/event', agent.session, turnEnd)
+      await installed.ctrl.runtimeOf('sess-fo')?.waitForDrain()
+
+      assert.ok(traceCalls > 0, 'trace 钩子确实被调用过（否则本用例测不到东西）')
+      const snap = installed.ctrl.snapshot()
+      assert.equal(snap.runtime.error, null, 'trace 抛错不得被记成评审失败')
+      assert.equal(snap.records.length, 1, '评审必须照常产出记录')
+      assert.equal(snap.records[0].text, '先补测试')
+      assert.equal(agent.calls.steer.length, 1, 'concern 必须照常 steer 到主 agent')
+      assert.equal(llm.calls.length, 1, '模型调用不受影响')
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
 }
 
 // ── 2. 观察器 ────────────────────────────────────────────────────────────
