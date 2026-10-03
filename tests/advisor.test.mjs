@@ -17,7 +17,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -233,6 +233,65 @@ export function testDataDir(t) {
       if (prev === undefined) delete process.env[ADVISOR_TRACE_ENV]
       else process.env[ADVISOR_TRACE_ENV] = prev
       delete process.env[ADVISOR_DATA_DIR_ENV]
+    }
+  })
+
+  // 事故回归（2026-10-03）：traceSink 曾是构造期求值，于是文档里「重启后 touch 一下
+  // 哨兵即可开、删掉即停」与实现不符——哨兵在进程启动后创建根本不生效，取证被迫
+  // 多重启一轮，第一轮 A/B 拿到的是无效证据（chunk-trace.jsonl 压根没生成）。
+  t('取证哨兵：进程启动后创建 trace-on 立即生效、删除即停（无需重启）', async () => {
+    const dir = tempDir('sentinel')
+    const traceFile = join(dir, 'chunk-trace.jsonl')
+    const sentinel = join(dir, 'trace-on')
+    const prevTrace = process.env[ADVISOR_TRACE_ENV]
+    try {
+      delete process.env[ADVISOR_TRACE_ENV] // 纯哨兵路径，不靠环境变量
+      assert.ok(!existsSync(sentinel), '前置：构造期目录里不得有哨兵')
+
+      const messages = [msg('user', '写点代码'), msg('assistant', '好')]
+      const events = [{ type: 'step/start', data: { turn: 't1' } }]
+      const turnEnd = { type: 'turn/end', seq: 20, data: { turn: 't1', reason: { kind: 'completed' } } }
+      const agent = fakeAgent('sess-sen')
+      agent.session = { id: 'sess-sen', deriveMessages: () => messages, ownEvents: () => [...events, turnEnd] }
+      const { ctx, emit } = fakeCtx()
+      ctx.agents.get = () => agent
+      const llm = fakeLlm('{"notes":[{"severity":"nit","text":"可读性建议"}]}')
+      const installed = installAdvisor(ctx, { advisorEnabled: true }, {
+        dataDir: dir,
+        resolveLlm: () => llm,
+        tierTableOf: () => ({ HIGH: { provider: 'h', model: 'hm' } }),
+      })
+      emit('agent/created', { agent })
+
+      // ① 无哨兵 → 不落 trace
+      emit('session/event', agent.session, turnEnd)
+      await installed.ctrl.runtimeOf('sess-sen')?.waitForDrain()
+      assert.ok(!existsSync(traceFile), '未创建哨兵时不得落 trace')
+
+      // ② 进程运行中创建哨兵 → 立即生效，不得要求重启
+      writeFileSync(sentinel, '')
+      installed.ctrl.triggerReview('sess-sen')
+      await installed.ctrl.runtimeOf('sess-sen')?.waitForDrain()
+      assert.ok(existsSync(traceFile), '★进程启动后创建 trace-on 必须立即生效，无需重启')
+      const rows = readFileSync(traceFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+      assert.ok(rows.some((r) => r.phase === 'call-start'), 'trace 须含 call-start（带 provider/model/maxTokens）')
+      assert.ok(rows.some((r) => r.type === 'text-delta'), 'trace 须含 text-delta 分片')
+      assert.ok(rows.some((r) => r.phase === 'call-end'), 'trace 须含 call-end')
+      const start = rows.find((r) => r.phase === 'call-start')
+      assert.equal(start.model, 'hm', 'call-start 记录的模型必须与当前评审一致')
+
+      // ③ 删除哨兵 → 立即停止
+      const sizeBefore = readFileSync(traceFile, 'utf8').length
+      rmSync(sentinel)
+      installed.ctrl.triggerReview('sess-sen')
+      await installed.ctrl.runtimeOf('sess-sen')?.waitForDrain()
+      assert.equal(readFileSync(traceFile, 'utf8').length, sizeBefore, '删除哨兵后必须立即停止记录')
+
+      installed.dispose()
+    } finally {
+      if (prevTrace === undefined) delete process.env[ADVISOR_TRACE_ENV]
+      else process.env[ADVISOR_TRACE_ENV] = prevTrace
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 }
