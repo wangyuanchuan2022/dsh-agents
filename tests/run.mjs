@@ -1198,6 +1198,7 @@ for (const suite of [
   advisorTests.testRuntime,
   advisorTests.testDelivery,
   advisorTests.testStoreAndApi,
+  advisorTests.testSessionStore,
   advisorTests.testIntegration,
 ]) {
   // advisor.test.mjs 用 t(name, fn) 收集用例，这里转成本 run.mjs 的断言器

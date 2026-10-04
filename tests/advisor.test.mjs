@@ -17,9 +17,10 @@
  */
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import * as nodeFs from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 import {
   resolveAdvisorConfig, resolveAdvisorModel, installAdvisor, ADVISOR_ENDPOINT,
@@ -28,7 +29,7 @@ import {
 import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, findLastMessageTurnEnd, renderVisibleSurface } from '../lib/advisor/observer.js'
 import { AdvisorRuntime, parseReviewOutput, AdvisorConversation } from '../lib/advisor/runtime.js'
 import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage } from '../lib/advisor/delivery.js'
-import { AdvisorStore, normalizeRecord } from '../lib/advisor/store.js'
+import { AdvisorStore, normalizeRecord, sessionConfigPath, CONFIG_FILE } from '../lib/advisor/store.js'
 import { createAdvisorHandler, normalizeAdvisorPatch } from '../lib/advisor/api.js'
 
 // ── 桩件 ──────────────────────────────────────────────────────────────────
@@ -646,18 +647,17 @@ export function testStoreAndApi(t) {
     assert.equal(normalizeRecord({ severity: 'nit', text: '   ' }), null)
   })
 
-  t('存储：config.json 读写（PATCH 落盘面）', () => {
+  // S1 改写（原「config.json 读写」用例）：全局单份 config.json 的读写面已删除，
+  // 配置改为 per-session 分文件（判据 A3/A4/A5 迁到 testSessionStore）。
+  // 这里只锁「删除」这一事实本身 + CONFIG_FILE 常量按计划保留（用于旧文件检测）。
+  t('存储：全局 config.json 读写面已删除，CONFIG_FILE 常量保留', () => {
     const dir = tempDir('cfg')
     try {
       const store = new AdvisorStore({ dataDir: dir, persistLimit: 10 })
-      assert.deepEqual(store.readConfig(), {})
-      store.writeConfig({ enabled: true, provider: 'p', model: 'm' })
-      const read = store.readConfig()
-      assert.equal(read.enabled, true)
-      assert.equal(read.provider, 'p')
-      store.writeConfig({ enabled: false })
-      assert.equal(store.readConfig().enabled, false)
-      assert.equal(store.readConfig().provider, 'p', '部分更新保留既有键')
+      assert.equal(store.readConfig, undefined, 'readConfig 必须已删除（旧全局配置不再读取）')
+      assert.equal(store.writeConfig, undefined, 'writeConfig 必须已删除（旧全局配置不再写入）')
+      assert.equal(CONFIG_FILE, 'config.json', 'CONFIG_FILE 常量按计划保留（供旧文件存在性检测）')
+      assert.equal(store.readSessionConfig('s1').constructor, Object)
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
@@ -809,6 +809,238 @@ export function testIntegration(t) {
       assert.equal(snap.model, 'high-model')
       installed.dispose()
     } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+}
+
+// ── 5b. 会话级配置存储（S1 判据 A1-A16）─────────────────────────────────
+// 每条用例名带判据编号，便于「变异体 → 变红断言」对照。
+
+export function testSessionStore(t) {
+  /** 可替换 fs 门面 + renameSync 探针：在**真正 rename 之前**抓 temp 路径与内容。 */
+  function probeStore(dataDir, options = {}) {
+    const calls = []
+    const facade = {
+      ...nodeFs,
+      renameSync: (from, to) => {
+        calls.push({
+          from,
+          to,
+          content: nodeFs.readFileSync(from, 'utf8'),
+          dirAtRename: dirname(from),
+        })
+        return nodeFs.renameSync(from, to)
+      },
+    }
+    return { store: new AdvisorStore({ dataDir, ...options, fs: facade }), calls }
+  }
+
+  t('A1 路径：同一 sessionId 幂等、不同会话不同文件、恒落 sessions/', () => {
+    const dir = join(tmpdir(), 'dsh-adv-a1')
+    const first = sessionConfigPath(dir, 's1')
+    assert.equal(sessionConfigPath(dir, 's1'), first, '同一 sessionId 必须给出同一路径')
+    assert.notEqual(sessionConfigPath(dir, 's2'), first, '不同会话必须落到不同文件')
+    assert.equal(dirname(first), join(dir, 'sessions'))
+    assert.equal(dirname(sessionConfigPath(dir, 's2')), join(dir, 'sessions'))
+  })
+
+  t('A2 路径穿越：恶意 sessionId 全部被 base64url 关在 sessions/ 内', () => {
+    const dir = join(tmpdir(), 'dsh-adv-a2')
+    // 空串不在此列：空 sessionId 由 S2 的形状层拒收（B8/B20），S1 不可达
+    const hostiles = ['../../evil', 'C:\\x', '..', 'a/b', 'a\\b', '\u0000', '会话🙂', '..\\..\\etc\\passwd']
+    for (const sid of hostiles) {
+      const p = sessionConfigPath(dir, sid)
+      assert.equal(dirname(p), join(dir, 'sessions'), `${JSON.stringify(sid)} 必须留在 sessions/ 子目录内`)
+      assert.match(basename(p), /^[A-Za-z0-9_-]+\.json$/, `${JSON.stringify(sid)} 的文件名必须是 base64url`)
+    }
+  })
+
+  t('A3/A4 读写：不存在读成空对象；三键齐写后再单写 enabled 保留 provider/model', () => {
+    const dir = tempDir('sesscfg')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      assert.deepEqual(store.readSessionConfig('s1'), {}, '文件不存在必须读成空对象')
+      store.writeSessionConfig('s1', { enabled: true, provider: 'p', model: 'm' })
+      assert.deepEqual(store.readSessionConfig('s1'), { enabled: true, provider: 'p', model: 'm' })
+      store.writeSessionConfig('s1', { enabled: false })
+      const after = store.readSessionConfig('s1')
+      assert.equal(after.enabled, false)
+      assert.equal(after.provider, 'p', '部分更新必须保留既有 provider')
+      assert.equal(after.model, 'm', '部分更新必须保留既有 model')
+      assert.equal(existsSync(sessionConfigPath(dir, 's1')), true, '落点必须是该会话自己的文件')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('A5 隔离：两会话互不覆盖，且不再产生旧全局 config.json', () => {
+    const dir = tempDir('sessiso')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      store.writeSessionConfig('s1', { enabled: true, provider: 'p1', model: 'm1' })
+      store.writeSessionConfig('s2', { enabled: false })
+      assert.deepEqual(
+        store.readSessionConfig('s1'), { enabled: true, provider: 'p1', model: 'm1' },
+        '写 s2 不得覆盖 s1 的配置',
+      )
+      assert.deepEqual(store.readSessionConfig('s2'), { enabled: false })
+      assert.equal(existsSync(join(dir, CONFIG_FILE)), false, 'S1 起不得再写旧全局 config.json')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('A6（辅助判据）：写入后 sessions/ 下无 .tmp-advisor-* 残留', () => {
+    const dir = tempDir('tmpclean')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      store.writeSessionConfig('s1', { enabled: false })
+      store.writeSessionConfig('s2', { provider: 'p', model: 'm' })
+      const leftovers = readdirSync(join(dir, 'sessions')).filter((n) => n.startsWith('.tmp-advisor-'))
+      assert.deepEqual(leftovers, [], 'temp 文件必须被 rename 消费掉')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('A9 并发不丢更新：同会话两次并发写，终态同时具备两次写的字段', async () => {
+    const dir = tempDir('sessrace')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      // 故意不 await：async 实现下两次写会读到同一份旧值，后写覆盖前写（丢更新）
+      const first = store.writeSessionConfig('s1', { provider: 'p', model: 'm' })
+      const second = store.writeSessionConfig('s1', { enabled: false })
+      await Promise.all([first, second])
+      assert.deepEqual(
+        store.readSessionConfig('s1'), { enabled: false, provider: 'p', model: 'm' },
+        '终态必须同时具备两次写的字段（同步临界区 = 天然串行）',
+      )
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('A12 原子写探针：rename 前 temp 与目标同目录、内容完整可 parse、探针恰一次', () => {
+    const dir = tempDir('atomic')
+    try {
+      const { store, calls } = probeStore(dir)
+      store.writeSessionConfig('s1', { enabled: true, provider: 'p', model: 'm' })
+      const target = sessionConfigPath(dir, 's1')
+      assert.equal(calls.length, 1, '一次写入必须恰好触发一次 rename（既不零次也不多次）')
+      const [call] = calls
+      assert.equal(call.to, target, 'rename 目标必须是该会话配置文件')
+      assert.notEqual(call.from, target, '必须经由临时文件（直接对目标 rename 等于没做原子写）')
+      assert.equal(call.dirAtRename, dirname(target), 'temp 必须与目标同目录（跨目录 rename 不保证原子）')
+      assert.doesNotThrow(() => JSON.parse(call.content), 'rename 之前 temp 内容必须是完整 JSON')
+      assert.ok(call.content.includes('"provider": "p"'), '探针读到的是本次写入的新内容')
+      assert.equal(existsSync(target), true, 'rename 之后目标文件存在')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('A13 F-12：两个 store 实例写同一目录的不同会话，temp 名互不相同', () => {
+    const dir = tempDir('f12')
+    try {
+      const a = probeStore(dir)
+      const b = probeStore(dir)
+      a.store.writeSessionConfig('s1', { enabled: false })
+      b.store.writeSessionConfig('s2', { enabled: false })
+      assert.equal(a.calls.length, 1)
+      assert.equal(b.calls.length, 1)
+      assert.notEqual(
+        basename(a.calls[0].from), basename(b.calls[0].from),
+        'temp 名必须含各自目标 basename，否则两个实例会抢同一个 temp 路径',
+      )
+      assert.ok(basename(a.calls[0].from).includes(basename(sessionConfigPath(dir, 's1'))))
+      assert.ok(basename(b.calls[0].from).includes(basename(sessionConfigPath(dir, 's2'))))
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('A14 F-13：writeSessionConfig 与 ctrl.patchConfig 都必须是非 async 函数', () => {
+    assert.equal(
+      AdvisorStore.prototype.writeSessionConfig.constructor.name, 'Function',
+      'writeSessionConfig 一旦变 async，同步临界区即失效（N19）',
+    )
+    const dir = tempDir('sync')
+    try {
+      const installed = installAdvisor(fakeCtx(), {}, { dataDir: dir })
+      assert.equal(installed.ctrl.patchConfig.constructor.name, 'Function', 'patchConfig 不得是 async')
+      assert.doesNotThrow(() => installed.ctrl.patchConfig({ enabled: false }))
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  /**
+   * 断言「同步抛错」：实现若改成 async，返回的是 rejected promise 而非抛错，
+   * 这里把它显式判红（并吞掉拒绝，避免未处理拒绝把整个测试进程带崩）。
+   * @param {() => unknown} fn
+   * @returns {Error|null} 捕获到的同步异常
+   */
+  function throwsSync(fn) {
+    let returned
+    try {
+      returned = fn()
+    } catch (error) {
+      return error
+    }
+    if (returned !== null && typeof returned === 'object' && typeof returned.then === 'function') {
+      returned.then(() => {}, () => {})
+      throw new Error('必须是同步抛错（实现返回了 Promise，说明它已变成 async 函数）')
+    }
+    return null
+  }
+
+  t('A15 U2 成对规则：enabled=true 无模型抛同步异常，且目标文件零变化', () => {
+    const dir = tempDir('pairing')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      // ① 已有配置（enabled:false）的会话：非法补丁必须抛错且文件逐字节不变
+      store.writeSessionConfig('s1', { enabled: false })
+      const before = readFileSync(sessionConfigPath(dir, 's1'), 'utf8')
+      assert.match(String(throwsSync(() => store.writeSessionConfig('s1', { enabled: true }))?.message ?? ''), /模型/)
+      assert.equal(
+        readFileSync(sessionConfigPath(dir, 's1'), 'utf8'), before,
+        '校验失败时目标文件必须零变化',
+      )
+      // ② 全新会话：enabled:true 无模型 → 抛错且不落任何文件
+      assert.match(String(throwsSync(() => store.writeSessionConfig('fresh', { enabled: true }))?.message ?? ''), /模型/)
+      assert.equal(existsSync(sessionConfigPath(dir, 'fresh')), false, '校验失败不得留下任何文件')
+      // ③ 单给 provider 同样非法（必须成对给出）
+      assert.match(
+        String(throwsSync(() => store.writeSessionConfig('s2', { enabled: true, provider: 'p' }))?.message ?? ''), /模型/,
+      )
+      assert.equal(existsSync(sessionConfigPath(dir, 's2')), false)
+      // ④ 成对给出 → 放行
+      assert.doesNotThrow(() => store.writeSessionConfig('s3', { enabled: true, provider: 'p', model: 'm' }))
+      assert.equal(store.readSessionConfig('s3').enabled, true)
+      // ⑤ 已有模型时单写 enabled:true → 合法（合并语义，不是重新校验整份历史）
+      store.writeSessionConfig('s4', { provider: 'p', model: 'm' })
+      assert.doesNotThrow(() => store.writeSessionConfig('s4', { enabled: true }))
+      assert.equal(store.readSessionConfig('s4').enabled, true)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('A7 旧文件裁决：旧 config.json 存在即忽略（一次性告警 + 绝不读取 + 不删用户文件）', () => {
+    const dir = tempDir('legacy')
+    try {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        join(dir, CONFIG_FILE),
+        `${JSON.stringify({ enabled: true, provider: 'legacy', model: 'legacy' })}\n`,
+      )
+      const messages = []
+      const logger = { warn: (m) => messages.push(String(m)), error: (m) => messages.push(String(m)) }
+      const installed = installAdvisor(fakeCtx(), { advisorEnabled: false }, { dataDir: dir, logger })
+
+      const legacyWarns = messages.filter((m) => m.includes('旧全局配置'))
+      assert.equal(legacyWarns.length, 1, `旧全局配置必须恰好告警一次（实得 ${legacyWarns.length}）`)
+      assert.equal(existsSync(join(dir, CONFIG_FILE)), true, '不删除用户文件')
+      const snap = installed.ctrl.snapshot('any')
+      assert.notEqual(snap.provider, 'legacy', '旧 config.json 的 provider 不得被读取')
+      assert.notEqual(snap.model, 'legacy', '旧 config.json 的 model 不得被读取')
+      assert.equal(snap.enabled, false, '旧 config.json 的 enabled 也不得生效')
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('A16a/A16c 不变量：advisorEnabled 键仍在 ALLOWED_KEYS 内（键缺席才会 boot 失败）', () => {
+    assert.doesNotThrow(
+      () => resolveAdvisorConfig({ advisorEnabled: true, advisorProvider: null, advisorModel: null }),
+      '键在场时不得抛错（cordis.patch.yml 随包默认带这一行）',
+    )
+    assert.doesNotThrow(() => resolveAdvisorConfig({ advisorEnabled: false }))
+    // 阳性对照：校验器本身是活的（未知 advisor 键确实抛错），否则上面的「不抛」没有意义
+    assert.throws(() => resolveAdvisorConfig({ advisorDefinitelyNotAKey: 1 }), /未知 advisor 配置键/)
   })
 }
 
