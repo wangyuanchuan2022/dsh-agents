@@ -2,8 +2,8 @@
  * advisor 服务端测试（桩宿主：fake ctx / fake session / fake agent / fake llm）。
  *
  * 覆盖四层：
- *  1. **配置校验**（resolveAdvisorConfig）+ **模型回落链**（resolveAdvisorModel）：
- *     配置优先 → HIGH 档 → error 三态，`modelSource` 语义；
+ *  1. **配置校验**（resolveAdvisorConfig）+ **会话级模型来源**（resolveAdvisorModel）：
+ *     只有 'session'（该会话手动指定）与 'unset'（未指定、**无任何兜底**）两态；
  *  2. **观察器**（observer）：两种触发模式 + 模式闩锁 + 增量游标 + 重写检测
  *     + 有界窗口 + advisor 消息自评审排除；
  *  3. **运行时**（runtime）：严格 JSON 输出契约（解析失败 → status=error +
@@ -30,7 +30,7 @@ import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent
 import { AdvisorRuntime, parseReviewOutput, AdvisorConversation } from '../lib/advisor/runtime.js'
 import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage } from '../lib/advisor/delivery.js'
 import { AdvisorStore, normalizeRecord, sessionConfigPath, CONFIG_FILE } from '../lib/advisor/store.js'
-import { createAdvisorHandler, normalizeAdvisorPatch } from '../lib/advisor/api.js'
+import { createAdvisorHandler, normalizeAdvisorPatch, normalizeSessionId, SESSION_ID_MAX } from '../lib/advisor/api.js'
 
 // ── 桩件 ──────────────────────────────────────────────────────────────────
 
@@ -134,19 +134,23 @@ export function testConfig(t) {
     assert.throws(() => resolveAdvisorConfig({ advisorProvider: '', advisorModel: 'm' }), /空字符串/)
   })
 
-  t('模型回落：配置优先 → HIGH 档 → error 三态', () => {
-    const configured = resolveAdvisorConfig({ advisorProvider: 'prov-a', advisorModel: 'm-a' })
-    const r1 = resolveAdvisorModel(configured, () => ({ HIGH: { provider: 'h', model: 'hm' } }))
-    assert.deepEqual([r1.provider, r1.model, r1.modelSource], ['prov-a', 'm-a', 'config'])
-    // 任一为空 → 回落 HIGH
-    const partial = { ...configured, advisorModel: null }
-    const r2 = resolveAdvisorModel(partial, () => ({ HIGH: { provider: 'h', model: 'hm' } }))
-    assert.deepEqual([r2.provider, r2.model, r2.modelSource], ['h', 'hm', 'HIGH'])
-    // HIGH 拿不到 → error（此时必须**未配** advisorProvider/advisorModel）
-    const unconfigured = resolveAdvisorConfig({})
-    const r3 = resolveAdvisorModel(unconfigured, () => ({}))
-    assert.equal(r3.modelSource, null)
-    assert.match(r3.reason, /HIGH/)
+  // S2 重写（原「配置优先 → HIGH 档 → error 三态」）：模型**完全手动指定、
+  // 无任何兜底**——没有 HIGH 档回落，也没有全局 config 兜底。
+  t('B1 模型来源：只有 session/unset 两态，HIGH 表彻底不被读', () => {
+    const configured = resolveAdvisorModel({ provider: 'prov-a', model: 'm-a' })
+    assert.deepEqual([configured.provider, configured.model, configured.modelSource], ['prov-a', 'm-a', 'session'])
+    // 单给其一（半配置）也判 unset——不猜、不补
+    const partial = resolveAdvisorModel({ provider: 'prov-a' })
+    assert.equal(partial.modelSource, 'unset')
+    assert.equal(partial.provider, null)
+    // ★核心判据：传一个「一被调用就抛错」的假 tierTableOf，必须不抛错
+    // （证明 HIGH 档路由表根本没被读；旧实现会调用它并把 modelSource 判成 HIGH）
+    let tierTouched = false
+    const r = resolveAdvisorModel({}, () => { tierTouched = true; throw new Error('HIGH 表被读了') })
+    assert.equal(tierTouched, false, 'resolveAdvisorModel 不得再读取任何档位路由表')
+    assert.equal(r.modelSource, 'unset')
+    assert.deepEqual([r.provider, r.model], [null, null])
+    assert.match(String(r.reason), /未指定评审模型/)
   })
 }
 
@@ -257,11 +261,12 @@ export function testDataDir(t) {
       const { ctx, emit } = fakeCtx()
       ctx.agents.get = () => agent
       const llm = fakeLlm('{"notes":[{"severity":"nit","text":"可读性建议"}]}')
-      const installed = installAdvisor(ctx, { advisorEnabled: true }, {
+      const installed = installAdvisor(ctx, {}, {
         dataDir: dir,
         resolveLlm: () => llm,
-        tierTableOf: () => ({ HIGH: { provider: 'h', model: 'hm' } }),
       })
+      // U2 第 8 条：启用与模型改由**该会话自己的配置**决定（不再有全局开关）
+      installed.ctrl.patchConfig('sess-sen', { enabled: true, provider: 'h', model: 'hm' })
       emit('agent/created', { agent })
 
       // ① 无哨兵 → 不落 trace
@@ -312,18 +317,18 @@ export function testDataDir(t) {
       const llm = fakeLlm('{"notes":[{"severity":"concern","text":"先补测试"}]}')
       let traceCalls = 0
       const explodingTrace = () => { traceCalls += 1; throw new Error('simulated: disk full / no permission') }
-      const installed = installAdvisor(ctx, { advisorEnabled: true }, {
+      const installed = installAdvisor(ctx, {}, {
         dataDir: dir,
         resolveLlm: () => llm,
-        tierTableOf: () => ({ HIGH: { provider: 'h', model: 'hm' } }),
         trace: explodingTrace,
       })
+      installed.ctrl.patchConfig('sess-fo', { enabled: true, provider: 'h', model: 'hm' })
       emit('agent/created', { agent })
       emit('session/event', agent.session, turnEnd)
       await installed.ctrl.runtimeOf('sess-fo')?.waitForDrain()
 
       assert.ok(traceCalls > 0, 'trace 钩子确实被调用过（否则本用例测不到东西）')
-      const snap = installed.ctrl.snapshot()
+      const snap = installed.ctrl.snapshot('sess-fo')
       assert.equal(snap.runtime.error, null, 'trace 抛错不得被记成评审失败')
       assert.equal(snap.records.length, 1, '评审必须照常产出记录')
       assert.equal(snap.records[0].text, '先补测试')
@@ -661,50 +666,58 @@ export function testStoreAndApi(t) {
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
-  t('端点 PATCH 形状校验：未知键 / 空串 / 单给其一 → 抛错；合法放行', () => {
+  t('端点 PATCH 形状校验：sessionId 必填 / 未知键 / 空串 / 单给其一 → 抛错；合法放行', () => {
     assert.throws(() => normalizeAdvisorPatch({}), /至少一个键/)
     assert.throws(() => normalizeAdvisorPatch({ nope: 1 }), /未知键/)
-    assert.throws(() => normalizeAdvisorPatch({ provider: 'p' }), /成对/)
-    assert.throws(() => normalizeAdvisorPatch({ model: 'm' }), /成对/)
-    assert.throws(() => normalizeAdvisorPatch({ provider: '', model: 'm' }), /空字符串/)
-    assert.throws(() => normalizeAdvisorPatch({ provider: 'p', model: '' }), /空字符串/)
-    assert.throws(() => normalizeAdvisorPatch({ enabled: 'yes' }), /布尔/)
-    assert.deepEqual(normalizeAdvisorPatch({ enabled: true }), { enabled: true })
-    assert.deepEqual(normalizeAdvisorPatch({ provider: ' p ', model: ' m ' }), { provider: 'p', model: 'm' })
+    assert.throws(() => normalizeAdvisorPatch({ enabled: true }), /缺少 sessionId/)
+    assert.throws(() => normalizeAdvisorPatch({ sessionId: '  ', enabled: true }), /空字符串/)
+    assert.throws(() => normalizeAdvisorPatch({ sessionId: 7, enabled: true }), /非空字符串/)
+    assert.throws(() => normalizeAdvisorPatch({ sessionId: 'x'.repeat(201), enabled: true }), /上限/)
+    assert.throws(() => normalizeAdvisorPatch({ sessionId: 's', provider: 'p' }), /成对/)
+    assert.throws(() => normalizeAdvisorPatch({ sessionId: 's', model: 'm' }), /成对/)
+    assert.throws(() => normalizeAdvisorPatch({ sessionId: 's', provider: '', model: 'm' }), /空字符串/)
+    assert.throws(() => normalizeAdvisorPatch({ sessionId: 's', provider: 'p', model: '' }), /空字符串/)
+    assert.throws(() => normalizeAdvisorPatch({ sessionId: 's', enabled: 'yes' }), /布尔/)
+    assert.deepEqual(normalizeAdvisorPatch({ sessionId: 's', enabled: true }), { sessionId: 's', enabled: true })
+    assert.deepEqual(
+      normalizeAdvisorPatch({ sessionId: ' s ', provider: ' p ', model: ' m ' }),
+      { sessionId: 's', provider: 'p', model: 'm' },
+    )
   })
 
+  // S2 重写：端点与配置彻底绑定会话（sessionId 必填 + 活跃校验 + 记录按会话过滤）。
+  // 逐条判据（B6/B9-B12/B14-B18/B21/B22）集中在 testPerSessionEndpoint 组。
   t('端点：GET/PATCH/POST 走真实 handler（回环+Origin+形状）', async () => {
     const dir = tempDir('api')
     try {
-      const model = { advisorProvider: 'p', advisorModel: 'm', advisorEnabled: true }
       const { ctx } = fakeCtx()
-      const installed = installAdvisor(ctx, model, {
+      ctx.agents.get = (id) => (id === 's-api' ? fakeAgent('s-api') : undefined)
+      const installed = installAdvisor(ctx, {}, {
         dataDir: dir,
         resolveLlm: () => fakeLlm('{"notes":[]}'),
-        tierTableOf: () => ({ HIGH: { provider: 'h', model: 'hm' } }),
       })
       const handler = createAdvisorHandler({ ctrl: installed.ctrl, loadCatalog: async () => ({ p: ['m'] }) })
 
-      // GET
+      // GET（带 sessionId）
       const res1 = fakeRes()
-      await handler(fakeReq('GET'), res1)
+      await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', '/plugins/dsh-agents/advisor?sessionId=s-api'), res1)
       assert.equal(res1.statusCode, 200)
       const b1 = res1.json()
       assert.equal(b1.ok, true)
-      assert.equal(b1.modelSource, 'config')
+      assert.equal(b1.modelSource, 'unset')
       assert.deepEqual(b1.catalog, { p: ['m'] })
       assert.ok(Array.isArray(b1.records))
-      assert.ok(['idle', 'reviewing', 'disabled', 'error'].includes(b1.runtime.status))
 
-      // PATCH 改 provider/model → modelSource=config，仍 200
+      // PATCH 改 provider/model → modelSource=session，仍 200
       const res2 = fakeRes()
-      await handler(fakeReq('PATCH', { provider: 'p2', model: 'm2' }), res2)
+      await handler(fakeReq('PATCH', { sessionId: 's-api', provider: 'p2', model: 'm2' }), res2)
       assert.equal(res2.statusCode, 200)
-      assert.equal(res2.json().modelSource, 'config')
+      assert.equal(res2.json().modelSource, 'session')
+      assert.equal(res2.json().provider, 'p2')
 
       // PATCH 非法 → 400
       const res3 = fakeRes()
-      await handler(fakeReq('PATCH', { provider: 'only' }), res3)
+      await handler(fakeReq('PATCH', { sessionId: 's-api', provider: 'only' }), res3)
       assert.equal(res3.statusCode, 400)
 
       // POST review（无 agent → no-session，恒 200）
@@ -712,7 +725,7 @@ export function testStoreAndApi(t) {
       await handler(fakeReq('POST', { action: 'review', sessionId: 'ghost' }), res4)
       assert.equal(res4.statusCode, 200)
       assert.equal(res4.json().ok, false)
-      assert.ok(['disabled', 'busy', 'no-session'].includes(res4.json().reason))
+      assert.ok(['disabled', 'unset', 'busy', 'no-session'].includes(res4.json().reason))
 
       // 非回环 → 403
       const res5 = fakeRes()
@@ -750,11 +763,12 @@ export function testIntegration(t) {
       const { ctx, emit } = fakeCtx()
       ctx.agents.get = (id) => (id === 'sess-1' ? agent : undefined)
       const llm = fakeLlm('{"notes":[{"severity":"concern","text":"请补充测试"}]}')
-      const installed = installAdvisor(ctx, { advisorEnabled: true }, {
+      const installed = installAdvisor(ctx, {}, {
         dataDir: dir,
         resolveLlm: () => llm,
-        tierTableOf: () => ({ HIGH: { provider: 'h', model: 'hm' } }),
       })
+      // U2 第 8 条：开启与模型走该会话自己的配置
+      installed.ctrl.patchConfig('sess-1', { enabled: true, provider: 'p', model: 'm' })
       // 发 agent/created（登记 agent + 建运行时）
       emit('agent/created', { agent })
       // 推一个可评审的 turn/end（step → turn/end）
@@ -764,8 +778,8 @@ export function testIntegration(t) {
       // steer 被调用（第一轮不在冷却）
       assert.equal(agent.calls.steer.length, 1, 'concern ∈ steerSeverities 且首次投递应 steer')
       assert.equal(agent.calls.steer[0].source.kind, 'advisor')
-      // 记录落盘
-      const records = installed.ctrl.snapshot().records
+      // 记录落盘（按会话过滤后仍能读到本会话这一条）
+      const records = installed.ctrl.snapshot('sess-1').records
       assert.equal(records.length, 1)
       assert.equal(records[0].text, '请补充测试')
       assert.equal(records[0].outcome, 'steer')
@@ -773,40 +787,53 @@ export function testIntegration(t) {
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
-  t('集成：默认关（advisorEnabled=false）时不建运行时、不调模型', async () => {
+  // U2 第 10 条：用例名与语义同步——「默认关」已不再是**全局开关**，而是
+  // 「该会话没写配置」。
+  t('集成：会话未写配置时不建运行时、不调模型（U2：无全局开关）', async () => {
     const dir = tempDir('off')
     try {
       const agent = fakeAgent('sess-off')
       const llm = fakeLlm('{"notes":[{"severity":"blocker","text":"X"}]}')
       const { ctx, emit } = fakeCtx()
       ctx.agents.get = () => agent
-      const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => llm, tierTableOf: () => ({ HIGH: { provider: 'h', model: 'hm' } }) })
+      const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => llm })
       emit('agent/created', { agent })
       emit('session/event', agent.session, {
         type: 'turn/end', seq: 1, data: { reason: { kind: 'completed' } },
       })
       await new Promise((r) => setTimeout(r, 10))
-      assert.equal(llm.calls.length, 0, '默认关不得发起模型调用')
-      const snap = installed.ctrl.snapshot()
+      assert.equal(llm.calls.length, 0, '未写会话配置不得发起模型调用')
+      const snap = installed.ctrl.snapshot('sess-off')
       assert.equal(snap.enabled, false)
       assert.equal(snap.runtime.status, 'disabled')
       installed.dispose()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
-  t('集成：HIGH 档回落——双空配置时 modelSource=HIGH', () => {
-    const dir = tempDir('fallback')
+  // S2 重写（原「HIGH 档回落」用例）：B2 + B3 —— 未指定模型即不评审，
+  // 且传进来的 HIGH 档路由**完全不被消费**。
+  t('B2/B3 未配模型：不建运行时、不调模型，快照如实报 unset/disabled', async () => {
+    const dir = tempDir('unset')
     try {
-      const { ctx } = fakeCtx()
-      const installed = installAdvisor(ctx, { advisorEnabled: true }, {
+      const agent = fakeAgent('sess-unset')
+      const llm = fakeLlm('{"notes":[]}')
+      const { ctx, emit } = fakeCtx()
+      ctx.agents.get = () => agent
+      const installed = installAdvisor(ctx, {}, {
         dataDir: dir,
-        resolveLlm: () => fakeLlm('{"notes":[]}'),
+        resolveLlm: () => llm,
         tierTableOf: () => ({ HIGH: { provider: 'high-prov', model: 'high-model' } }),
       })
-      const snap = installed.ctrl.snapshot()
-      assert.equal(snap.modelSource, 'HIGH')
-      assert.equal(snap.provider, 'high-prov')
-      assert.equal(snap.model, 'high-model')
+      emit('agent/created', { agent })
+      assert.equal(installed.ctrl.runtimeOf('sess-unset'), undefined, '未配模型不得建运行时')
+      emit('session/event', agent.session, { type: 'turn/end', seq: 1, data: { reason: { kind: 'completed' } } })
+      await new Promise((r) => setTimeout(r, 10))
+      assert.equal(llm.calls.length, 0, '未配模型不得调用任何模型（含 HIGH 档路由）')
+      const snap = installed.ctrl.snapshot('sess-unset')
+      assert.equal(snap.modelSource, 'unset')
+      assert.equal(snap.provider, null)
+      assert.equal(snap.model, null)
+      assert.equal(snap.runtime.status, 'disabled')
       installed.dispose()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
@@ -955,7 +982,7 @@ export function testSessionStore(t) {
     try {
       const installed = installAdvisor(fakeCtx(), {}, { dataDir: dir })
       assert.equal(installed.ctrl.patchConfig.constructor.name, 'Function', 'patchConfig 不得是 async')
-      assert.doesNotThrow(() => installed.ctrl.patchConfig({ enabled: false }))
+      assert.doesNotThrow(() => installed.ctrl.patchConfig('sess-a14', { enabled: false }))
       installed.dispose()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
@@ -1046,12 +1073,15 @@ export function testSessionStore(t) {
 
 // ── HTTP 桩（照抄 run.mjs 的 fakeReq/fakeRes） ───────────────────────────
 
-function fakeReq(method, body, remote = '127.0.0.1', origin = null, host = '127.0.0.1:3080') {
+/** 假请求：url 缺省指向端点本身（**不带 query** → GET 形状非法 → 400）。
+ *  B7 要构造「req.url 为 undefined」，直接把 url 显式传 undefined 即可。 */
+function fakeReq(method, body, remote = '127.0.0.1', origin = null, host = '127.0.0.1:3080', url = ADVISOR_ENDPOINT) {
   const chunks = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
   const headers = { host }
   if (origin) headers.origin = origin
   return {
     method,
+    url,
     socket: { remoteAddress: remote },
     headers,
     [Symbol.asyncIterator]: async function* () { for (const c of chunks) yield c },
@@ -1063,4 +1093,469 @@ function fakeRes() {
   res.end = (payload) => { res.bodyText = payload }
   res.json = () => JSON.parse(res.bodyText)
   return res
+}
+
+// ── 7. S2 会话级模型来源 + 端点绑定 + 记录过滤 + 活跃校验 ────────────────
+// 判据 B2-B22（每条用例名带编号，便于「变异体 → 变红断言」对照）+ S2 开工前置
+// 第 1 条的 F-2 判据。契约依据见 agent-out/plan-per-session-advisor.md S2 段。
+
+/** 最小可用 ctx（无事件面、无 webServer），用于只测端点与会话配置的场景。 */
+function bareCtx(agents) {
+  const ctx = { effect: (f) => f(), inject: () => {} }
+  if (agents !== undefined) ctx.agents = agents
+  ctx.on = () => () => {}
+  return ctx
+}
+
+/** 带活跃会话的 ctx：`agents.get` 只认传入的 id 集合。 */
+function ctxWithSessions(ids, extra = {}) {
+  const set = new Set(ids)
+  return bareCtx({ get: (id) => (set.has(id) ? fakeAgent(id) : undefined), ...extra })
+}
+
+export function testPerSessionEndpoint(t) {
+  /** 通用装配：给定活跃会话集合，返回 handler 与 installed。 */
+  function boot(dir, activeIds, deps = {}) {
+    const handlers = new Map()
+    const ctx = bareCtx({ get: (id) => (activeIds.includes(id) ? fakeAgent(id) : undefined) })
+    ctx.emit = (event, ...args) => { for (const fn of handlers.get(event) ?? []) fn(...args) }
+    ctx.on = (event, fn) => {
+      const list = handlers.get(event) ?? []
+      list.push(fn)
+      handlers.set(event, list)
+      return () => handlers.set(event, (handlers.get(event) ?? []).filter((f) => f !== fn))
+    }
+    const llm = deps.llm ?? fakeLlm('{"notes":[]}')
+    const installed = installAdvisor(ctx, deps.config ?? {}, { dataDir: dir, resolveLlm: () => llm, ...(deps.extra ?? {}) })
+    const handler = createAdvisorHandler({ ctrl: installed.ctrl, loadCatalog: async () => ({ 'prov-a': ['m-a'] }) })
+    return { ctx, llm, installed, handler }
+  }
+
+  const getUrl = (sessionId) => `${ADVISOR_ENDPOINT}?sessionId=${encodeURIComponent(sessionId)}`
+
+  // ── S2 开工前置第 1 条：F-2 跨层取值洞 ────────────────────────────────
+  // S1 的三层合并（全局 config ← 无会话过渡槽 ← 会话配置）会造出两种越界开启：
+  //  ① 过渡槽里 enabled=true + 会话只有模型 → 该会话被「自动开启」，用的模型从未用于开启它；
+  //  ② config.advisorEnabled=true → 开启所有会话。
+  //  S2 删掉过渡层后两种都不可能；本判据把「槽文件**真的躺在盘上**」也钉住，
+  //  防止日后有人加回「读一个共享开关」的路径。
+  t('F-2 前置1：别的会话 / 遗留过渡槽 / 全局配置都不得单独开启本会话', () => {
+    const dir = tempDir('f2')
+    try {
+      const { installed } = boot(dir, [])
+      // ① 会话 A 完整开启（模型 + enabled）
+      installed.ctrl.patchConfig('sess-A', { enabled: true, provider: 'p', model: 'm' })
+      assert.equal(installed.ctrl.snapshot('sess-A').enabled, true, '阳性对照：A 自己是开启的')
+
+      // ② 遗留的「无会话过渡槽」文件**真的躺在盘上**（base64url('advisor-endpoint')）
+      mkdirSync(join(dir, 'sessions'), { recursive: true })
+      writeFileSync(
+        sessionConfigPath(dir, 'advisor-endpoint'),
+        `${JSON.stringify({ enabled: true, provider: 'slot-prov', model: 'slot-model' })}\n`,
+      )
+
+      // 会话 B 什么都没写 → 必须仍是关闭，且不得借用 A 或槽的模型
+      const b = installed.ctrl.snapshot('sess-B')
+      assert.equal(b.enabled, false, '★A 的 enabled=true 不得开启 B')
+      assert.equal(b.modelSource, 'unset')
+      assert.equal(b.provider, null)
+      assert.equal(b.model, null)
+      assert.equal(installed.ctrl.runtimeOf('sess-B'), undefined, 'B 不得被建出运行时')
+      assert.equal(existsSync(sessionConfigPath(dir, 'advisor-endpoint')), true, '不得自动删除用户/遗留文件')
+
+      // 前置 2 的字面量锁：过渡层连同它的常量名一起消失（源码级零命中）。
+      const indexSrc = readFileSync(new URL('../lib/advisor/index.js', import.meta.url), 'utf8')
+      assert.equal(indexSrc.includes('SESSIONLESS_SLOT'), false, '★S2 必须删掉 S1 的无会话过渡槽常量及其全部引用')
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B13 兼容键不承载生效语义：config.advisorEnabled=true 不开启任何会话，且恰好一条 deprecated 告警', () => {
+    const dir = tempDir('depr')
+    try {
+      const messages = []
+      const { ctx } = ctxWithSessions(['sess-dep'])
+      const installed = installAdvisor(ctx, { advisorEnabled: true, advisorProvider: 'gp', advisorModel: 'gm' }, {
+        dataDir: dir,
+        resolveLlm: () => fakeLlm('{"notes":[]}'),
+        logger: { warn: (m) => messages.push(String(m)), error: (m) => messages.push(String(m)) },
+      })
+      const snap = installed.ctrl.snapshot('sess-dep')
+      assert.equal(snap.enabled, false, '★全局 advisorEnabled=true 不得开启会话')
+      assert.equal(snap.modelSource, 'unset', '全局 advisorProvider/advisorModel 也不得兜底')
+      assert.equal(snap.provider, null)
+      assert.equal(snap.model, null)
+      const deprecations = messages.filter((m) => m.includes('已废弃'))
+      assert.equal(deprecations.length, 1, `必须恰好一条 deprecated 告警（实得 ${deprecations.length}：${JSON.stringify(messages)}）`)
+      assert.match(deprecations[0], /advisorEnabled/)
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // ── 端点形状 ───────────────────────────────────────────────────────
+  t('B6 GET：缺 sessionId / 空 sessionId → 400；带活跃 sessionId → 200', async () => {
+    const dir = tempDir('b6')
+    try {
+      const { installed, handler } = boot(dir, ['s-b6'])
+      const cases = [
+        [ADVISOR_ENDPOINT, 400],
+        [getUrl(''), 400],
+        [getUrl('   '), 400],
+      ]
+      for (const [url, want] of cases) {
+        const res = fakeRes()
+        await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', url), res)
+        assert.equal(res.statusCode, want, `${url} 应得 ${want}`)
+      }
+      const ok = fakeRes()
+      await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', getUrl('s-b6')), ok)
+      assert.equal(ok.statusCode, 200)
+      assert.equal(ok.json().ok, true)
+      assert.equal(ok.json().modelSource, 'unset')
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B7 GET：req.url 为 undefined → 400（仅假宿主可构造，真机不可达，仍必须 fail-closed）', async () => {
+    const dir = tempDir('b7')
+    try {
+      const { installed, handler } = boot(dir, ['s-b7'])
+      // 注意：默认参数在「显式传 undefined」时会被替换，因此只能建好 req 再抹掉 url
+      const req = fakeReq('GET')
+      req.url = undefined
+      const res = fakeRes()
+      await handler(req, res)
+      assert.equal(res.statusCode, 400)
+      assert.match(res.json().error, /URL/)
+      // 阳性对照：url 可读但没带 sessionId → 400（不同分支、同样 fail-closed）
+      const res2 = fakeRes()
+      await handler(fakeReq('GET'), res2)
+      assert.equal(res2.statusCode, 400)
+      assert.equal(typeof res2.json().error, 'string')
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B8 PATCH：sessionId 缺 / 非串 / 空白 / 超 200 → 400 且零写盘', async () => {
+    const dir = tempDir('b8')
+    try {
+      const { installed, handler } = boot(dir, ['s-b8'])
+      const bodies = [
+        { enabled: false },
+        { sessionId: 42, enabled: false },
+        { sessionId: '   ', enabled: false },
+        { sessionId: 'x'.repeat(SESSION_ID_MAX + 1), enabled: false },
+      ]
+      for (const body of bodies) {
+        const res = fakeRes()
+        await handler(fakeReq('PATCH', body), res)
+        assert.equal(res.statusCode, 400, `${JSON.stringify(body).slice(0, 40)} 应得 400`)
+      }
+      assert.equal(existsSync(sessionConfigPath(dir, 's-b8')), false, '形状非法不得留下任何文件')
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B19/AC-06 路径形状：sessionId 含 / \\ .. → 400（形状层直拒，不依赖 base64url 兜底）', async () => {
+    const dir = tempDir('b19')
+    try {
+      const { installed, handler } = boot(dir, ['s-b19'])
+      for (const bad of ['a/b', 'a\\b', '..', '../etc', 'a/../b']) {
+        // GET 与 PATCH 两条路径都要拒
+        const g = fakeRes()
+        await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', getUrl(bad)), g)
+        assert.equal(g.statusCode, 400, `GET ?sessionId=${bad} 应得 400`)
+        const p = fakeRes()
+        await handler(fakeReq('PATCH', { sessionId: bad, enabled: false }), p)
+        assert.equal(p.statusCode, 400, `PATCH sessionId=${bad} 应得 400`)
+      }
+      // 阳性对照：合法 id 仍然放行（否则本判据可能是空门）
+      const ok = fakeRes()
+      await handler(fakeReq('PATCH', { sessionId: 's-b19', enabled: false }), ok)
+      assert.equal(ok.statusCode, 200)
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B20/AC-07 同一校验函数：GET/PATCH/POST 三处 sessionId 形状校验走同一函数（源码级）', () => {
+    const source = readFileSync(new URL('../lib/advisor/api.js', import.meta.url), 'utf8')
+    const callSites = source
+      .split('\n')
+      .filter((line) => line.includes('normalizeSessionId(') && !line.includes('export function normalizeSessionId'))
+    assert.equal(callSites.length, 3, `normalizeSessionId 必须恰好被三处引用（实得 ${callSites.length}：${JSON.stringify(callSites)}）`)
+    // 阳性对照：该函数确实存在且真的会拒非法输入
+    assert.equal(typeof normalizeSessionId, 'function')
+    assert.throws(() => normalizeSessionId('..'), /路径分隔符/)
+    assert.equal(normalizeSessionId(' ok '), 'ok')
+  })
+
+  // ── PATCH 落盘语义 ─────────────────────────────────────────────────
+  t('B9/B10 PATCH：{sessionId,provider,model} → 200 且只落该会话文件；单给其一 → 400', async () => {
+    const dir = tempDir('b9')
+    try {
+      const { installed, handler } = boot(dir, ['s-b9'])
+      const ok = fakeRes()
+      await handler(fakeReq('PATCH', { sessionId: 's-b9', provider: 'prov-a', model: 'm-a' }), ok)
+      assert.equal(ok.statusCode, 200)
+      assert.equal(ok.json().modelSource, 'session')
+      assert.deepEqual(JSON.parse(readFileSync(sessionConfigPath(dir, 's-b9'), 'utf8')), {
+        provider: 'prov-a', model: 'm-a',
+      })
+      // 另一个会话的文件**不得**被创建（端点不再有全局落点）
+      assert.equal(existsSync(sessionConfigPath(dir, 'advisor-endpoint')), false, '不得复活 S1 的无会话过渡槽')
+      const bad = fakeRes()
+      await handler(fakeReq('PATCH', { sessionId: 's-b9', provider: 'only' }), bad)
+      assert.equal(bad.statusCode, 400)
+      assert.deepEqual(
+        JSON.parse(readFileSync(sessionConfigPath(dir, 's-b9'), 'utf8')),
+        { provider: 'prov-a', model: 'm-a' },
+        '非法补丁不得改动已落盘内容',
+      )
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B11/B12 U2 成对：{sessionId,enabled:true} 无模型 → 400 且零写盘；{sessionId,enabled:false} → 200', async () => {
+    const dir = tempDir('b11')
+    try {
+      const { installed, handler } = boot(dir, ['s-b11'])
+      const bad = fakeRes()
+      await handler(fakeReq('PATCH', { sessionId: 's-b11', enabled: true }), bad)
+      assert.equal(bad.statusCode, 400, '未配模型时不得开启')
+      assert.equal(existsSync(sessionConfigPath(dir, 's-b11')), false, '失败补丁必须零写盘')
+      const off = fakeRes()
+      await handler(fakeReq('PATCH', { sessionId: 's-b11', enabled: false }), off)
+      assert.equal(off.statusCode, 200, 'enabled:false 单键合法')
+      assert.deepEqual(JSON.parse(readFileSync(sessionConfigPath(dir, 's-b11'), 'utf8')), { enabled: false })
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B4/B5 运行时随会话配置重建：改模型后 runtimeOf(sid).provider 漂移，两会话互不影响', () => {
+    const dir = tempDir('b4')
+    try {
+      const { installed, ctx } = boot(dir, ['s-a', 's-b'])
+      installed.ctrl.patchConfig('s-a', { enabled: true, provider: 'p1', model: 'm1' })
+      installed.ctrl.patchConfig('s-b', { enabled: true, provider: 'q1', model: 'n1' })
+      // 运行时由宿主 agent/created 事件建出（与真实链路同序：先有配置，后建运行时）
+      ctx.emit('agent/created', { agent: fakeAgent('s-a') })
+      ctx.emit('agent/created', { agent: fakeAgent('s-b') })
+      const firstA = installed.ctrl.runtimeOf('s-a')
+      assert.equal(firstA.provider, 'p1')
+      assert.equal(installed.ctrl.runtimeOf('s-b').provider, 'q1')
+
+      installed.ctrl.patchConfig('s-a', { provider: 'p2', model: 'm2', enabled: true })
+      const secondA = installed.ctrl.runtimeOf('s-a')
+      assert.equal(secondA.provider, 'p2', '★改配置必须重建该会话的运行时')
+      assert.notEqual(secondA, firstA, '重建必须产生新实例')
+      assert.equal(installed.ctrl.runtimeOf('s-b').provider, 'q1', '★B 会话不得被 A 的改动带偏')
+
+      // 关掉 A 不影响 B
+      installed.ctrl.patchConfig('s-a', { enabled: false })
+      assert.equal(installed.ctrl.snapshot('s-a').enabled, false)
+      assert.equal(installed.ctrl.snapshot('s-b').enabled, true)
+      assert.equal(installed.ctrl.runtimeOf('s-a'), undefined)
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B17/F-4 并发 PATCH：handler 级两条在途，终态绝不出现 enabled=true 而无 model', async () => {
+    const dir = tempDir('b17')
+    try {
+      const { installed, handler } = boot(dir, ['s-b17'])
+      const resA = fakeRes()
+      const resB = fakeRes()
+      // 两条都不 await，先各自跑到 await 点再交错汇合
+      await Promise.all([
+        handler(fakeReq('PATCH', { sessionId: 's-b17', provider: 'p', model: 'm' }), resA),
+        handler(fakeReq('PATCH', { sessionId: 's-b17', enabled: true }), resB),
+      ])
+      assert.ok([200, 400].includes(resA.statusCode) && [200, 400].includes(resB.statusCode), '两条都只能 200 或 400')
+      // ★先把微任务排空再读盘：否则「写盘被推迟到 await 之后」的变异体会让本用例
+      //   读到「文件还没出现」而空过——空过的并发判据比没有判据更危险。
+      await new Promise((r) => setImmediate(r))
+      const path = sessionConfigPath(dir, 's-b17')
+      if (!existsSync(path)) {
+        // 两条都被拒 → 终态「什么都没写」同样自洽（U2 成对规则先于写盘生效）
+        assert.equal(resA.statusCode, 400, '未写盘只允许两条都被拒（否则有写没落）')
+        assert.equal(resB.statusCode, 400)
+        installed.dispose()
+        return
+      }
+      const final = JSON.parse(readFileSync(path, 'utf8'))
+      assert.notEqual(
+        final.enabled === true && (!final.provider || !final.model), true,
+        `终态不得 enabled=true 而无 model（实得 ${JSON.stringify(final)}）`,
+      )
+      // 顺序敏感性：先模型后开启 → 应合并成 enabled+model 自洽状态
+      const dir2 = tempDir('b17b')
+      try {
+        const h2 = boot(dir2, ['s-x'])
+        const r1 = fakeRes(); const r2 = fakeRes()
+        await h2.handler(fakeReq('PATCH', { sessionId: 's-x', provider: 'p', model: 'm' }), r1)
+        await h2.handler(fakeReq('PATCH', { sessionId: 's-x', enabled: true }), r2)
+        assert.equal(r2.statusCode, 200)
+        assert.deepEqual(JSON.parse(readFileSync(sessionConfigPath(dir2, 's-x'), 'utf8')), {
+          enabled: true, provider: 'p', model: 'm',
+        })
+        h2.installed.dispose()
+      } finally { rmSync(dir2, { recursive: true, force: true }) }
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // ── 活跃校验（Q-1 / AC-20 / AC-21 / AC-22）─────────────────────────
+  t('B14 活跃校验：agents.get 拿不到的 sessionId → GET/PATCH 均 404 且目标文件零变化', async () => {
+    const dir = tempDir('b14')
+    try {
+      const { installed, handler } = boot(dir, ['s-live'])
+      // ghost 会话先落一份既有配置：404 分支不得读它、更不得改它
+      installed.ctrl.patchConfig('s-ghost', { enabled: true, provider: 'gp', model: 'gm' })
+      const path = sessionConfigPath(dir, 's-ghost')
+      const before = readFileSync(path, 'utf8')
+
+      const g = fakeRes()
+      await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', getUrl('s-ghost')), g)
+      assert.equal(g.statusCode, 404)
+      assert.equal(readFileSync(path, 'utf8'), before, 'GET 404 不得改动文件')
+
+      const p = fakeRes()
+      await handler(fakeReq('PATCH', { sessionId: 's-ghost', provider: 'hack', model: 'hack' }), p)
+      assert.equal(p.statusCode, 404)
+      assert.equal(readFileSync(path, 'utf8'), before, '★PATCH 404 必须是零写盘')
+
+      // 阳性对照：活跃会话同一请求 200（否则本判据是空门）
+      const ok = fakeRes()
+      await handler(fakeReq('PATCH', { sessionId: 's-live', provider: 'p', model: 'm' }), ok)
+      assert.equal(ok.statusCode, 200)
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B18/AC-21/F-14 404 响应体零泄露：不含 catalog/records/runtime/provider/model 任一键，也不含他人配置与记录文本', async () => {
+    const dir = tempDir('b18')
+    try {
+      const { installed, handler } = boot(dir, ['s-A'])
+      installed.ctrl.patchConfig('s-A', { enabled: true, provider: 'secret-prov-A', model: 'secret-model-A' })
+      const store = new AdvisorStore({ dataDir: dir })
+      store.append({ sessionId: 's-A', severity: 'nit', text: 'secret-note-A', createdAt: 10, outcome: 'recorded' })
+      store.append({ sessionId: 's-A', severity: 'concern', text: 'secret-note-B', createdAt: 11, outcome: 'recorded' })
+
+      const res = fakeRes()
+      await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', getUrl('s-missing')), res)
+      assert.equal(res.statusCode, 404)
+      const body = res.bodyText
+      for (const key of ['catalog', 'records', 'runtime', 'provider', 'model']) {
+        assert.equal(body.includes(key), false, `404 响应体不得含 "${key}" 键（实得 ${body}）`)
+      }
+      for (const leak of ['secret-prov-A', 'secret-model-A', 'secret-note-A', 'secret-note-B']) {
+        assert.equal(body.includes(leak), false, `404 响应体不得泄露 ${leak}`)
+      }
+      // 阳性对照：真正活跃的会话 GET 是完整载荷（含那几键）——否则上面的「不含」是空门
+      const ok = fakeRes()
+      await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', getUrl('s-A')), ok)
+      assert.equal(ok.statusCode, 200)
+      for (const key of ['catalog', 'records', 'runtime', 'provider', 'model']) {
+        assert.equal(ok.bodyText.includes(`"${key}"`), true, `200 载荷应含 "${key}"`)
+      }
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B15/Q-5 records 按会话过滤：GET ?sessionId=s1 只返回 s1 的记录', async () => {
+    const dir = tempDir('b15')
+    try {
+      const { installed, handler } = boot(dir, ['s1', 's2'])
+      const store = new AdvisorStore({ dataDir: dir })
+      store.append({ sessionId: 's1', severity: 'nit', text: 'note-s1', createdAt: 10, outcome: 'recorded' })
+      store.append({ sessionId: 's2', severity: 'nit', text: 'note-s2', createdAt: 20, outcome: 'recorded' })
+
+      const r1 = fakeRes()
+      await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', getUrl('s1')), r1)
+      const b1 = r1.json()
+      assert.deepEqual(b1.records.map((r) => r.text), ['note-s1'], '★s1 只能看到自己的记录')
+
+      const r2 = fakeRes()
+      await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', getUrl('s2')), r2)
+      assert.deepEqual(r2.json().records.map((r) => r.text), ['note-s2'])
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B16/Q-3 POST：对 ghost → 200+no-session 且零模型调用；对「存在但未配模型」→ 200+unset', async () => {
+    const dir = tempDir('b16')
+    try {
+      const llm = fakeLlm('{"notes":[]}')
+      const { installed, handler } = boot(dir, ['s-live'], { llm })
+      const ghost = fakeRes()
+      await handler(fakeReq('POST', { action: 'review', sessionId: 'ghost' }), ghost)
+      assert.equal(ghost.statusCode, 200, 'POST 契约恒 200')
+      assert.deepEqual(ghost.json(), { ok: false, reason: 'no-session' })
+      assert.equal(llm.calls.length, 0, '★活跃校验失败不得消耗额度')
+
+      const unset = fakeRes()
+      await handler(fakeReq('POST', { action: 'review', sessionId: 's-live' }), unset)
+      assert.equal(unset.statusCode, 200)
+      assert.deepEqual(unset.json(), { ok: false, reason: 'unset' })
+      assert.equal(llm.calls.length, 0)
+
+      // 配了模型但未开启 → disabled（与 unset 区分开）
+      installed.ctrl.patchConfig('s-live', { provider: 'p', model: 'm' })
+      const off = fakeRes()
+      await handler(fakeReq('POST', { action: 'review', sessionId: 's-live' }), off)
+      assert.deepEqual(off.json(), { ok: false, reason: 'disabled' })
+
+      // POST 的 sessionId 也走同一形状校验
+      const bad = fakeRes()
+      await handler(fakeReq('POST', { action: 'review', sessionId: 'a/b' }), bad)
+      assert.equal(bad.statusCode, 400)
+      const missing = fakeRes()
+      await handler(fakeReq('POST', { action: 'review' }), missing)
+      assert.equal(missing.statusCode, 400)
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('B21/AC-20 ctx.agents 三态（缺失 / 无 get / get 抛错）全部 fail-closed 且零写盘', async () => {
+    for (const [label, agents] of [
+      ['agents 缺失', undefined],
+      ['agents 无 get', {}],
+      ['agents.get 抛错', { get: () => { throw new Error('boom') } }],
+    ]) {
+      const dir = tempDir('b21')
+      try {
+        const ctx = bareCtx(agents)
+        ctx.on = () => () => {}
+        const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => fakeLlm('{"notes":[]}') })
+        const handler = createAdvisorHandler({ ctrl: installed.ctrl, loadCatalog: async () => ({}) })
+        const g = fakeRes()
+        await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', getUrl('s-x')), g)
+        assert.ok([400, 404].includes(g.statusCode), `${label}：GET 必须 fail-closed（实得 ${g.statusCode}）`)
+        const p = fakeRes()
+        await handler(fakeReq('PATCH', { sessionId: 's-x', provider: 'p', model: 'm' }), p)
+        assert.ok([400, 404].includes(p.statusCode), `${label}：PATCH 必须 fail-closed（实得 ${p.statusCode}）`)
+        assert.equal(existsSync(sessionConfigPath(dir, 's-x')), false, `${label}：必须零写盘`)
+        const post = fakeRes()
+        await handler(fakeReq('POST', { action: 'review', sessionId: 's-x' }), post)
+        assert.equal(post.statusCode, 200)
+        assert.deepEqual(post.json(), { ok: false, reason: 'no-session' })
+        installed.dispose()
+      } finally { rmSync(dir, { recursive: true, force: true }) }
+    }
+  })
+
+  t('B22/AC-22 残余风险固化：同回环来源 + 有效活跃 sessionId 的请求**被接受**（断言 200，不是断言被拒绝）', async () => {
+    const dir = tempDir('b22')
+    try {
+      const { installed, handler } = boot(dir, ['s-owner'])
+      const g = fakeRes()
+      await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', getUrl('s-owner')), g)
+      assert.equal(g.statusCode, 200, '宿主无鉴权钩子：同回环来源对活跃会话的请求就是会被接受')
+      const p = fakeRes()
+      await handler(fakeReq('PATCH', { sessionId: 's-owner', provider: 'p', model: 'm' }), p)
+      assert.equal(p.statusCode, 200)
+      assert.equal(installed.ctrl.snapshot('s-owner').model, 'm')
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
 }
