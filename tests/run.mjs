@@ -1195,6 +1195,7 @@ for (const suite of [
   advisorTests.testConfig,
   advisorTests.testDataDir,
   advisorTests.testObserver,
+  advisorTests.testObserverIdempotency,
   advisorTests.testRuntime,
   advisorTests.testDelivery,
   advisorTests.testStoreAndApi,

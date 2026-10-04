@@ -27,10 +27,10 @@ import {
   resolveAdvisorConfig, resolveAdvisorModel, installAdvisor, ADVISOR_ENDPOINT,
   resolveAdvisorDataDir, DEFAULT_ADVISOR_DATA_DIR, ADVISOR_DATA_DIR_ENV, ADVISOR_TRACE_ENV,
 } from '../lib/advisor/index.js'
-import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, findLastMessageTurnEnd, renderVisibleSurface } from '../lib/advisor/observer.js'
+import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, renderVisibleSurface, SEEN_WINDOW_SIZE } from '../lib/advisor/observer.js'
 import { AdvisorRuntime, parseReviewOutput, AdvisorConversation } from '../lib/advisor/runtime.js'
 import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage } from '../lib/advisor/delivery.js'
-import { AdvisorStore, normalizeRecord, sessionConfigPath, CONFIG_FILE } from '../lib/advisor/store.js'
+import { AdvisorStore, normalizeRecord, sessionConfigPath, sessionSeenPath, CONFIG_FILE } from '../lib/advisor/store.js'
 import { createAdvisorHandler, normalizeAdvisorPatch, normalizeSessionId, SESSION_ID_MAX } from '../lib/advisor/api.js'
 
 // ── 桩件 ──────────────────────────────────────────────────────────────────
@@ -317,6 +317,11 @@ export function testDataDir(t) {
       emit('agent/created', { agent })
 
       // ① 无哨兵 → 不落 trace
+      // S3 夹具对齐：step/start 也经总线投递（生产里它与 turn/end 走同一条
+      // session/event 路径，见 dsh-agent-loop/lib/index.js:968 → dsh-session
+      // append → session/event）。观察器自 S3 起流式累积 steppedTurns，
+      // 替身必须复刻这条链路，否则「该 turn 进过 step」无从判定。
+      emit('session/event', agent.session, events[0])
       emit('session/event', agent.session, turnEnd)
       await installed.ctrl.runtimeOf('sess-sen')?.waitForDrain()
       assert.ok(!existsSync(traceFile), '未创建哨兵时不得落 trace')
@@ -371,6 +376,8 @@ export function testDataDir(t) {
       })
       installed.ctrl.patchConfig('sess-fo', { enabled: true, provider: 'h', model: 'hm' })
       emit('agent/created', { agent })
+      // S3 夹具对齐：step/start 也经总线投递（生产同走 session/event 一条路径）
+      emit('session/event', agent.session, events[0])
       emit('session/event', agent.session, turnEnd)
       await installed.ctrl.runtimeOf('sess-fo')?.waitForDrain()
 
@@ -398,24 +405,27 @@ export function testObserver(t) {
       { type: 'step/start', data: { turn: 't1' } },
       { type: 'turn/end', seq: 10, data: { turn: 't1', reason: { kind: 'completed' } } },
     ]
+    // S3 起 steppedTurns 走流式累积：step/start 与 turn/end 必须**逐条**经
+    // handleEvent（生产里二者同走 session/event 一条路径）。只喂最后一个事件
+    // 等于让替身「诞生于 turn/end 那一刻」，那不是生产形状。
+    observer.handleEvent('s1', events, events[0])
     observer.handleEvent('s1', events, events[1])
     assert.equal(deltas.length, 1)
     assert.equal(deltas[0].messageCount, 1)
     // 用户掐断的回合不评审
     const aborted = { type: 'turn/end', seq: 11, data: { turn: 't2', reason: { kind: 'aborted' } } }
-    observer.handleEvent('s1', [...events, { type: 'step/start', data: { turn: 't2' } }, aborted], aborted)
+    const step2 = { type: 'step/start', data: { turn: 't2' } }
+    observer.handleEvent('s1', [...events, step2, aborted], step2)
+    observer.handleEvent('s1', [...events, step2, aborted], aborted)
     assert.equal(deltas.length, 1, 'aborted 回合不得触发评审')
   })
 
-  t('观察器：turn/end 事件谓词与 step 检测', () => {
+  t('观察器：turn/end 事件谓词（reason.kind 白名单）', () => {
     assert.equal(isReviewableTurnEnd({ type: 'turn/end', data: { reason: { kind: 'max-tokens' } } }), true)
     assert.equal(isReviewableTurnEnd({ type: 'turn/end', data: { reason: { kind: 'blocked' } } }), false)
-    const events = [
-      { type: 'step/start', data: { turn: 't1' } },
-      { type: 'turn/end', seq: 5, data: { turn: 't1' } },
-    ]
-    assert.equal(findLastMessageTurnEnd(events).seq, 5)
-    assert.equal(findLastMessageTurnEnd([{ type: 'turn/end', seq: 9, data: { turn: 't9' } }]), undefined)
+    // S3 起「最新进入过 step 的 turn/end」不再由 findLastMessageTurnEnd 扫描
+    // 事件数组得出（该导出已按计划删除），改由流式累积的 steppedTurns 判定——
+    // 行为由下方 C1/C4/C13 判据直接锁。
   })
 
   t('观察器：agentic 模式——人类输入 + 未评审 assistant 增量才评审；发过 turn/end 即闩锁', () => {
@@ -490,6 +500,400 @@ export function testObserver(t) {
     assert.equal(isAdvisorMessage(messages[0]), true)
     // 0 = 无上限
     assert.equal(renderVisibleSurface(messages, 0).messageCount, 4)
+  })
+}
+
+// ── 2b. S3 幂等门（每 turn 恰好评审一次）───────────────────────────────
+// 判据 C1-C9 / C11 / C13 / C15-C17。契约依据见 plan S3 段。
+//
+// **窗口容量一律引用 `SEEN_WINDOW_SIZE` 常量，禁止写死字面量**（计划 v4 必修 2）：
+// M 将来翻转时，写死的数字会把正确实现误判红。
+
+/**
+ * 观察器层的「评审记账桩」。
+ *
+ * 观察器每评审一次就推一条 —— 它与 `llm.calls` **一一对应**（`onDelta` 是
+ * `runtime.enqueue` 的唯一入口，而 enqueue 每条增量恰好产生一次模型调用）。
+ * C9 明确要求「两轮共用一个记账桩」，本桩就是那个桩：跨「重启」两轮
+ * **传同一个实例**，于是 `llm.calls.length` 是累计值，`重启后新增 === 0`
+ * 就是「累计值未变」。
+ */
+function reviewLedger() {
+  return { calls: [] }
+}
+
+/**
+ * 标准 stepped 会话夹具。
+ *
+ * `feed` 把事件**逐个**喂进 `handleEvent`（复刻生产：装配层对每一条
+ * `session/event` 都转发一次，`step/start` 与 `turn/end` 走同一条路径）。
+ * 绝不把整个数组只喂最后一个——那正是流式 `steppedTurns` 会漏判的形状。
+ */
+function steppedHarness(options = {}) {
+  const sessionId = options.sessionId ?? 's-s3'
+  const ledger = options.ledger ?? reviewLedger()
+  const steppedEnds = []
+  let messages = options.messages ?? [msg('user', '做 X'), msg('assistant', '好了')]
+  const session = {
+    id: sessionId,
+    ownEvents: () => [],
+    deriveMessages: () => messages,
+  }
+  /** 每个 turn/end 后给会话表面补一条新消息（生产真实形状）。
+   *  缺了它，增量游标不前进、`renderAndEmit` 恒返空 —— ledger 数到的就成了
+   *  「游标放行次数」而不是「评审次数」，C5/C6/C16 会集体空转。
+   *  C15 半②要构造「无可见内容」，故该处显式关掉。 */
+  const growOnTurn = options.growOnTurn !== false
+  const observer = new AdvisorObserver({
+    getSession: () => session,
+    sessionMeta: () => ({ sessionId, sessionName: sessionId }),
+    loadSeen: options.loadSeen,
+    saveSeen: options.saveSeen,
+    seenWindowSize: options.seenWindowSize,
+    onDelta: (id, delta) => { ledger.calls.push({ sessionId: id, delta }) },
+    onSteppedTurnEnd: () => { steppedEnds.push(1) },
+    logger: options.logger ?? { warn: () => {}, error: () => {} },
+  })
+  const feed = (...events) => {
+    for (const e of events) {
+      if (growOnTurn && e?.type === 'turn/end') {
+        messages = [...messages, msg('assistant', `回合 ${String(e.data?.turn ?? '')} 的产出`)]
+      }
+      observer.handleEvent(sessionId, [], e)
+    }
+  }
+  return {
+    observer,
+    ledger,
+    session,
+    feed,
+    setMessages: (next) => { messages = next },
+    steppedEndCount: () => steppedEnds.length,
+  }
+}
+
+/** 一条完整的可评审 turn：`{ turn, seq }` → [step/start, turn/end]。 */
+function turnGroup(turn, seq, kind = 'completed') {
+  return [
+    { type: 'step/start', data: { turn } },
+    { type: 'turn/end', seq, data: { turn, reason: { kind } } },
+  ]
+}
+
+/** 读某个会话落盘的 seen 快照（形状不对时判红而不是静默 undefined）。 */
+function readSeenFile(dir, sessionId) {
+  const path = sessionSeenPath(dir, sessionId)
+  assert.equal(existsSync(path), true, `seen 文件必须落盘：${path}`)
+  return JSON.parse(readFileSync(path, 'utf8'))
+}
+
+export function testObserverIdempotency(t) {
+  t('C1 同一 (sid,turn,seq) 的 turn/end 连发两次 → 只评审一次', () => {
+    const h = steppedHarness()
+    const group = turnGroup('t1', 10)
+    h.feed(group[0]); h.feed(group[1])
+    assert.equal(h.ledger.calls.length, 1, '首次必须评审')
+    h.feed(group[1]) // 同一事件重放
+    assert.equal(h.ledger.calls.length, 1, '★同一事件重放不得二次评审')
+    assert.equal(h.steppedEndCount(), 1, '重放不得二次递减投递冷却')
+  })
+
+  t('C2 「step/start」+「turn/end」整组重放 → 仍 1 次，冷却只递减 1 次', () => {
+    const h = steppedHarness()
+    const group = turnGroup('t1', 10)
+    for (const e of group) h.feed(e)
+    assert.equal(h.ledger.calls.length, 1)
+    for (const e of group) h.feed(e) // 整组重放
+    assert.equal(h.ledger.calls.length, 1, '★整组重放不得二次评审')
+    assert.equal(h.steppedEndCount(), 1, '★onSteppedTurnEnd 恰好 1 次')
+  })
+
+  // ── C13【AC-14】二元组键（本轮判别的核心）────────────────────────────
+  t('C13/AC-14 同 turn 不同 seq 只评审一次（幂等身份是二元组，seq 不参与）', () => {
+    const h = steppedHarness()
+    h.feed(...turnGroup('t1', 10))
+    assert.equal(h.ledger.calls.length, 1, '首次评审')
+    // 同一 turn 的**另一条 seq 副本**（重连重放/重发可达）：
+    // turn 相同、seq 不同。若实现退回三元组键 `${sid}::${turn}::${seq}`，
+    // 这条会算成新 turn 而二次评审 —— 判红点在此。
+    h.feed(...turnGroup('t1', 99))
+    assert.equal(h.ledger.calls.length, 1, '★同 turn 不同 seq 必须是同一次评审（必红 N23）')
+    assert.equal(h.steppedEndCount(), 1, '冷却也不得二次递减')
+  })
+
+  t('C4 无 step 的 turn/end 不评审', () => {
+    const h = steppedHarness()
+    h.feed({ type: 'turn/end', seq: 10, data: { turn: 't9', reason: { kind: 'completed' } } })
+    assert.equal(h.ledger.calls.length, 0, '★没进过 step 的回合不评审')
+  })
+
+  t('C5 不同 turn 各评一次', () => {
+    const h = steppedHarness()
+    h.feed(...turnGroup('t1', 10))
+    h.feed(...turnGroup('t2', 20))
+    assert.equal(h.ledger.calls.length, 2, '两个不同 turn 必须各评一次（二元组键不得过粗）')
+  })
+
+  t('C3 意见注入后再触发：仍评 1 次，且送模型的 markdown 不含 advisor 消息文本', () => {
+    const h = steppedHarness()
+    h.feed(...turnGroup('t1', 10))
+    assert.equal(h.ledger.calls.length, 1)
+    const md = h.ledger.calls[0].delta.markdown
+    assert.equal(md.includes('内部意见'), false, 'advisor 自己的消息不得进下一轮评审输入')
+    // 同 turn 重放（意见已被注入之后）
+    h.feed(...turnGroup('t1', 10))
+    assert.equal(h.ledger.calls.length, 1, '★注入意见不改变幂等判定')
+  })
+
+  t('C8 agentic 分支幂等：同一 user/message seq 重放两次 → 1 次', () => {
+    const messages = [msg('user', 'hi'), msg('assistant', 'ok')]
+    const h = steppedHarness({ messages })
+    const evt = { type: 'user/message', seq: 7, data: { source: { kind: 'user' } }, surfaceOp: 'append' }
+    h.feed(evt)
+    assert.equal(h.ledger.calls.length, 1, '人类输入 + assistant 增量应评审')
+    h.feed(evt)
+    assert.equal(h.ledger.calls.length, 1, '★同一 user/message 重放不得二次评审')
+  })
+
+  t('C7 disposeSession 只清内存：seen 文件必须留在盘上', () => {
+    const dir = tempDir('c7')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      const h = steppedHarness({
+        loadSeen: (id) => store.readSeen(id),
+        saveSeen: (id, state) => store.writeSeen(id, state),
+      })
+      h.feed(...turnGroup('t1', 10))
+      assert.equal(h.ledger.calls.length, 1)
+      assert.equal(existsSync(sessionSeenPath(dir, 's-s3')), true)
+      const before = readFileSync(sessionSeenPath(dir, 's-s3'), 'utf8')
+
+      h.observer.disposeSession('s-s3')
+      assert.equal(
+        readFileSync(sessionSeenPath(dir, 's-s3'), 'utf8'), before,
+        '★disposeSession 不得删除或改写 seen 文件（否则会话重建即重复计费）',
+      )
+      // 内存确实清了：同实例上同 turn 再来一次，仍会被文件里的键拦下
+      h.feed(...turnGroup('t1', 10))
+      assert.equal(h.ledger.calls.length, 1, 'dispose 后重建不得二次评审')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // ── C6 / C16 有界窗口 + 已裁决水位（**M 取自常量，不写死**）────────────
+  t('C6 有界淘汰：灌 M+1 个 turn 后最旧的已出窗口，且 reviewed.length <= M', () => {
+    const dir = tempDir('c6')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      const h = steppedHarness({
+        loadSeen: (id) => store.readSeen(id),
+        saveSeen: (id, state) => store.writeSeen(id, state),
+      })
+      for (let i = 1; i <= SEEN_WINDOW_SIZE + 1; i++) h.feed(...turnGroup(`t${i}`, i))
+      assert.equal(h.ledger.calls.length, SEEN_WINDOW_SIZE + 1, '阳性对照：每个新 turn 都评审')
+      const seen = readSeenFile(dir, 's-s3')
+      assert.ok(seen.reviewed.length <= SEEN_WINDOW_SIZE, `窗口必须受 M 约束（实得 ${seen.reviewed.length} > ${SEEN_WINDOW_SIZE}）`)
+      assert.equal(seen.reviewed.includes('s-s3::t1'), false, '★最旧的键必须已被淘汰（否则本判据测不到窗口）')
+      assert.equal(seen.reviewed.includes(`s-s3::t${SEEN_WINDOW_SIZE + 1}`), true, '最新的键必须在窗口内')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('C16/F-2 水位拦截窗口外重放：最旧的键已被淘汰，仍不得二次评审（必红 N24）', () => {
+    const dir = tempDir('c16')
+    try {
+      // ── 第 1 轮：灌 M+1 个 turn 并评审
+      const ledger = reviewLedger() // 两轮共用同一个记账桩
+      const store1 = new AdvisorStore({ dataDir: dir })
+      const h1 = steppedHarness({
+        ledger,
+        loadSeen: (id) => store1.readSeen(id),
+        saveSeen: (id, state) => store1.writeSeen(id, state),
+      })
+      for (let i = 1; i <= SEEN_WINDOW_SIZE + 1; i++) h1.feed(...turnGroup(`t${i}`, i))
+      const afterFirst = ledger.calls.length
+      assert.equal(afterFirst, SEEN_WINDOW_SIZE + 1, '阳性对照：第一轮每个 turn 评一次')
+      assert.equal(
+        readSeenFile(dir, 's-s3').reviewed.includes('s-s3::t1'), false,
+        '★前置：t1 必须已出窗口（否则拦它的是集合而不是水位，C16 就是空门）',
+      )
+
+      // ── 第 2 轮：丢弃实例，同 dataDir 新建实例（= 进程重启），重放最旧的 turn/end
+      const store2 = new AdvisorStore({ dataDir: dir })
+      const h2 = steppedHarness({
+        ledger,
+        loadSeen: (id) => store2.readSeen(id),
+        saveSeen: (id, state) => store2.writeSeen(id, state),
+      })
+      // 重放**整组**（含 step/start）：新实例的流式 steppedTurns 是空的，
+      // 若不重放 step/start，「无 step 不评审」会替水位拦下这一条，
+      // 去掉水位也照样绿 —— 那就是空门。
+      h2.feed(...turnGroup('t1', 1))
+      assert.equal(
+        ledger.calls.length - afterFirst, 0,
+        '★窗口外的旧 turn 重放不得二次评审（水位拦截，必红 N24）',
+      )
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('C17 半 A 已裁决语义：无 step 的 turn/end（被跳过）仍推进水位并落盘', () => {
+    const dir = tempDir('c17a')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      const h = steppedHarness({
+        loadSeen: (id) => store.readSeen(id),
+        saveSeen: (id, state) => store.writeSeen(id, state),
+      })
+      h.feed(...turnGroup('t1', 10))
+      assert.equal(h.ledger.calls.length, 1)
+      // 无 step 的可评审 turn/end：跳过评审，但水位必须推进（C17 半 A）
+      h.feed({ type: 'turn/end', seq: 20, data: { turn: 't-skip', reason: { kind: 'completed' } } })
+      assert.equal(h.ledger.calls.length, 1, '无 step 的回合不评审')
+      assert.equal(
+        readSeenFile(dir, 's-s3').lastReviewedSeq, 20,
+        '★被跳过的 turn/end 也必须推进并持久化水位（语义是「已裁决」不是「已评审」）',
+      )
+      // 水位已在 20：重放更早的可评审回合 → 不评审
+      h.feed(...turnGroup('t1', 10))
+      assert.equal(h.ledger.calls.length, 1, '水位内的重放不得二次评审')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // ── C17 半 B：seq 回退行为写死（水位优先，不 fallback）────────────────
+  t('C17 半 B seq 回退：watermark=100 + seq=50 + 该 turn 未命中 reviewed → 不评审、不抛错、不写集合', () => {
+    const dir = tempDir('c17b')
+    try {
+      // 直接预置水位（不经过评审），模拟「宿主 seq 回退/重编号」的不支持场景
+      new AdvisorStore({ dataDir: dir }).writeSeen('s-s3', { reviewed: [], lastReviewedSeq: 100 })
+      const h = steppedHarness({
+        loadSeen: (id) => new AdvisorStore({ dataDir: dir }).readSeen(id),
+        saveSeen: (id, state) => new AdvisorStore({ dataDir: dir }).writeSeen(id, state),
+      })
+      assert.doesNotThrow(() => { h.feed(...turnGroup('t1', 50)) }, '水位命中不得抛错')
+      assert.equal(h.ledger.calls.length, 0, '★水位优先：该 turn 不评审（若 fallback 到集合就会评审）')
+      assert.equal(
+        readSeenFile(dir, 's-s3').reviewed.includes('s-s3::t1'), false,
+        '★被水位拦下的 turn 不得写进 reviewed（那等于把「已裁决」混同「已评审」）',
+      )
+      // 阳性对照：seq 越过水位后，同一会话仍能正常评审（否则本判据可能是「什么都不做」的假绿）
+      h.feed(...turnGroup('t2', 150))
+      assert.equal(h.ledger.calls.length, 1, '越过水位的新 turn 必须正常评审')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // ── C9 / C11 跨重启持久化（E2 / A13）──────────────────────────────────
+  // ★C9 必须走**真实装配**（installAdvisor → index.js 注入 → store 落盘）。
+  //   早先版本在测试里自建 observer 并手工接 store，结果「把 index.js 的
+  //   loadSeen/saveSeen 注入摘掉」这条变异**完全看不见**（实测 150/0 假绿）——
+  //   断言验的是测试替身，不是交付物。装配层接线必须由装配层判据覆盖。
+  t('C9/E2/A13 跨重启不二次计费：**增量口径**——重启后新增调用数 === 0', async () => {
+    const dir = tempDir('c9')
+    try {
+      // 两轮共用**同一个记账桩** ledger：`calls` 是累计值，
+      // 所以「重启后新增 === 0」= `calls.length` 未变。
+      // （写成 `llm.calls.length === 0` 会让正确实现也红——那是第一版写法的坑。）
+      const ledger = { calls: [] }
+      const llm = {
+        stream: (options) => {
+          ledger.calls.push(options)
+          return (async function* () { yield { type: 'text-delta', text: '{"notes":[]}' } })()
+        },
+      }
+      const turnEnd = { type: 'turn/end', seq: 10, data: { turn: 't1', reason: { kind: 'completed' } } }
+      const step = { type: 'step/start', data: { turn: 't1' } }
+      /** 装配一个全新 advisor（同 dataDir），喂一轮事件后排空。 */
+      async function bootAndFeed(turnEnds) {
+        const messages = [msg('user', '请写代码'), msg('assistant', '好的')]
+        const agent = fakeAgent('s-c9')
+        agent.session = { id: 's-c9', deriveMessages: () => messages, ownEvents: () => [step, ...turnEnds] }
+        const { ctx, emit } = fakeCtx()
+        ctx.agents.get = (id) => (id === 's-c9' ? agent : undefined)
+        const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => llm })
+        installed.ctrl.patchConfig('s-c9', { enabled: true, provider: 'p', model: 'm' })
+        emit('agent/created', { agent })
+        emit('session/event', agent.session, step)
+        for (const te of turnEnds) emit('session/event', agent.session, te)
+        await installed.ctrl.runtimeOf('s-c9')?.waitForDrain()
+        installed.dispose() // 丢弃实例（= 进程重启）
+      }
+
+      await bootAndFeed([turnEnd])
+      assert.equal(ledger.calls.length, 1, '阳性对照：第一轮恰好评审 1 次')
+
+      // ── 同 dataDir 重新装配（全新 store + 全新 observer），重放整组
+      await bootAndFeed([turnEnd])
+      assert.equal(
+        ledger.calls.length - 1, 0,
+        '★重启后重放同一 turn：新增调用数必须为 0（增量口径）',
+      )
+      // 同 turn 的不同 seq 副本跨重启同样不得二次计费（二元组键跨重启保持）
+      await bootAndFeed([{ type: 'turn/end', seq: 77, data: { turn: 't1', reason: { kind: 'completed' } } }])
+      assert.equal(ledger.calls.length - 1, 0, '跨重启的同 turn 不同 seq 副本也不得二次计费')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('C11/E2 seen fail-open：seen 文件预置坏 JSON → 仍正常评审 1 次 + 一条告警，不抛错', () => {
+    const dir = tempDir('c11')
+    try {
+      const path = sessionSeenPath(dir, 's-s3')
+      mkdirSync(join(dir, 'sessions'), { recursive: true })
+      writeFileSync(path, '{ 这不是 JSON')
+      // 抓 seen 面的告警（store 走 console.error；写入失败只在 seen 面告警一次）
+      const captured = []
+      const original = console.error
+      console.error = (...args) => { captured.push(args.map(String).join(' ')) }
+      try {
+        const store = new AdvisorStore({ dataDir: dir })
+        const h = steppedHarness({
+          loadSeen: (id) => store.readSeen(id),
+          saveSeen: (id, state) => store.writeSeen(id, state),
+        })
+        assert.doesNotThrow(() => { h.feed(...turnGroup('t1', 10)) }, '坏 seen 文件不得把评审循环带崩')
+        assert.equal(h.ledger.calls.length, 1, '★fail-open 之后评审照常发生')
+      } finally {
+        console.error = original
+      }
+      const warns = captured.filter((m) => m.includes('seen'))
+      assert.equal(warns.length, 1, `坏 JSON 必须恰好一条 seen 告警（实得 ${warns.length}：${JSON.stringify(captured)}）`)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // ── C15 三者职责边界 ─────────────────────────────────────────────────
+  t('C15 职责边界：推进 cursor 不写持久集合；写持久集合不推 cursor', () => {
+    const dir = tempDir('c15')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      // ① agentic 分支只推进 cursor，**不得**写 seen 集合
+      const agentic = steppedHarness({
+        sessionId: 's-c15a',
+        messages: [msg('user', 'hi'), msg('assistant', 'ok')],
+        loadSeen: (id) => store.readSeen(id),
+        saveSeen: (id, state) => store.writeSeen(id, state),
+      })
+      agentic.feed({ type: 'user/message', data: { source: { kind: 'user' } }, surfaceOp: 'append' })
+      assert.equal(agentic.ledger.calls.length, 1, '阳性对照：agentic 分支确实评审了')
+      assert.equal(
+        existsSync(sessionSeenPath(dir, 's-c15a')), false,
+        '★推进 cursor 不得写幂等集合（agentic 分支的幂等由游标负责，不进 seen 面）',
+      )
+
+      // ② 反向：写 seen 集合时**不得**顺带推进 cursor。
+      //    构造「键已写入但渲染不出增量」（无可见消息）的一轮：
+      //    reviewed 落了盘，cursor 必须仍为 0。
+      const blank = steppedHarness({
+        sessionId: 's-c15b',
+        messages: [], // 无任何可见消息 → renderVisibleSurface 返回 null
+        growOnTurn: false, // 且不让 feed 补消息，否则「无可见内容」构造失效
+        loadSeen: (id) => store.readSeen(id),
+        saveSeen: (id, state) => store.writeSeen(id, state),
+      })
+      blank.feed(...turnGroup('t1', 10))
+      assert.equal(blank.ledger.calls.length, 0, '无可见内容时不得产生评审增量')
+      const seen = readSeenFile(dir, 's-c15b')
+      assert.equal(seen.reviewed.includes('s-c15b::t1'), true, '阳性对照：键确实已写进持久集合')
+      assert.equal(
+        blank.observer.cursorFor('s-c15b').cursor, 0,
+        '★写持久集合不得顺带推进 cursor（游标只由 renderAndEmit 的成功路径推进）',
+      )
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 }
 
@@ -818,7 +1222,8 @@ export function testIntegration(t) {
       installed.ctrl.patchConfig('sess-1', { enabled: true, provider: 'p', model: 'm' })
       // 发 agent/created（登记 agent + 建运行时）
       emit('agent/created', { agent })
-      // 推一个可评审的 turn/end（step → turn/end）
+      // 推一个可评审的 turn/end（step → turn/end，**两条都经总线**，复刻生产）
+      emit('session/event', agent.session, events[0])
       emit('session/event', agent.session, events[1])
       // 等评审排空
       await installed.ctrl.runtimeOf('sess-1')?.waitForDrain()
@@ -830,6 +1235,36 @@ export function testIntegration(t) {
       assert.equal(records.length, 1)
       assert.equal(records[0].text, '请补充测试')
       assert.equal(records[0].outcome, 'steer')
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // C14【AC-17】集成链路幂等：防「observer 放行了、runtime 又重复处理」。
+  // 走真实 installAdvisor 装配（observer + runtime + store 全链），断言的是
+  // **模型调用数**而非 delta 数——delta 绿但 runtime 二次消费，只有这条抓得到。
+  t('C14/AC-17 集成链路幂等：同一 turn/end 经总线投递两次 → waitForDrain 后只调 1 次模型', async () => {
+    const dir = tempDir('c14')
+    try {
+      const messages = [msg('user', '请写代码'), msg('assistant', '好的')]
+      const events = [{ type: 'step/start', data: { turn: 't1' } }]
+      const turnEnd = { type: 'turn/end', seq: 20, data: { turn: 't1', reason: { kind: 'completed' } } }
+      const agent = fakeAgent('sess-c14')
+      agent.session = { id: 'sess-c14', deriveMessages: () => messages, ownEvents: () => [...events, turnEnd] }
+      const { ctx, emit } = fakeCtx()
+      ctx.agents.get = (id) => (id === 'sess-c14' ? agent : undefined)
+      const llm = fakeLlm('{"notes":[{"severity":"concern","text":"补测试"}]}')
+      const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => llm })
+      installed.ctrl.patchConfig('sess-c14', { enabled: true, provider: 'p', model: 'm' })
+      emit('agent/created', { agent })
+
+      // 整组投递两次（重连重放的形状：step/start 与 turn/end 一起重来）
+      for (let round = 0; round < 2; round++) {
+        emit('session/event', agent.session, events[0])
+        emit('session/event', agent.session, turnEnd)
+      }
+      await installed.ctrl.runtimeOf('sess-c14')?.waitForDrain()
+      assert.equal(llm.calls.length, 1, '★同一 turn 经真实装配只允许一次模型调用')
+      assert.equal(installed.ctrl.snapshot('sess-c14').records.length, 1, '记录也不得重复落盘')
       installed.dispose()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
@@ -1660,9 +2095,10 @@ export function testPerSessionEndpoint(t) {
       const messages = [msg('user', '请写代码'), msg('assistant', '好的')]
       const events = [{ type: 'step/start', data: { turn: 't1' } }]
       const turnEnd = { type: 'turn/end', seq: 20, data: { turn: 't1', reason: { kind: 'completed' } } }
-      // ownEvents 必须返回**完整事件日志**（含 turn/end）：观察器用
-      // findLastMessageTurnEnd(events) 反查「最新进入过 step 的 turn/end」，
-      // 日志里缺 turn/end 就直接 return，一个 delta 都不会产出。
+      // ownEvents 必须返回**完整事件日志**（含 turn/end）：装配层把它整份传给
+      // observer.handleEvent。S3 起「该 turn 进过 step」不再由扫描该数组得出，
+      // 但本用例仍需 step/start **经总线**真实到达（生产同走 session/event），
+      // 否则流式 steppedTurns 为空，一个 delta 都不会产出。
       const agentA = fakeAgent('s-A')
       agentA.session = { id: 's-A', deriveMessages: () => messages, ownEvents: () => [...events, turnEnd] }
       const agentB = fakeAgent('s-B')
@@ -1680,6 +2116,7 @@ export function testPerSessionEndpoint(t) {
       const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => fakeLlm('这不是 JSON') })
       installed.ctrl.patchConfig('s-A', { enabled: true, provider: 'p', model: 'm' })
       ctx.emit('agent/created', { agent: agentA })
+      ctx.emit('session/event', agentA.session, events[0])
       ctx.emit('session/event', agentA.session, turnEnd)
       await installed.ctrl.runtimeOf('s-A')?.waitForDrain()
 
