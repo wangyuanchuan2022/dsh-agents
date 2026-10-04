@@ -17,6 +17,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import * as nodeFs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -121,17 +122,59 @@ export function testConfig(t) {
     assert.equal(c.advisorPersistLimit, 200)
   })
 
-  t('配置：非法形状大声抛错（未知键 / 单给 provider / 负数 / 超长提示词 / 未知等级）', () => {
+  t('配置：非法形状大声抛错（未知键 / 负数 / 超长提示词 / 未知等级 / 空 dataDir）', () => {
     assert.throws(() => resolveAdvisorConfig({ advisorFoo: 1 }), /未知 advisor 配置键/)
     assert.doesNotThrow(() => resolveAdvisorConfig({ tiers: {}, clarifyMode: 'interactive' }), '非 advisor 键不得被当成 advisor 配置校验')
-    assert.throws(() => resolveAdvisorConfig({ advisorProvider: 'p' }), /成对/)
-    assert.throws(() => resolveAdvisorConfig({ advisorModel: 'm' }), /成对/)
     assert.throws(() => resolveAdvisorConfig({ advisorMaxQueued: -1 }), /非负整数/)
     assert.throws(() => resolveAdvisorConfig({ advisorMaxMessages: 1.5 }), /非负整数/)
     assert.throws(() => resolveAdvisorConfig({ advisorSystemPrompt: 'x'.repeat(9 * 1024) }), /上限/)
     assert.throws(() => resolveAdvisorConfig({ advisorSteerSeverities: ['ultra'] }), /未知等级/)
     assert.throws(() => resolveAdvisorConfig({ advisorSteerSeverities: 'nit' }), /必须是数组/)
-    assert.throws(() => resolveAdvisorConfig({ advisorProvider: '', advisorModel: 'm' }), /空字符串/)
+    assert.throws(() => resolveAdvisorConfig({ advisorDataDir: '' }), /空字符串/)
+  })
+
+  // P1-2 必修：advisorProvider/advisorModel 已废弃且**不承载生效语义**，因此
+  // 半填/空串/非字符串都必须**放行**——为三个零作用的键让整个插件 boot 失败，
+  // 且（抛错发生在告警之前）运维者永远看不到那条「不影响运行时行为」的告警。
+  t('P1-2 半填废弃键不 boot 失败：四种手滑写法全部放行，并恰好一条 deprecated 告警', () => {
+    const halfFilled = [
+      { advisorProvider: 'gp' },
+      { advisorModel: 'gm' },
+      { advisorProvider: '' },
+      { advisorProvider: 0 },
+    ]
+    for (const raw of halfFilled) {
+      const dir = tempDir('p1-2')
+      try {
+        const messages = []
+        const logger = { warn: (m) => messages.push(String(m)), error: (m) => messages.push(String(m)) }
+        let booted = true
+        let advisor = null
+        try {
+          advisor = installAdvisor(fakeCtx(), raw, { dataDir: dir, resolveLlm: () => fakeLlm('{"notes":[]}'), logger })
+        } catch (error) {
+          booted = false
+          assert.fail(`${JSON.stringify(raw)} 不得让插件 boot 失败：${error?.message ?? error}`)
+        }
+        assert.equal(booted, true, `${JSON.stringify(raw)} 必须能装起来`)
+        const deprecations = messages.filter((m) => m.includes('已废弃'))
+        assert.equal(deprecations.length, 1, `${JSON.stringify(raw)} 必须恰好一条废弃告警（实得 ${deprecations.length}：${JSON.stringify(messages)}）`)
+        // 放行不等于生效：半填的废弃键不得成为该会话的模型来源
+        const snap = advisor.ctrl.snapshot('s-p12')
+        assert.equal(snap.enabled, false, `${JSON.stringify(raw)} 不得凭废弃键开启会话`)
+        assert.equal(snap.modelSource, 'unset', `${JSON.stringify(raw)} 不得成为模型兜底`)
+        advisor?.dispose()
+      } finally { rmSync(dir, { recursive: true, force: true }) }
+    }
+    // 阳性对照：随包默认（= 默认值）不得刷废弃告警，否则每次启动都是噪音
+    const dir = tempDir('p1-2b')
+    try {
+      const messages = []
+      const logger = { warn: (m) => messages.push(String(m)), error: (m) => messages.push(String(m)) }
+      const advisor = installAdvisor(fakeCtx(), { advisorEnabled: false, advisorProvider: null, advisorModel: null }, { dataDir: dir, logger })
+      assert.equal(messages.filter((m) => m.includes('已废弃')).length, 0, '随包默认值不得触发废弃告警')
+      advisor.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   // S2 重写（原「配置优先 → HIGH 档 → error 三态」）：模型**完全手动指定、
@@ -223,6 +266,7 @@ export function testDataDir(t) {
 
   t('取证：ADVISOR_TRACE_ENV 默认关闭，未设时不产生 trace 设施', () => {
     const prev = process.env[ADVISOR_TRACE_ENV]
+    const prevDir = process.env[ADVISOR_DATA_DIR_ENV]
     try {
       delete process.env[ADVISOR_TRACE_ENV]
       const tmp = mkdtempSync(join(tmpdir(), 'advisor-trace-'))
@@ -237,7 +281,10 @@ export function testDataDir(t) {
     } finally {
       if (prev === undefined) delete process.env[ADVISOR_TRACE_ENV]
       else process.env[ADVISOR_TRACE_ENV] = prev
-      delete process.env[ADVISOR_DATA_DIR_ENV]
+      // 原写法是无条件 delete，会把上一个用例设的隔离目录**静默清掉**——
+      // 用例顺序一换，后续 installAdvisor 就可能落回真实用户目录。
+      if (prevDir === undefined) delete process.env[ADVISOR_DATA_DIR_ENV]
+      else process.env[ADVISOR_DATA_DIR_ENV] = prevDir
     }
   })
 
@@ -1071,6 +1118,40 @@ export function testSessionStore(t) {
   })
 }
 
+// ── 真实用户数据目录的隔离门（S2 必修 3）───────────────────────────────
+// 事故面：installAdvisor 默认数据目录是 **真实用户目录**
+// `~/.dsh/plugins-data/dsh-agents/advisor`。S1 只给 boot-schema-check.mjs 加了
+// 隔离，本套件没有，于是「跑测试绝不碰用户目录」只是**恰好没触发**而不是被断言
+// 过的性质——差一条会写 records 的路径就会写进用户真实数据。
+// 落法：模块加载时对真实目录做一次**递归快照**（路径 + 大小 + mtime + SHA256），
+// 套件最后一个用例逐项比对。它注册在 run.mjs 的最后，是真正的收尾断言。
+function snapshotTree(dir) {
+  const out = []
+  let rootStat
+  try { rootStat = statSync(dir) } catch { return ['<absent>'] }
+  if (!rootStat.isDirectory()) return ['<not-a-directory>']
+  const walk = (current, rel) => {
+    let entries
+    try { entries = readdirSync(current, { withFileTypes: true }) } catch { out.push(`${rel}/<unreadable>`); return }
+    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const full = join(current, entry.name)
+      const name = rel === '' ? entry.name : `${rel}/${entry.name}`
+      if (entry.isDirectory()) { out.push(`${name}/`); walk(full, name); continue }
+      try {
+        const st = statSync(full)
+        out.push(`${name} size=${st.size} mtimeMs=${st.mtimeMs} sha256=${createHash('sha256').update(readFileSync(full)).digest('hex')}`)
+      } catch (error) {
+        out.push(`${name} <stat-failed:${error?.code ?? '?'}>`)
+      }
+    }
+  }
+  walk(dir, '')
+  return out
+}
+
+/** 模块加载即拍下真实目录的基线（早于任何用例跑）。 */
+const REAL_DATA_DIR_BASELINE = snapshotTree(DEFAULT_ADVISOR_DATA_DIR)
+
 // ── HTTP 桩（照抄 run.mjs 的 fakeReq/fakeRes） ───────────────────────────
 
 /** 假请求：url 缺省指向端点本身（**不带 query** → GET 形状非法 → 400）。
@@ -1478,6 +1559,17 @@ export function testPerSessionEndpoint(t) {
       const r2 = fakeRes()
       await handler(fakeReq('GET', undefined, '127.0.0.1', null, '127.0.0.1:3080', getUrl('s2')), r2)
       assert.deepEqual(r2.json().records.map((r) => r.text), ['note-s2'])
+
+      // ★过滤必须在**截断之前**：若实现写成「先按 persistLimit 截断再过滤」，
+      //   在 persistLimit 条被别的会话占满时就会把本会话的记录挤成空数组
+      //   ——只断言「s1 只含 s1」的那条对该缺陷完全无感（critic 的 C11 实测 130/0）。
+      //   这里把 persistLimit 压到 1、且让**别的会话**占掉那唯一的名额。
+      const tight = new AdvisorStore({ dataDir: dir, persistLimit: 1 })
+      assert.equal(tight.list('s1', 1).length, 1, '★persistLimit=1 且名额被 s2 占满时，s1 仍必须拿到自己那条')
+      assert.deepEqual(tight.list('s1', 1).map((r) => r.text), ['note-s1'])
+      // 阳性对照：不做会话过滤时同样返回 1 条（说明上条不是「恰好也过」）
+      assert.equal(tight.list(undefined, 1).length, 1, '不过滤时只返回最近 1 条（对照组）')
+      assert.deepEqual(tight.list(undefined, 1).map((r) => r.text), ['note-s2'], '对照组拿到的是最近那条 s2')
       installed.dispose()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
@@ -1556,6 +1648,92 @@ export function testPerSessionEndpoint(t) {
       assert.equal(p.statusCode, 200)
       assert.equal(installed.ctrl.snapshot('s-owner').model, 'm')
       installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // P1-1 必修：runtime 字段曾是一份**全局**镜像，A 的评审失败会污染从未评审的 B。
+  t('P1-1 runtime 状态按会话隔离：A 的评审错误不得出现在从未评审的 B 上', async () => {
+    const dir = tempDir('p11')
+    try {
+      // 输出不是严格 JSON → runtime 走 status=error 分支（A 侧真失败，非构造）
+      const handlers = new Map()
+      const messages = [msg('user', '请写代码'), msg('assistant', '好的')]
+      const events = [{ type: 'step/start', data: { turn: 't1' } }]
+      const turnEnd = { type: 'turn/end', seq: 20, data: { turn: 't1', reason: { kind: 'completed' } } }
+      // ownEvents 必须返回**完整事件日志**（含 turn/end）：观察器用
+      // findLastMessageTurnEnd(events) 反查「最新进入过 step 的 turn/end」，
+      // 日志里缺 turn/end 就直接 return，一个 delta 都不会产出。
+      const agentA = fakeAgent('s-A')
+      agentA.session = { id: 's-A', deriveMessages: () => messages, ownEvents: () => [...events, turnEnd] }
+      const agentB = fakeAgent('s-B')
+      agentB.session = { id: 's-B', deriveMessages: () => messages, ownEvents: () => [] }
+      const registry = { 's-A': agentA, 's-B': agentB }
+      const ctx = bareCtx({ get: (id) => registry[id] })
+      ctx.on = (event, fn) => {
+        const list = handlers.get(event) ?? []
+        list.push(fn)
+        handlers.set(event, list)
+        return () => handlers.set(event, (handlers.get(event) ?? []).filter((f) => f !== fn))
+      }
+      ctx.emit = (event, ...args) => { for (const fn of handlers.get(event) ?? []) fn(...args) }
+
+      const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => fakeLlm('这不是 JSON') })
+      installed.ctrl.patchConfig('s-A', { enabled: true, provider: 'p', model: 'm' })
+      ctx.emit('agent/created', { agent: agentA })
+      ctx.emit('session/event', agentA.session, turnEnd)
+      await installed.ctrl.runtimeOf('s-A')?.waitForDrain()
+
+      // 阳性对照：A 确实进入了 error 状态且带上了时间戳（否则本用例测不到东西）
+      const a = installed.ctrl.snapshot('s-A').runtime
+      assert.equal(a.status, 'error', 'A 的评审必须真的失败（阳性对照）')
+      assert.ok(a.lastAt > 0, `A 必须有 lastAt（实得 ${a.lastAt}）`)
+      assert.ok(String(a.error).length > 0, 'A 必须带错误说明')
+
+      // ★B 从未评审过：不得带 A 的 error / lastAt
+      //   B 未开启 → disabled 口径；再把 B 配成「已开启但一次没评审」，
+      //   那它必须回到 idle 初值——两条读数都不许出现 A 的错误与时间戳。
+      const bOff = installed.ctrl.snapshot('s-B').runtime
+      assert.equal(bOff.status, 'disabled', 'B 未开启时读数是 disabled')
+      assert.equal(bOff.lastAt, 0, '★B 不得带 A 的 lastAt')
+      assert.equal(bOff.error, null, `★B 不得带 A 的错误说明（实得 ${JSON.stringify(bOff.error)}）`)
+
+      installed.ctrl.patchConfig('s-B', { enabled: true, provider: 'p2', model: 'm2' })
+      const bOn = installed.ctrl.snapshot('s-B').runtime
+      assert.equal(bOn.status, 'idle', `★B 已开启但从未评审，必须是初值 idle（实得 ${bOn.status}）`)
+      assert.equal(bOn.lastAt, 0, '★B 不得带 A 的 lastAt')
+      assert.equal(bOn.error, null, `★B 不得带 A 的错误说明（实得 ${JSON.stringify(bOn.error)}）`)
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+}
+
+// ── 8. 真实用户数据目录隔离门（必须注册在 run.mjs 的最后）─────────────────
+
+export function testRealDataDirIsolation(t) {
+  t('隔离门：整个套件运行期间真实用户 advisor 数据目录逐字节零变化', () => {
+    const after = snapshotTree(DEFAULT_ADVISOR_DATA_DIR)
+    assert.deepEqual(
+      after, REAL_DATA_DIR_BASELINE,
+      `跑测试绝不允许触碰真实用户数据目录 ${DEFAULT_ADVISOR_DATA_DIR}\n`
+      + `加载时基线：${JSON.stringify(REAL_DATA_DIR_BASELINE, null, 2)}\n`
+      + `运行后实况：${JSON.stringify(after, null, 2)}`,
+    )
+  })
+
+  // 阳性对照：snapshotTree 必须真的看得见「增 / 删 / 改」，否则上面那条是空门。
+  t('隔离门自检：snapshotTree 看得见目录结构与内容变化（否则上一条是空门）', () => {
+    const dir = tempDir('snapgate')
+    try {
+      assert.deepEqual(snapshotTree(join(dir, 'nope')), ['<absent>'], '不存在的目录必须如实报缺席')
+      mkdirSync(join(dir, 'sub'), { recursive: true })
+      writeFileSync(join(dir, 'a.txt'), 'one')
+      const first = snapshotTree(dir)
+      assert.deepEqual(first.map((line) => line.split(' ')[0]), ['a.txt', 'sub/'], `结构必须被看见（实得 ${JSON.stringify(first)}）`)
+      writeFileSync(join(dir, 'a.txt'), 'two')
+      const second = snapshotTree(dir)
+      assert.notDeepEqual(second, first, '内容变化（SHA256）必须被看见')
+      rmSync(join(dir, 'a.txt'))
+      assert.deepEqual(snapshotTree(dir), ['sub/'], '删除也必须被看见')
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 }

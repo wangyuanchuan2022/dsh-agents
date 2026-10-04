@@ -1201,6 +1201,9 @@ for (const suite of [
   advisorTests.testSessionStore,
   advisorTests.testPerSessionEndpoint,
   advisorTests.testIntegration,
+  // 必须最后：它比对的是「模块加载时的真实用户数据目录快照」与「现在」，
+  // 只有排在所有 advisor 用例之后才是真正的收尾断言。
+  advisorTests.testRealDataDirIsolation,
 ]) {
   // advisor.test.mjs 用 t(name, fn) 收集用例，这里转成本 run.mjs 的断言器
   const cases = []
