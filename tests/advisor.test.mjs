@@ -117,6 +117,27 @@ function tempDir(tag) {
 
 // ── 1. 配置校验 + 模型回落链 ─────────────────────────────────────────────
 
+/**
+ * 随包 `cordis.patch.yml` 里**描述已删行为**的注释字样（源级防漂移清单）。
+ *
+ * 只收「已删行为本身」的字面量，**不收否定表述**——注释里写「已取消 HIGH 档回落」
+ * 是当前契约要求的正确说法，不能被误伤。逐条对应：
+ *  - `tiers.HIGH`    —— S2 已删 HIGH 档回落（`resolveAdvisorModel` 不再读档位表）
+ *  - `落盘 config.json` —— S1 已改按会话分文件
+ *  - 回落链 / 任一为空  —— 旧回落链的标题与措辞
+ */
+const STALE_BUNDLE_COMMENTS = [
+  /tiers\.HIGH/,
+  /落盘\s*config\.json/,
+  /回落链/,
+  /任一为空\s*→\s*回落/,
+]
+
+/** 返回该 yml 文本命中的过期字样（空数组 = 未漂移）。 */
+function staleBundleComments(text) {
+  return STALE_BUNDLE_COMMENTS.filter((re) => re.test(text)).map((re) => re.source)
+}
+
 export function testConfig(t) {
   t('配置：缺省值与契约 §1 一致', () => {
     const c = resolveAdvisorConfig({})
@@ -204,6 +225,50 @@ export function testConfig(t) {
     assert.equal(r.modelSource, 'unset')
     assert.deepEqual([r.provider, r.model], [null, null])
     assert.match(String(r.reason), /未指定评审模型/)
+  })
+
+  // ── D-4 防漂移：随包注释不得描述已删行为 ─────────────────────────────────
+  // 事故（S2/S1 改完实现后）：cordis.patch.yml 的注释仍写着「回落 tiers.HIGH 的
+  // 当前路由」与「PATCH 落盘 config.json」——两条描述的都是**已被删除的行为**。
+  // 随包配置是用户与维护者直接读的面（比 docs 更要紧），而上一轮的教训正是
+  // 「注释写了语义但没人核」。故用源级判据把「实现删了、注释忘了」钉死。
+  t('D-4 随包注释防漂移：不得描述已删行为；三个废弃键保留且值未变', () => {
+    const bundleText = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+
+    // ① 注释不得含已删行为字样
+    assert.deepEqual(staleBundleComments(bundleText), [], 'cordis.patch.yml 注释仍在描述已删行为')
+
+    // ② 三个废弃键必须**仍在**且值未变（删键会让老配置 boot 失败：A14/A16）
+    for (const [key, value] of [['advisorEnabled', 'false'], ['advisorProvider', 'null'], ['advisorModel', 'null']]) {
+      assert.match(bundleText, new RegExp(`^\\s*${key}:\\s*${value}\\s*$`, 'm'), `${key} 必须保留且值仍为 ${value}`)
+    }
+
+    // ③ 新注释必须把现状说清（否则「注释被清空」也算过）
+    for (const required of [
+      'deprecated / compatibility-only',
+      'does not affect runtime behavior',
+      "'session'",
+      "'unset'",
+      'base64url(sessionId)',
+      '.seen.json',
+    ]) {
+      assert.ok(bundleText.includes(required), `注释必须说明现状，实测缺：${required}`)
+    }
+
+    // ④ 必红：把注释改回旧文字（逐条变异），该判据必须变红
+    const mutations = [
+      '# 模型回落链：下面两个键任一为空 → 回落上面 tiers.HIGH 的当前路由\n',
+      '# 数据目录（记录 records.jsonl + PATCH 落盘 config.json）\n',
+      '# 模型回落链：任一为空 → 回落 tiers.HIGH\n',
+    ]
+    for (const mutation of mutations) {
+      const mutated = bundleText.replace(
+        /^(?=\s*# ── advisor（内置顾问)/m,
+        `${mutation}        `,
+      )
+      assert.notEqual(mutated, bundleText, `变异体必须真的注入到文本里：${mutation.trim()}`)
+      assert.ok(staleBundleComments(mutated).length > 0, `注入旧文字后判据必须变红：${mutation.trim()}`)
+    }
   })
 }
 

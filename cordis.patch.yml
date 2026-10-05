@@ -41,12 +41,22 @@
         allowSpawn: true
         # ── advisor（内置顾问；契约 docs/advisor-contract.md）────────────────
         # 默认关：与 memory-evolve 的 advisor 语义重叠，两套不同时开。
+        # ⚠️ 下面三个键（advisorEnabled/advisorProvider/advisorModel）：
+        #    **deprecated / compatibility-only / does not affect runtime behavior**。
+        #    advisor 的启用与评审模型已彻底**会话级**，这三个键只被解析（保 boot
+        #    兼容）与一次性告警，**不参与任何生效判定**——键本身不可删：删掉
+        #    ALLOWED_KEYS 成员会让老配置触发「未知 advisor 配置键」而整个插件
+        #    boot 失败。开启某会话走端点：PATCH {sessionId, enabled:true, provider, model}。
         advisorEnabled: false
-        # 模型回落链：下面两个键任一为空 → 回落上面 tiers.HIGH 的当前路由
-        #（**不继承会话模型**）；响应里的 modelSource 字段标示是否回落。
+        # 模型**完全手动指定、无任何兜底**：已取消 HIGH 档回落（不再读上面的
+        # tiers 段），也不继承会话模型。评审模型只来自该会话自己的 PATCH；
+        # GET 响应的 modelSource 只有 'session'（本会话已指定）| 'unset'（未指定）两态。
         advisorProvider: null
         advisorModel: null
-        # 数据目录（记录 records.jsonl + PATCH 落盘 config.json）
+        # 数据目录（默认 ~/.dsh/plugins-data/dsh-agents/advisor）：
+        # records.jsonl（记录，全局单文件，GET 按会话过滤返回）+
+        # sessions/<base64url(sessionId)>.json（**PATCH 的落盘位置**，会话级配置）+
+        # sessions/<b64>.seen.json（幂等去重；独立成文件，不与配置争同一 inode）。
         advisorDataDir: null
         # 右侧面板显示开关（与评审运行解耦）
         advisorPanelEnabled: true
