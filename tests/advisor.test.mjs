@@ -691,7 +691,12 @@ export function testObserverIdempotency(t) {
       for (let i = 1; i <= SEEN_WINDOW_SIZE + 1; i++) h.feed(...turnGroup(`t${i}`, i))
       assert.equal(h.ledger.calls.length, SEEN_WINDOW_SIZE + 1, '阳性对照：每个新 turn 都评审')
       const seen = readSeenFile(dir, 's-s3')
-      assert.ok(seen.reviewed.length <= SEEN_WINDOW_SIZE, `窗口必须受 M 约束（实得 ${seen.reviewed.length} > ${SEEN_WINDOW_SIZE}）`)
+      // ★必须钉**恰好 M 条**，不能只断言 `<= M`：M 与 M-1 都满足 `<= M`，
+      //   把淘汰条件写成 `>= M` 的变异体照样全绿（critic D3 实测 150/0）。
+      assert.equal(
+        seen.reviewed.length, SEEN_WINDOW_SIZE,
+        `窗口必须恰好保留 M 条（实得 ${seen.reviewed.length}，M=${SEEN_WINDOW_SIZE}）`,
+      )
       assert.equal(seen.reviewed.includes('s-s3::t1'), false, '★最旧的键必须已被淘汰（否则本判据测不到窗口）')
       assert.equal(seen.reviewed.includes(`s-s3::t${SEEN_WINDOW_SIZE + 1}`), true, '最新的键必须在窗口内')
     } finally { rmSync(dir, { recursive: true, force: true }) }
@@ -853,6 +858,79 @@ export function testObserverIdempotency(t) {
       }
       const warns = captured.filter((m) => m.includes('seen'))
       assert.equal(warns.length, 1, `坏 JSON 必须恰好一条 seen 告警（实得 ${warns.length}：${JSON.stringify(captured)}）`)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // 锁 steppedTurns 的「匹配即删」语义：一次 step/start 只配一次 turn/end。
+  // 判别格 = 「turn 早已评审过 → 键被 M 窗口淘汰 → 宿主以**更高 seq** 重投它的
+  // turn/end 且**不带 step/start**」。探针（agent-out/s3-probe-d4.mjs）实测：
+  // 只加不删在这一格评审 1 次（**二次计费**），匹配即删评审 0 次；
+  // 而「从未评审过的 stepped turn 越过水位后重来」那一格两者都评审 1 次，
+  // 即匹配即删**不会**造成真漏评。按用户取舍（漏评可 POST review 补回、
+  // 重复计费不可接受）本格必须落在 0。必红 D4r（改回只加不删）。
+  t('steppedTurns 匹配即删：键出窗口的旧 turn 被抬高 seq 重投时不得二次计费', () => {
+    const dir = tempDir('stepev')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      const h = steppedHarness({
+        loadSeen: (id) => store.readSeen(id),
+        saveSeen: (id, state) => store.writeSeen(id, state),
+      })
+      for (let i = 1; i <= SEEN_WINDOW_SIZE + 1; i++) h.feed(...turnGroup(`t${i}`, i))
+      const before = h.ledger.calls.length
+      assert.equal(readSeenFile(dir, 's-s3').reviewed.includes('s-s3::t1'), false, '前置：t1 的键已出窗口')
+
+      // 只重投 t1 的 turn/end，seq 抬到水位之上，**不带 step/start**
+      h.feed({ type: 'turn/end', seq: SEEN_WINDOW_SIZE + 2, data: { turn: 't1', reason: { kind: 'completed' } } })
+      assert.equal(
+        h.ledger.calls.length - before, 0,
+        '★一次 step/start 只配一次 turn/end：旧 turn 不得借抬高 seq 绕过幂等门二次计费',
+      )
+      // 阳性对照：一个**全新** turn 越过水位后仍必须正常评审（否则本判据是「什么都不做」的假绿）
+      h.feed(...turnGroup('t-fresh', SEEN_WINDOW_SIZE + 3))
+      assert.equal(h.ledger.calls.length - before, 1, '阳性对照：新 turn 仍必须正常评审')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // ── P1-1（必修）：未启用的会话不得有任何落盘副作用 ──────────────────
+  // 事故面：session/event 是**全局**接线（所有会话都进观察器），而观察器在每个
+  // turn/end 上无条件推进水位并写 seen 文件 → 一个从未开启 advisor 的会话跑完
+  // 一轮就凭空产生 sessions/<b64>.seen.json，且按 M=256 每回合整份重写十几 KB。
+  t('P1-1 未启用的会话不得产生 seen 文件（enabled 早退必须在落盘之前）', async () => {
+    const dir = tempDir('p11seen')
+    try {
+      const messages = [msg('user', '别评审我'), msg('assistant', '好')]
+      const events = [{ type: 'step/start', data: { turn: 't1' } }]
+      const turnEnd = { type: 'turn/end', seq: 20, data: { turn: 't1', reason: { kind: 'completed' } } }
+      const agent = fakeAgent('s-off')
+      agent.session = { id: 's-off', deriveMessages: () => messages, ownEvents: () => [...events, turnEnd] }
+      const { ctx, emit } = fakeCtx()
+      ctx.agents.get = () => agent
+      const llm = fakeLlm('{"notes":[]}')
+      const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => llm })
+      // ★**不写** enabled 配置：advisorEnabled 缺省即关闭
+      emit('agent/created', { agent })
+      emit('session/event', agent.session, events[0])
+      emit('session/event', agent.session, turnEnd)
+      await new Promise((r) => setTimeout(r, 10))
+      assert.equal(installed.ctrl.snapshot('s-off').enabled, false, '前置：该会话确实是关闭的')
+      assert.equal(
+        existsSync(sessionSeenPath(dir, 's-off')), false,
+        '★未启用的会话跑完一轮也绝不允许产生 seen 文件（早退必须在落盘之前）',
+      )
+      assert.equal(llm.calls.length, 0, '未启用不得调用模型')
+
+      // 阳性对照：一旦开启，同一条链路**必须**产生 seen 文件 —— 否则上条可能是空门
+      installed.ctrl.patchConfig('s-off', { enabled: true, provider: 'p', model: 'm' })
+      emit('session/event', agent.session, { type: 'step/start', data: { turn: 't2' } })
+      emit('session/event', agent.session, { type: 'turn/end', seq: 21, data: { turn: 't2', reason: { kind: 'completed' } } })
+      await installed.ctrl.runtimeOf('s-off')?.waitForDrain()
+      assert.equal(
+        existsSync(sessionSeenPath(dir, 's-off')), true,
+        '阳性对照：已启用的会话必须落 seen（否则上条「不产生」是因为根本没跑，而不是因为早退）',
+      )
+      assert.equal(llm.calls.length, 1, '阳性对照：启用后这一轮应当正常评审')
+      installed.dispose()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
