@@ -40,6 +40,7 @@ description: "触发：不知道用哪个流程、有哪些工作流、怎么派
 | Agent 工具面/动作空间设计 | `agent-harness-construction` | observation 格式与完成率 |
 | 想把经验沉淀成技能 | `skill-eval` | `skill_manage create` 前置闸 |
 | 盘点技能库质量 | `skill-stocktake` | 五态裁决 |
+| 帮我盯着 / 每轮把关 / 把控全局走向 / 开个顾问 / advisor 面板 | `advisor` | **被动评审机制，不是派活流水线**：每个 turn 结束自动评审主会话；无工具面，模型须手动指定、无任何兜底；含 liveness check ≠ 授权等已知边界 |
 | **表里都对不上 / 活太杂 / 没有对应流水线** | **`agent-general-route`（兜底）** | 四轴判据裁决「派席 or 主会话单干」；双通道给 persona（角色库方法论 / 临时 persona 执行创作）；带回「何时该退回流水线」自限条款 |
 
 ## 2. 前置门（第二跳：先补条件，再派活）
