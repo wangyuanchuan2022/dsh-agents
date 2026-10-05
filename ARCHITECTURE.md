@@ -1,24 +1,24 @@
 # ARCHITECTURE — dsh-agents 仓库全景（评审导览）
 
-> 本文面向**外部评审者**：逐部件说明本仓 99 个跟踪文件的职责、接线与质量账。
+> 本文面向**外部评审者**：逐部件说明本仓 111 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 99 文件，本文自身计入）。
+> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 111 文件，本文自身计入）。
 > 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
 
 ---
 
 ## 0. 一句话与关键数字
 
-**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 23 件工作流技能、11 个确定性机检脚本与三层测试链。
+**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、11 个确定性机检脚本与三层测试链。
 
 | 维度 | 数值 | 验证入口 |
 |---|---|---|
-| 跟踪文件 | 99 | `git ls-files` 计数 |
+| 跟踪文件 | 111 | `git ls-files` 计数 |
 | 角色 / 泳道 | 23（build 10 · review 6 · domain 7） | `agent_roles action=list` |
-| 工作流技能 | 23（入口 1 · 流水线 4 · 协作 5 · 方法论 13） | `skills/` |
+| 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
 | 确定性工具 | 宿主注册 3 + `tools/` 共 11（机检脚本 8 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 65 + crgate 65 + publish-scan 47 + persona-gate 33 | `tests/` + `tools/*.test.mjs` |
+| 测试断言 | 主套件 170 + crgate 65 + publish-scan 47 + persona-gate 33 | `tests/` + `tools/*.test.mjs` |
 | 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -30,25 +30,32 @@
 dsh-agents/
 ├── package.json / package-lock.json   插件清单（dsh.bundle.patch + dsh.client 双半声明）
 ├── cordis.patch.yml                   宿主插件行 + 全部可配项（档位路由基底）
-├── lib/            (11)               插件运行时（三个宿主工具 + 支撑模块 + 装配判据）
+├── lib/            (17)               插件运行时（三个宿主工具 + 支撑模块 + advisor 子目录 6 件）
 ├── personas/       (34)               23 份角色人格 + checklists/ 11 份评审清单
-├── skills/         (26)               23 件工作流技能源档 + README + 附带 references
+├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
 ├── tools/          (11)               独立 CLI 工具与机检脚本（不进宿主运行时）
-├── tests/          (7)                主测试 + 安装验收门 + 重启探针
-├── docs/           (1)                任务书模板正本
+├── tests/          (9)                主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针
+├── docs/           (2)                任务书模板正本 + advisor 契约正本
 ├── README.md                          使用向导（安装 / 快速开始 / 配置 / 已知限制）
 ├── ARCHITECTURE.md                    本文
 ├── LICENSE                            MIT（本仓自身代码）
 ├── THIRD-PARTY-NOTICES.md             三上游版权与 MIT 全文
 ├── .publish-scan-allow.json           脱敏扫描豁免清单（1 条，reason 必填）
+├── .gitattributes                     `* -text`（禁用换行转换，见 §1.1）
 └── .gitignore
 ```
 
 **目录间依赖方向**（单向，无环）：`tools/` 与 `tests/` 依赖 `lib/` 与 `personas/`；`lib/` 只依赖自身与 `@deepseek-ai/schemastery`；`skills/` 是纯提示词资产，不依赖代码。
 
+### 1.1 `.gitattributes`（`* -text`）——「git 干净」≠「字节还原」
+
+本仓既有配置是 `core.autocrlf=true`，且此前**没有** `.gitattributes`。两者叠加的后果是：对**已修改**的文件跑 `git checkout --` 会把 LF 重写成 CRLF（实测某文件 12593 → 12877 字节），而 **`git status` 仍显示干净**——因为 autocrlf 会在比对前把工作树内容归一化回 LF。凡是依赖逐字节比对的验收门（`skill-replica-check.ps1` 的 SHA256 比对、`.claude`/`.mjs` 产物的字节级回归），都会在这种状态下给出**绿色的错误结论**。
+
+`* -text` 让 git 对全部路径**不做任何换行转换**，从而使「git 报干净」重新等价于「字节未被悄悄改写」。取舍与验证见提交 `S6` 的 commit message；本仓此后新增文件一律以磁盘原样入库。**该规则是加法**：它不重写任何已入库 blob，也不改变 index 中的行尾状态（加规则前后 `git ls-files --eol` 的 `i/*` 列完全一致，均为 `i/lf`）。
+
 ---
 
-## 2. lib/ — 插件运行时（11 文件）
+## 2. lib/ — 插件运行时（17 文件 = 顶层 11 + `advisor/` 6）
 
 宿主加载入口是 `lib/index.js`；其余模块按职责单一划分。
 
@@ -65,6 +72,12 @@ dsh-agents/
 | `settings-compat.js` | 宿主 settings 服务版本差异兼容层（旧 get(ns) → 新 SettingsForms describe()；typeof 守卫降级） | 宿主 0.1.7 换代的适配层，能力面降级不崩 |
 | `http-config.js` | 设置卡数据端点：`GET/PATCH /plugins/dsh-agents/config`（回环 + Origin 同源防护；回环地址判定收口在白名单） | 端点只绑 loopback |
 | `client.js` | 浏览器半：设置卡（`window.__ModuleLoader__.load` 懒 CJS 工厂 → `settings.plugin.item` 槽位） | 无 `dsh.client` 字段则宿主引导图不含此半（README §设置页） |
+| `advisor/store.js` | advisor 存储：会话级分文件 + 幂等 seen + `records.jsonl` | 临界区全同步（见 §2.1） |
+| `advisor/api.js` | advisor 端点 `/plugins/dsh-agents/advisor`（GET / PATCH / POST） | sessionId 三处共用同一个形状判据（见 §2.1） |
+| `advisor/observer.js` | 每 turn 触发一次的幂等门（宿主真实身份 `(sessionId, turn, seq)`） | 只评审主会话汇总，子会话 step 不可见 |
+| `advisor/runtime.js` | 评审调用、输出预算 16384、终态显式优先级链 | 触顶不投递、记 `runtime.error`，**不降级** info/recorded |
+| `advisor/delivery.js` | 分级意见投递（nit 及以上默认 `agent.steer()` 实时打断） | 绝不回退投递等级 |
+| `advisor/index.js` | 接线：读配置 → 建 store → 挂端点 → 接 observer；旧全局配置文件只停用不迁移 | 未知配置键 fail-loud；空 `advisorDataDir` 抛错 |
 
 **三个宿主工具**（由 index.js 注册，全部经宿主 schema 严格子集校验——`tests/boot-schema-check.mjs` 用宿主真实校验器跑六项全 PASS）：
 
@@ -73,6 +86,18 @@ dsh-agents/
 - **agent_spawn** — 一步派活：解析档位 → 注入人格与任务书 → 创建标准 DSH 会话开跑。
 
 **不在本仓的近亲工具**：批次3 曾交付五个独立 check 模块（memory_secret_lint / config_guard / scope_loop_guard / invisible_chars / manifest_alignment），由本机另一插件（port-kit 系）承载并经安装态活体验证——**本仓不含其源码**，LIVE-VERIFIED 是本机安装态验证记录而非本仓可复现断言，外部评审者在本仓内无法核验此行，评审时请跳过。
+
+### 2.1 advisor — 内置顾问（被动机制，无工具面）
+
+> **详设不在本文**：`docs/advisor-contract.md` 是契约正本（冻结于 2026-10-03，S5a 按 S1–S4 已实现行为同步）。本节只给四条最易误解的边界，细节与取舍以正本为准。
+
+1. **是什么——被动机制、无工具面。** advisor 在每个 turn 结束后自动用「该会话手动指定的模型」只读主会话可见消息、独立上下文，给主 agent 分级建议（info / nit / concern / blocker），nit 及以上默认走 `agent.steer()` 实时打断指导。**它不是工具**：不注册任何 `advisor*` 工具，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**。模型完全手动指定、无任何兜底（无 HIGH 档回落、无全局 config 兜底、不继承主会话模型）；未为该会话指定模型即该会话不评审。
+
+2. **数据落盘位置。** 配置按会话分文件存 `<advisorDataDir>/sessions/<base64url(sessionId)>.json`；幂等去重集合存**独立**文件 `sessions/<b64>.seen.json`（不与配置争同一文件）；终态意见记录写**全局单文件** `<advisorDataDir>/records.jsonl`，**按会话过滤后**返回。
+
+3. **端点与 sessionId 强制。** `webServer.register({kind:'exact', path:'/plugins/dsh-agents/advisor'})`：**GET / PATCH 必须带 `sessionId`**，缺失或形状非法即 `400`；会话不存在/不活跃 `404`（PATCH 零写盘、GET 响应体零泄露）。**POST 恒 200**（失败以 `{ok:false, reason}` 表达，不抛错）。> ⚠️ `sessionId` 校验是 **liveness check，不是 authorization**——宿主 `WebRoute` 没有鉴权钩子，本端点挡得住「不存在的会话」，挡不住「同机另一页面改他人活跃会话的配置」。该残余风险见契约 §0.1，用户已知情接受。
+
+4. **与三个工具的关系。** advisor **不是工具、不派活**，也**不会被 `agent_spawn` 触发**——它由 observer 在会话 turn 结束时自行触发；派活侧的三件套（`agent_roles` / `agent_taskbook` / `agent_spawn`）与 advisor 完全正交，会话启用 advisor 与派活互不影响。
 
 ---
 
@@ -102,7 +127,7 @@ dsh-agents/
 
 ---
 
-## 4. skills/ — 工作流技能（28 文件 = 24 SKILL.md + README + replica-map.json + 2 references）
+## 4. skills/ — 工作流技能（在盘 29 个文件 = 25 个 SKILL.md + README.md + replica-map.json + 2 references；其中 28 个在 git 跟踪内）
 
 全部为**纯提示词资产**（SKILL.md 单文件，description 触发词前置——DSH 技能目录只显示 description 前若干百字符）。安装：把技能目录复制到 `~/.agents/skills` 或 `~/.dsh/skills`。
 
@@ -131,7 +156,11 @@ dsh-agents/
 - `agent-loop` — 长任务循环三层合一（机制：启动三查/停止条件落盘/熔断；判断：四条件门/五崩法；模式：顺序/DAG）。
 - `tdd-workflow` / `verification-loop`（六相验证）/ `parallel-execution-optimizer` / `error-handling` / `git-workflow` / `operator-approval-loop`（外发审批，含 references/ 2 件契约样例）/ `agent-harness-construction` / `skill-eval` / `skill-stocktake` / `session-handoff` / `dsh-troubleshooting`（症状索引手册）/ `opensource-sanitize`（发布前脱敏六类扫描方法论，ECC 全量移植）。
 
-`skills/README.md` 为源副本说明页（装机分布与同步纪律）。**装机同步**：23 件技能分装于两个用户级技能根（互补无重叠），`tools/skill-replica-check.ps1` 按 `skills/replica-map.json` 比对（注意：replica-map.json 含本机运维路径，已移出 git 跟踪、仅本地维护——见 §6）。
+**顾问（1）**
+
+- `advisor` — 内置顾问的触发词手册；机制本体是 `lib/advisor/`（见 §2.1），**不是工具**。提示词资产与其运行时的分工同其余技能：`skills/` 只负责「何时触发/怎么用」，行为由 `lib/` 实现。
+
+`skills/README.md` 为源副本说明页（装机分布与同步纪律）。**装机同步**：25 件技能分装于两个用户级技能根（互补无重叠，实测 B=12 / C=13 合计 25，与仓内件数一致），`tools/skill-replica-check.ps1` 按 `skills/replica-map.json` 比对（注意：replica-map.json 含本机运维路径，已移出 git 跟踪、仅本地维护——见 §6）。
 
 ---
 
@@ -153,11 +182,13 @@ dsh-agents/
 
 ---
 
-## 6. tests/ — 测试与验收门（7 文件）
+## 6. tests/ — 测试与验收门（9 文件）
 
 | 文件 | 职责 | 当前账 |
 |---|---|---|
-| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + 浏览器半/manifest 门 + 26a 负向组（65 断言） | **65 passed / 0 failed** |
+| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 | **170 passed / 0 failed** |
+| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime（主套件内的 advisor 分组来源） | 含于 170 |
+| `skill-sync-check.mjs` | **计数漂移门 + `.gitattributes` 门**：README/ARCHITECTURE 里每处技能计数表述必须等于 `skills/**/SKILL.md` 的实测件数；零命中 fail-closed + 阳性对照 + `--selftest` 11 个变异体 | PASS（变异体 11/11 达到期望） |
 | `boot-schema-check.mjs` | **装前必过门**：宿主真实校验器（dsh-tools assertSupportedJsonSchema）验证三工具 parameters + output.schema。**前置条件：本机已安装 DSH 宿主**（宿主包路径经 APPDATA 运行时解析）——无宿主环境跑不了，非 clone 即可复现门 | 六项 ALL PASS |
 | `installed-smoke.mjs` | 安装副本烟测：工具 + settings + 端点三方同源 | 安装后跑 |
 | `probe-boot.mjs` / `probe-catalog.mjs` / `probe-client.mjs` | 重启后探针：宿主引导图含本插件 / 工具目录可发现 / client.js 可分发 | 重启后跑 |
@@ -165,14 +196,15 @@ dsh-agents/
 
 **复现命令**（clone 后）：
 
-**第一组——任何 Node 环境即可复现（四门，公开 registry 装 1 个运行时依赖）：**
+**第一组——任何 Node 环境即可复现（五门，公开 registry 装 1 个运行时依赖）：**
 
 ```bash
 npm install                        # 公开 registry 可装（1 个运行时依赖）
-node tests/run.mjs                 # 65/0
+node tests/run.mjs                 # 170/0
 node tools/crgate.test.mjs         # 65/0
 node tools/publish-scan.test.mjs   # 47/0
 node tools/verify-imp26.mjs        # 33/0
+node tests/skill-sync-check.mjs    # 计数漂移门 + .gitattributes 门（零依赖纯 fs）
 ```
 
 **第二组——需本机已安装 DSH 宿主（安装态验证，外部评审者无宿主时跳过）：**
@@ -192,12 +224,13 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 | 门 | 账面 |
 |---|---|
-| 主套件 | 65/0 |
+| 主套件 | 170/0 |
+| 计数漂移门（skill-sync-check） | PASS（阳性对照 PASS + 变异体 11/11 变红） |
 | crgate 自测 | 65/0 |
 | publish-scan 自测 | 47/0（注入必红） |
 | persona-gate 自测（verify-imp26） | **33/0**（2026-09-30 修复后首次全绿） |
 | boot-schema（宿主真实校验器） | 6/6 PASS（**需本机已安装 DSH 宿主**，非 clone 即可复现） |
-| 可安装性（A-full 验收） | 干净 clone → npm install → 第一组四门全绿（boot-schema 需宿主环境，见 §6 分组） |
+| 可安装性（A-full 验收） | 干净 clone → npm install → 第一组五门全绿（boot-schema 需宿主环境，见 §6 分组） |
 
 ### 7.2 安全与发布账
 
@@ -235,9 +268,9 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 ## 9. 评审建议路径
 
-1. **先跑后读**：§6 第一组四门（Node 环境即可复现）是本文全部代码断言的可执行性前提；第二组需宿主环境。
+1. **先跑后读**：§6 第一组五门（Node 环境即可复现）是本文全部代码断言的可执行性前提；第二组需宿主环境。
 2. **主链路**：`lib/index.js`（工具注册）→ `lib/taskbook.js`（任务书合成与防御面）→ `lib/spawn.js`（会话创建时序）。
-3. **机制深度**：`lib/persona-gate.js` + `tools/verify-imp26.mjs`（判据与负向自测同构）；`tools/crgate.mjs`（评审证据链状态机）。
+3. **机制深度**：`lib/persona-gate.js` + `tools/verify-imp26.mjs`（判据与负向自测同构）；`tools/crgate.mjs`（评审证据链状态机）；`tests/skill-sync-check.mjs` + 其 `--selftest`（文档计数门与变异体）。
 4. **安全面**：`tools/publish-scan.mjs`（规则表）+ `.publish-scan-allow.json`（豁免与理由）。
 5. **提示词资产**：`skills/agent-review-squad/SKILL.md`（流程硬化最密的一件）与 `personas/code-reviewer.md`（反编报三件套）。
 6. **欢迎攻击**：fail-loud 边界（未知输入）、隔离机检的绕过面、任务书模板与生成器的一致性——这些是维护侧最希望被外部视角检验的位置。issue 与 PR 均欢迎。

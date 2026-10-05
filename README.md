@@ -5,7 +5,7 @@
 
 `dsh-agents` turns DSH into a role-routed multi-agent workspace: 23 specialist agents, each pinned
 to a model tier (LOW / MEDIUM / HIGH), spawned in a single call with a persona, a pinned model and a
-complete task brief — plus 23 workflow skills that orchestrate them end to end.
+complete task brief — plus 25 workflow skills that orchestrate them end to end.
 
 **关键词**：DSH 插件 · 多智能体编排 · 角色-模型档位路由 · 任务书合成 · 工作流技能 · agent orchestration
 
@@ -47,7 +47,8 @@ complete task brief — plus 23 workflow skills that orchestrate them end to end
 - **只读角色有明确边界**——上游标注 `disallowedTools: Write, Edit` 的 **9 个角色**（explore · analyst · architect · verifier · code-reviewer · security-reviewer · critic · document-specialist · scientist）在任务书里写成只读顾问条款，任务书同时注明这只是文字约束（见[已知限制](#已知限制)）。
 - **任务书八节结构** + **派活前置三问**（副作用关键词 fail-closed 告警）。
 - **评审/验证席的上下文隔离（两层机制）**——**会话层**：每席都是全新会话，不继承派活方对话历史；**材料层**：`blind` 席（code-reviewer / security-reviewer）不得获得作者自评**与其他席位产出**，`isolated` 席（critic / code-simplifier / verifier）不得获得作者自评；任务书自动写入「上下文隔离契约」，并对下发的材料做**泄漏机检**（命中「我已经实现并验证过」「另一席说没问题」这类文本时 fail-closed 告警并回传 `isolationLeaks`）。
-- **23 件工作流技能**：路由入口 1 + 流水线 4 + 协作 5 + 方法论 13。
+- **25 件工作流技能**（口径：`skills/` 下 25 个 SKILL.md = 25 个技能目录）：入口 2 + 流水线 4 + 协作 5 + 方法论 13 + 顾问 1。
+- **内置 advisor 顾问是被动机制、无工具面**——每个 turn 后自动评审主会话可见消息，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**，不派活也不会被 `agent_spawn` 触发；模型完全手动指定、无任何兜底。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。
 - **11 份评审清单**按扩展名/专项路由（go / ts / python / kotlin / rust / csharp / cpp / sql / pytorch / a11y / performance）。
 - **两个确定性机检工具**：`crgate`（评审证据链 freeze/anchor/finalize）与 `publish-scan`（发布前脱敏六类扫描 + 三值裁定）。
 - **配置错就报错**——未知档位、未知角色、半个路由、非法 `clarifyMode` 一律抛错，不静默兜底。
@@ -142,13 +143,13 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 
 ## 工作流技能
 
-`skills/` 共 24 件，分四组。技能的 `description` 一律**触发词前置**（`触发：<中文提法>｜English: <triggers>｜<职责>`），因为 DSH 技能目录只显示 description 前若干百字符，触发词写在末尾会被截断而无法被发现。
+`skills/` 共 **25 件**（口径：25 个 SKILL.md = 25 个技能目录；目录下共 29 个文件，含 README.md、replica-map.json 与 2 份 references），分五组。技能的 `description` 一律**触发词前置**（`触发：<中文提法>｜English: <triggers>｜<职责>`），因为 DSH 技能目录只显示 description 前若干百字符，触发词写在末尾会被截断而无法被发现。
 
 **入口（2）**
 
 | 技能 | 作用 |
 |---|---|
-| `agent-workflow-router` | 总入口：按用户意图路由到下面 23 件之一，固化五条硬协议（派活前置三问 / 档位现场确认禁越档 / 任务书四条必含 / 点对点消息纪律 / 工作区纪律），附前置门与六条组合串联链。 |
+| `agent-workflow-router` | 总入口：按用户意图路由到下述其余技能之一，固化五条硬协议（派活前置三问 / 档位现场确认禁越档 / 任务书四条必含 / 点对点消息纪律 / 工作区纪律），附前置门与六条组合串联链。 |
 | `agent-general-route` | 兜底入口：意图表逐条对不上时接管——四轴判据（体量×并行×上下文×风险）裁决派席 or 主会话单干，双通道分配 persona（角色库方法论 / 临时 persona 执行创作），并带「何时该退回流水线」自限条款。 |
 
 **流水线（4）**——编排本插件的 23 角色
@@ -173,6 +174,12 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 **方法论（13）**——实现/评审/发布环节的作战手册
 
 `agent-loop`（长任务循环：启动三查 / 停止条件落盘 / 心跳纪律 / 熔断）、`tdd-workflow`、`verification-loop`、`parallel-execution-optimizer`、`error-handling`、`git-workflow`、`operator-approval-loop`、`agent-harness-construction`、`skill-eval`、`skill-stocktake`、`session-handoff`、`dsh-troubleshooting`、`opensource-sanitize`。
+
+**顾问（1）**——不是编排流水线，是宿主内建的被动评审机制
+
+| 技能 | 作用 |
+|---|---|
+| `advisor` | 用「该会话手动指定的模型」只读主会话可见消息、独立上下文，给主 agent 分级建议（info / nit / concern / blocker）；nit 及以上默认走 steer 实时打断指导。**被动机制、无工具面**，不派活。启用与配置经会话头部动作区的 Advisor 面板与 `/plugins/dsh-agents/advisor` 端点，**不是**经 `agent_spawn` 派活。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。 |
 
 安装：把需要的技能目录复制到 DSH 技能库（`~/.agents/skills` 或 `~/.dsh/skills`）即可被会话按 description 触发。
 
@@ -232,9 +239,11 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 ## 测试
 
 ```bash
-node tests/run.mjs                    # 主测试（65 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + 浏览器半/manifest 门
+node tests/run.mjs                    # 主测试（170 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor + 浏览器半/manifest 门
 node tools/crgate.test.mjs            # 65 断言
 node tools/publish-scan.test.mjs      # 47 断言
+node tests/skill-sync-check.mjs       # 计数漂移门 + .gitattributes 门（文档里的技能件数必须等于磁盘实测）
+node tests/skill-sync-check.mjs --selftest  # 上述判据的负向自测（变异体必须变红）
 node tests/boot-schema-check.mjs      # 宿主真实校验器验收门（装前必过）
 node tests/installed-smoke.mjs        # 安装副本烟测：工具 + settings + 端点三方同源
 ```
@@ -263,12 +272,15 @@ dsh-agents/
     settings-compat.js     宿主 settings 服务版本差异的兼容层
     http-config.js         设置卡数据端点
     client.js              浏览器半：设置卡
+    advisor/               (6) advisor 顾问：store/api/observer/runtime/delivery/index
   personas/                23 份人格正文（19 OMC + 4 ECC 系）
   personas/checklists/     11 份评审清单（语言 7 + 专项 4，按扩展名/专项路由）
-  skills/                  23 件工作流技能（源副本）
+  skills/                  25 件工作流技能（源副本；25 个 SKILL.md = 25 个技能目录）
   docs/task-brief-v3.md    任务书模板正本
+  docs/advisor-contract.md advisor 契约正本（详设）
   tools/                   crgate / publish-scan / install-personas / assemble-review
   tests/                   run.mjs + 宿主校验、烟测与探针
+  .gitattributes           `* -text`：禁用换行转换，保住「git 干净 = 字节还原」
   LICENSE                  MIT
   THIRD-PARTY-NOTICES.md   第三方许可与版权声明
 ```
