@@ -1120,7 +1120,7 @@ export function testRuntime(t) {
     assert.equal(runtime.maxMessages, 60, '★U1 不对冲：抬输出预算不得下调输入窗口')
     runtime.enqueue({ markdown: 'U' }, { sessionId: 's' })
     await runtime.waitForDrain()
-    assert.equal(llm.calls[0].maxTokens, 16_384, '实际下发给模型的预算也必须是 16384')
+    assert.equal(llm.calls[0].maxTokens, ADVISOR_MAX_TOKENS, '实际下发给模型的预算必须等于 ADVISOR_MAX_TOKENS（引用常量，不写死字面量——P2-3）')
   })
 
   t('S4-D9/D10/D11/D2/D3/D4/D12：终态优先级链逐条（顺序即语义）', () => {
@@ -1322,6 +1322,82 @@ export function testRuntime(t) {
     assert.equal(end.textLength, head.length + tail.length, '★桩件的多片 text-delta 必须真被 runtime 累加（否则终态判据全盲）')
     // 分类自证：这套实测参数（stop + 未触顶）必须落到 ok 并照常投递
     assert.equal(classifyCompletion({ finishReason: 'stop', outputTokens: 3, text: head + tail }).outcome, 'ok')
+  })
+
+  // ── S4 补修轮：P1-1 / P1-2 / P2-1 / P2-2 / P2-3 ────────────────────────────
+
+  t('S4-P1-2u：usage 语义 = last-wins（后发的真实用量覆盖先发的预估值）', async () => {
+    // first≠last：先发**低估的预估** usage，再发**触顶的真实** usage。
+    // 若取先出现的值 → outputTokens=100 → stop+未触顶 → 判 ok → 照常投递（绕过 U3/F-1）。
+    const r = await driveReview([
+      { type: 'text-delta', text: NOTE },
+      { type: 'usage', usage: { outputTokens: 100 } },
+      { type: 'usage', usage: { outputTokens: ADVISOR_MAX_TOKENS } },
+      { type: 'finish', reason: 'stop' },
+    ])
+    assert.equal(r.delivered.length, 0, '★必须按后发的 16384 判触顶 → 矛盾态不投递（first-wins 会投递）')
+    assert.equal(r.runtime.status, 'error')
+    assert.match(r.runtime.error, /矛盾/)
+    // 单元面：last-wins 的值本身
+    assert.equal(classifyCompletion({ finishReason: 'stop', outputTokens: ADVISOR_MAX_TOKENS, text: 'x' }).outputTokens, ADVISOR_MAX_TOKENS)
+  })
+
+  t('S4-P1-2f：finish 语义 = last-wins（后发的终态 reason 覆盖先发的中间态 reason）', async () => {
+    // first≠last：先发一个会 fail-closed 的 kind，再发 stop。
+    // 若取先出现的值 → unknown → 不投递；若 last-wins → stop + 未触顶 → 正常投递。
+    const r = await driveReview([
+      { type: 'text-delta', text: NOTE },
+      { type: 'finish', reason: 'some-future-kind' },
+      { type: 'finish', reason: 'stop' },
+      { type: 'usage', usage: { outputTokens: 100 } },
+    ])
+    assert.equal(r.delivered.length, 1, '★必须按后发的 stop 判定 → 正常投递（first-wins 会因 unknown 而拒投）')
+    assert.equal(r.runtime.status, 'idle')
+    assert.equal(r.recorded[0].outcome, 'steer')
+    // 反向：后发的终态必须是 max-tokens 时，即使先发的是 stop 也按触顶判
+    const capped = await driveReview([
+      { type: 'text-delta', text: NOTE },
+      { type: 'finish', reason: 'stop' },
+      { type: 'finish', reason: 'max-tokens' },
+      { type: 'usage', usage: { outputTokens: 100 } },
+    ])
+    assert.equal(capped.delivered.length, 0, '★后发的 max-tokens 必须压过先发的 stop')
+    assert.match(capped.runtime.error, /max-tokens/)
+  })
+
+  t('S4-P1-1：finish 缺失 + 未触顶 + 正文为空 → empty 且不可投递（不得被整体 return 吞成 ok）', () => {
+    for (const text of ['', '   ', '\n\t  ']) {
+      const r = classifyCompletion({ finishReason: null, outputTokens: 100, text, maxTokens: ADVISOR_MAX_TOKENS })
+      assert.equal(r.outcome, 'empty', `text=${JSON.stringify(text)} 必须判 empty（此前被优先级 4 的整体 return 吞掉）`)
+      assert.equal(r.deliverable, false, '★空正文绝不可投递')
+    }
+    // 对照：同一分支下正文非空仍是 ok（证明不是把整条分支判死）
+    assert.equal(classifyCompletion({ finishReason: null, outputTokens: 100, text: '正文' }).outcome, 'ok')
+  })
+
+  t('S4-P2-1：触顶事实不被 empty 掩掉（stop+触顶+空正文 → inconsistent；缺 finish+触顶+空正文 → truncated）', () => {
+    const inconsistent = classifyCompletion({ finishReason: 'stop', outputTokens: ADVISOR_MAX_TOKENS, text: '', maxTokens: ADVISOR_MAX_TOKENS })
+    assert.equal(inconsistent.outcome, 'inconsistent', '★矛盾态不得被 empty 掩盖')
+    assert.equal(inconsistent.deliverable, false)
+    assert.match(inconsistent.detail, /矛盾|上限/, '★记录文案必须仍能看出触顶')
+
+    const truncated = classifyCompletion({ finishReason: null, outputTokens: ADVISOR_MAX_TOKENS, text: '', maxTokens: ADVISOR_MAX_TOKENS })
+    assert.equal(truncated.outcome, 'truncated', '★缺 finish + 触顶 + 空正文仍判触顶')
+    assert.equal(truncated.deliverable, false)
+    assert.match(truncated.detail, /预算|截断/)
+
+    // 但未触顶 + 空正文仍是 empty（触顶优先级不得反过来吃掉正常空回复）
+    assert.equal(classifyCompletion({ finishReason: 'stop', outputTokens: 1, text: '', maxTokens: ADVISOR_MAX_TOKENS }).outcome, 'empty')
+  })
+
+  t('S4-P2-2：坏 maxTokens 回落到常量（0 / 负数 / NaN / 字符串），该兜底分支真实可达', () => {
+    for (const bad of [0, -1, -16_384, Number.NaN, undefined, null, '16384', {}]) {
+      const r = classifyCompletion({ finishReason: 'stop', outputTokens: 100, text: '正文', maxTokens: bad })
+      assert.equal(r.maxTokens, ADVISOR_MAX_TOKENS, `maxTokens=${String(bad)} 必须回落到 ADVISOR_MAX_TOKENS`)
+      assert.equal(r.outcome, 'ok', `maxTokens=${String(bad)} 不得让 hitCap 退化成恒真`)
+    }
+    // 正对照：合法值不被回落
+    assert.equal(classifyCompletion({ maxTokens: 8192, outputTokens: 100, text: '正文' }).maxTokens, 8192)
   })
 
   t('持续会话：append/snapshot/stats/reset', () => {
