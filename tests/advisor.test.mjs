@@ -28,7 +28,7 @@ import {
   resolveAdvisorDataDir, DEFAULT_ADVISOR_DATA_DIR, ADVISOR_DATA_DIR_ENV, ADVISOR_TRACE_ENV,
 } from '../lib/advisor/index.js'
 import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, renderVisibleSurface, SEEN_WINDOW_SIZE } from '../lib/advisor/observer.js'
-import { AdvisorRuntime, parseReviewOutput, AdvisorConversation } from '../lib/advisor/runtime.js'
+import { AdvisorRuntime, parseReviewOutput, AdvisorConversation, classifyCompletion, ADVISOR_MAX_TOKENS, ADVISOR_FINISH_KINDS } from '../lib/advisor/runtime.js'
 import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage } from '../lib/advisor/delivery.js'
 import { AdvisorStore, normalizeRecord, sessionConfigPath, sessionSeenPath, CONFIG_FILE } from '../lib/advisor/store.js'
 import { createAdvisorHandler, normalizeAdvisorPatch, normalizeSessionId, SESSION_ID_MAX } from '../lib/advisor/api.js'
@@ -83,7 +83,13 @@ function fakeCtx({ webServer = true } = {}) {
   return { ctx, routes, emit: ctx.emit }
 }
 
-/** 假 llm：按脚本返回文本分片。 */
+/**
+ * 假 llm：按脚本返回文本分片。
+ *
+ * AC-27 / D13：支持 **chunk 数组脚本**（`{type:'text-delta'|'usage'|'finish', ...}`）——
+ * 终态判定（finishReason / outputTokens）只在真实分片里出现，只发字符串的桩件会让
+ * R6 与 F-1 的全部判据「全盲」（跑了全红也证明不了什么）。故桩件必须能逐分片下发。
+ */
 function fakeLlm(script) {
   const calls = []
   return {
@@ -92,6 +98,10 @@ function fakeLlm(script) {
       calls.push(options)
       const text = typeof script === 'function' ? script(options, calls.length) : script
       return (async function* () {
+        if (Array.isArray(text)) {
+          for (const chunk of text) yield chunk
+          return
+        }
         if (typeof text === 'string' && text !== '') yield { type: 'text-delta', text }
         else if (typeof text === 'number') { /* 超时脚本：不产分片，靠 abort 退出 */ }
       })()
@@ -1079,6 +1089,239 @@ export function testRuntime(t) {
     runtime.enqueue({ markdown: 'U' }, { sessionId: 's' })
     await runtime.waitForDrain()
     assert.equal(recorded[0].outcome, 'dropped')
+  })
+
+  // ── S4：输出预算与终态判定（R6 + U1 + U3 + F-1 P0） ──────────────────────
+
+  /** 用 chunk 脚本驱动一轮评审，回传投递/记录/状态序列/runtime 句柄。 */
+  async function driveReview(script, extra = {}) {
+    const delivered = []
+    const recorded = []
+    const statuses = []
+    const runtime = new AdvisorRuntime({
+      provider: 'p', model: 'm', systemPrompt: 'sys',
+      llm: fakeLlm(script),
+      deliver: (note) => { delivered.push(note); return 'steer' },
+      record: (r) => recorded.push(r),
+      onStatus: (s) => statuses.push(s.status),
+      ...extra,
+    })
+    runtime.enqueue({ markdown: 'U1' }, { sessionId: 's', sessionName: '会话' })
+    await runtime.waitForDrain()
+    return { delivered, recorded, statuses, runtime }
+  }
+
+  const NOTE = '{"notes":[{"severity":"nit","text":"一条意见"}]}'
+
+  t('S4-D1：输出预算 16384，且不对冲输入窗口（maxMessages 仍 60）', async () => {
+    assert.equal(ADVISOR_MAX_TOKENS, 16_384)
+    const llm = fakeLlm('{"notes":[]}')
+    const runtime = new AdvisorRuntime({ provider: 'p', model: 'm', systemPrompt: 's', llm, deliver: () => 'recorded', record: () => {} })
+    assert.equal(runtime.maxMessages, 60, '★U1 不对冲：抬输出预算不得下调输入窗口')
+    runtime.enqueue({ markdown: 'U' }, { sessionId: 's' })
+    await runtime.waitForDrain()
+    assert.equal(llm.calls[0].maxTokens, 16_384, '实际下发给模型的预算也必须是 16384')
+  })
+
+  t('S4-D9/D10/D11/D2/D3/D4/D12：终态优先级链逐条（顺序即语义）', () => {
+    const CAP = ADVISOR_MAX_TOKENS
+    const at = (o) => classifyCompletion({ maxTokens: CAP, ...o })
+
+    // 优先级 1：max-tokens 无条件 truncated，**压过 empty**
+    assert.equal(at({ finishReason: 'max-tokens', text: '正文' }).outcome, 'truncated')
+    assert.equal(at({ finishReason: 'max-tokens', text: '' }).outcome, 'truncated', '★max-tokens 必须压过 empty（硬约束）')
+    assert.equal(at({ finishReason: 'max-tokens', text: '   \n ' }).outcome, 'truncated')
+    assert.equal(at({ finishReason: 'max-tokens', outputTokens: CAP, text: '正文' }).outcome, 'truncated')
+    assert.equal(at({ finishReason: 'max-tokens', text: '正文' }).deliverable, false)
+
+    // 优先级 2：error / aborted → failed
+    for (const kind of ['error', 'aborted']) {
+      const r = at({ finishReason: kind, text: '正文' })
+      assert.equal(r.outcome, 'failed', `${kind} 必须判 failed`)
+      assert.equal(r.deliverable, false)
+    }
+
+    // 优先级 3：未登记的 kind 值 → unknown（fail-closed，不投递）
+    for (const kind of ['some-future-kind', 'length', 'tool-calls', 'STOP']) {
+      const r = at({ finishReason: kind, text: '正文' })
+      assert.equal(r.outcome, 'unknown', `未登记 kind=${kind} 必须 fail-closed`)
+      assert.equal(r.deliverable, false)
+    }
+    assert.deepEqual([...ADVISOR_FINISH_KINDS], ['stop', 'max-tokens', 'error', 'aborted'], '登记的 kind 集合被改宽/改窄都会改变 fail-closed 边界')
+
+    // 优先级 4：finish 缺失但 usage 在 → 按 usage 判定（D12 / AC-25）
+    const low = at({ outputTokens: 100, text: '正文' })
+    assert.equal(low.outcome, 'ok')
+    assert.equal(low.usageUnknown, false)
+    assert.equal(low.deliverable, true)
+    assert.equal(at({ outputTokens: CAP, text: '正文' }).outcome, 'truncated')
+
+    // 优先级 5：正文为空 → empty（走到这里 kind 只可能是 stop）
+    assert.equal(at({ finishReason: 'stop', text: '' }).outcome, 'empty')
+    assert.equal(at({ finishReason: 'stop', text: '  \n ' }).outcome, 'empty')
+    assert.equal(at({ finishReason: 'stop', text: '' }).deliverable, false)
+
+    // 优先级 6：stop + 触及 token 上限 → inconsistent
+    const capped = at({ finishReason: 'stop', outputTokens: CAP, text: '正文' })
+    assert.equal(capped.outcome, 'inconsistent')
+    assert.equal(capped.deliverable, false)
+
+    // 优先级 7：stop + 未触顶 → ok（差一个 token 也算未触顶）
+    const almost = at({ finishReason: 'stop', outputTokens: CAP - 1, text: '正文' })
+    assert.equal(almost.outcome, 'ok')
+    assert.equal(almost.deliverable, true)
+  })
+
+  t('S4-D4/裁决A：usage 缺失但 finish=stop → ok + usageUnknown（不得一律 fail-closed）', () => {
+    const r = classifyCompletion({ finishReason: 'stop', text: '正文', maxTokens: ADVISOR_MAX_TOKENS })
+    assert.equal(r.outcome, 'ok', '★裁决A：不返 usage 的 provider 不是异常，不得 fail-closed')
+    assert.equal(r.usageUnknown, true)
+    assert.equal(r.deliverable, true)
+  })
+
+  t('S4-D9/N25：max-tokens 无 usage → 不投递 + status=error；空正文变体判 truncated 而非 empty', async () => {
+    const withText = await driveReview([
+      { type: 'text-delta', text: NOTE },
+      { type: 'finish', reason: 'max-tokens' },
+    ])
+    assert.equal(withText.delivered.length, 0, '触顶不得投递')
+    assert.equal(withText.runtime.status, 'error')
+    assert.match(withText.runtime.error, /max-tokens/)
+
+    const empty = await driveReview([{ type: 'finish', reason: 'max-tokens' }])
+    assert.equal(empty.delivered.length, 0)
+    assert.equal(empty.runtime.status, 'error')
+    assert.match(empty.runtime.error, /预算|截断/, '★空正文 + max-tokens 必须报触顶截断')
+    assert.doesNotMatch(empty.runtime.error, /正文为空/, '★不得被 empty 判定压过（优先级 1 > 优先级 5）')
+  })
+
+  t('S4-D10/N26：未登记 kind → unknown，不投递 + status=error', async () => {
+    const r = await driveReview([
+      { type: 'text-delta', text: NOTE },
+      { type: 'usage', usage: { outputTokens: 12 } },
+      { type: 'finish', reason: 'some-future-kind' },
+    ])
+    assert.equal(r.delivered.length, 0, '未登记 kind 不得投递')
+    assert.equal(r.runtime.status, 'error')
+    assert.match(r.runtime.error, /未登记/)
+  })
+
+  t('S4-D11/N25p：finishReason=error / aborted → failed，不投递 + status=error', async () => {
+    for (const reason of ['error', 'aborted']) {
+      const r = await driveReview([
+        { type: 'text-delta', text: NOTE },
+        { type: 'usage', usage: { outputTokens: 33 } },
+        { type: 'finish', reason },
+      ])
+      assert.equal(r.delivered.length, 0, `${reason} 不得投递`)
+      assert.equal(r.runtime.status, 'error')
+      assert.match(r.runtime.error, new RegExp(reason))
+    }
+  })
+
+  t('S4-D2/D3/N14：stop + 恰好触顶 → inconsistent 不投递；stop + 差一个 token → 正常投递', async () => {
+    const capped = await driveReview([
+      { type: 'text-delta', text: NOTE },
+      { type: 'usage', usage: { outputTokens: ADVISOR_MAX_TOKENS } },
+      { type: 'finish', reason: 'stop' },
+    ])
+    assert.equal(capped.delivered.length, 0, '★矛盾态（stop + 触顶）不得投递')
+    assert.equal(capped.runtime.status, 'error')
+    assert.match(capped.runtime.error, /矛盾/)
+
+    const almost = await driveReview([
+      { type: 'text-delta', text: NOTE },
+      { type: 'usage', usage: { outputTokens: ADVISOR_MAX_TOKENS - 1 } },
+      { type: 'finish', reason: 'stop' },
+    ])
+    assert.equal(almost.delivered.length, 1, '差一个 token = 未触顶，必须照常投递')
+    assert.equal(almost.runtime.status, 'idle')
+    assert.equal(almost.recorded[0].outcome, 'steer')
+  })
+
+  t('S4-D8/N16（U3）：触顶不投递 + 落 error 记录（outcome=dropped、文案含预算/截断，不得降级 info/recorded）', async () => {
+    const r = await driveReview([
+      { type: 'text-delta', text: NOTE },
+      { type: 'usage', usage: { outputTokens: ADVISOR_MAX_TOKENS } },
+      { type: 'finish', reason: 'stop' },
+    ])
+    assert.equal(r.recorded.length, 1, '触顶必须落一条记录')
+    assert.equal(r.recorded[0].outcome, 'dropped', '★U3：触顶不得降级为 recorded')
+    assert.equal(r.recorded[0].severity, 'info')
+    assert.match(r.recorded[0].text, /预算|截断/)
+    assert.ok(r.statuses.includes('error'), '状态必须出现 error')
+    assert.ok(!r.statuses.includes('info'), '★U3：触顶不得降级为 info')
+  })
+
+  t('S4-D5/D14④：正文非空但 JSON 被截断 + max-tokens → truncated + 记录 outcome=dropped（判定跑在解析之前）', async () => {
+    const r = await driveReview([
+      // 故意既不是合法 JSON、正文里也不出现「预算/截断」二字
+      { type: 'text-delta', text: '{"notes":[{"severity":"concern","text":"半句话没说完' },
+      { type: 'usage', usage: { outputTokens: ADVISOR_MAX_TOKENS } },
+      { type: 'finish', reason: 'max-tokens' },
+    ])
+    assert.equal(r.delivered.length, 0)
+    assert.equal(r.recorded.length, 1)
+    assert.equal(r.recorded[0].outcome, 'dropped')
+    assert.match(r.recorded[0].text, /预算|截断/, '★记录必须说明触顶截断，而不是「解析失败」')
+    assert.doesNotMatch(r.recorded[0].text, /解析失败/, '★判定必须跑在 parseReviewOutput 之前')
+  })
+
+  t('S4-D12/N25pp（AC-25）：只有 usage 无 finish → 按 usage 判定（未触顶 ok / 触顶 truncated）', async () => {
+    const low = await driveReview([
+      { type: 'text-delta', text: NOTE },
+      { type: 'usage', usage: { outputTokens: 100, inputTokens: 900 } },
+    ])
+    assert.equal(low.delivered.length, 1, '★usage 正常但没有 finish 的 provider 必须照常投递')
+    assert.equal(low.runtime.status, 'idle')
+    assert.equal(low.recorded[0].outcome, 'steer')
+
+    const capped = await driveReview([
+      { type: 'text-delta', text: NOTE },
+      { type: 'usage', usage: { outputTokens: ADVISOR_MAX_TOKENS } },
+    ])
+    assert.equal(capped.delivered.length, 0, '触顶事实成立 → 不投递')
+    assert.equal(capped.recorded[0].outcome, 'dropped')
+  })
+
+  t('S4-D7/N17（R6）：trace 不含正文采样——无 sample 键、无 canary 串，text 长度字段仍在', async () => {
+    const CANARY = 'ZZ-CANARY-9d2f7a-模型正文采样探针'
+    const rows = []
+    const r = await driveReview([
+      { type: 'text-delta', text: `{"notes":[{"severity":"nit","text":"${CANARY}"}]}` },
+      { type: 'usage', usage: { outputTokens: 42 } },
+      { type: 'finish', reason: 'stop' },
+    ], { trace: (row) => rows.push(row) })
+    assert.equal(r.delivered.length, 1, '前置：本轮必须真的走完投递（否则 trace 可能压根没触发）')
+    const chunkRows = rows.filter((row) => row.phase === 'chunk')
+    assert.ok(chunkRows.length >= 3, `前置：应采到 3 个分片（实得 ${chunkRows.length}）`)
+    const textRow = chunkRows.find((row) => row.type === 'text-delta')
+    assert.ok(textRow, '前置：应有 text-delta 行')
+    assert.equal(typeof textRow.text, 'number', 'text 字段须保留为「长度」')
+    assert.ok(textRow.text > 0, '长度字段须有值（不是被一起删掉）')
+    for (const row of chunkRows) {
+      assert.ok(!('sample' in row), '★R6：chunk 行不得再带 sample 采样键')
+    }
+    assert.ok(!JSON.stringify(rows).includes('sample'), '★R6：整份 trace 不得出现 sample 键')
+    assert.ok(!JSON.stringify(rows).includes(CANARY), '★R6：trace 零落模型正文（canary 串必须 0 命中）')
+  })
+
+  t('S4-D13（AC-27）：fakeLlm chunk 脚本真被运行时消费——实测参数自证分类（否则 R6 全盲）', async () => {
+    const head = '{"notes":[{"severity":'
+    const tail = '"nit","text":"AB"}]}'
+    const rows = []
+    const r = await driveReview([
+      { type: 'text-delta', text: head },
+      { type: 'text-delta', text: tail },
+      { type: 'usage', usage: { outputTokens: 3, inputTokens: 9 } },
+      { type: 'finish', reason: 'stop' },
+    ], { trace: (row) => rows.push(row) })
+    assert.equal(r.delivered.length, 1, '★桩件下发的 stop + 未触顶必须照常投递')
+    assert.equal(r.recorded[0].outcome, 'steer')
+    const end = rows.find((row) => row.phase === 'call-end')
+    assert.equal(end.textLength, head.length + tail.length, '★桩件的多片 text-delta 必须真被 runtime 累加（否则终态判据全盲）')
+    // 分类自证：这套实测参数（stop + 未触顶）必须落到 ok 并照常投递
+    assert.equal(classifyCompletion({ finishReason: 'stop', outputTokens: 3, text: head + tail }).outcome, 'ok')
   })
 
   t('持续会话：append/snapshot/stats/reset', () => {
