@@ -30,12 +30,18 @@
 - **能关闭**：不存在 / 已 dispose 的 sessionId → `404`，**PATCH 分支零写盘**、**GET 响应体零泄露**
   （404 只有一个通用 error，不含 catalog / records / runtime / provider / model 任一键）；
   形状非法（缺 sessionId、非字符串、空串、超 200 字符、含 `/ \ ..`）→ `400`。
-- **关闭不了**：**同机另一页面修改他人活跃会话的配置**。
+- **关闭不了**（同根因 liveness≠authz 的实际暴露面是**三件**，不只「写」一件——2026-10-06 终验
+  P1-4 按 security-reviewer 扩充枚举）：
+  - **写**：同机另一页面修改他人活跃会话的配置（PATCH）；
+  - **读**：同机另一页面 GET 他人活跃会话的**全部评审记录正文**与 runtime 状态——records 按
+    会话过滤只是展示口径，**过滤 ≠ 鉴权**；`runtime.error` 还会携带模型原文片段；
+  - **触发**：同机另一页面 POST `review` 烧他人会话的评审额度——`busy` 门只防**同一时刻堆叠**
+    （评审在飞时拒绝新 POST），**不防持续触发**：每次等空闲后再 POST 即可连环消耗额度。
 - **依据**：宿主 `WebRoute` 只有 `kind` / `path` / `handler`，**没有鉴权钩子**，handler 拿到的是裸 `IncomingMessage`；
   宿主自述原文「Ambient presence is neither liveness proof nor authorization」
   （`dsh-agent/lib/types/index.d.ts:192-194`）。`ctx.agents.get(sessionId)` 返回裸 Agent
   （`dsh-agent/lib/types/index.d.ts:343`、`:138`），**不需要** `{global:true}`。
-  → 该残余风险**用户已知情接受**，靠当前宿主能力无法关闭。
+  → 该残余风险（写 / 读 / 触发三面）**用户已知情接受**，靠当前宿主能力无法关闭。
 
 ### 0.2 多实例声明
 
@@ -271,7 +277,9 @@ agent 注册表：`agent/created` 时 `agents.set(agent.id, agent)`（`agent.id 
 - **不剥围栏、不做括号配对提取**——解析失败就大声报错（记 `runtime.status='error'` + 落一条 error 记录 + 写日志）。
   半吊子容错会把「模型没按契约输出」伪装成「评审没有意见」。
 - 空 `text` 的意见**丢弃**（非解析失败）；未知 `severity` 归一为 `nit`。
-- 单轮最多 `advisorMaxMessages` 条可见消息入窗；评审员持续会话按消息粒度追加，上下文**只属于 advisor**。
+- 单轮最多 `advisorMaxMessages` 条可见消息入窗；评审员持续会话按消息粒度追加，但**字符预算有界**
+  （`ADVISOR_CONVERSATION_MAX_CHARS`，超预算丢最旧——2026-10-06 P1-3：无界累积会让长会话在
+  模型上下文上限处**永久 error 停摆**），上下文**只属于 advisor**。
 
 ### 7.2 终态判定：显式优先级链（**顺序即语义，不可重排**）
 
@@ -279,7 +287,9 @@ agent 注册表：`agent/created` 时 `agents.set(agent.id, agent)`（`agent.id 
 
 判定输入两路信号：`finishReason`（`type==='finish'` 分片的 `reason`）与 `outputTokens`（`type==='usage'` 分片的 `usage.outputTokens`）。
 已登记 kind：`ADVISOR_FINISH_KINDS = ['stop', 'max-tokens', 'error', 'aborted']`。
-本轮输出预算：`ADVISOR_MAX_TOKENS = 16384`（抬高预算**不对冲**输入窗口，单轮最坏 ≈ 25K tokens，用户知情）。
+本轮输出预算：`ADVISOR_MAX_TOKENS = 16384`（抬高预算**不对冲**输入窗口；首轮最坏 ≈ 25K tokens，用户知情——
+这是**首轮**口径；持续会话历史经 `ADVISOR_CONVERSATION_MAX_CHARS`（96K 字符）有界后，稳态单轮最坏
+≈ 历史预算 + 本轮增量 + 输出 16K，保守口径按 1 token/字符估算）。
 「触顶」= `outputTokens` 达到本轮预算上限。
 
 | 优先级 | 条件 | outcome | 投递 |

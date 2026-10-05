@@ -22,13 +22,14 @@ import * as nodeFs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   resolveAdvisorConfig, resolveAdvisorModel, installAdvisor, ADVISOR_ENDPOINT,
   resolveAdvisorDataDir, DEFAULT_ADVISOR_DATA_DIR, ADVISOR_DATA_DIR_ENV, ADVISOR_TRACE_ENV,
 } from '../lib/advisor/index.js'
 import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, renderVisibleSurface, SEEN_WINDOW_SIZE } from '../lib/advisor/observer.js'
-import { AdvisorRuntime, parseReviewOutput, AdvisorConversation, classifyCompletion, ADVISOR_MAX_TOKENS, ADVISOR_FINISH_KINDS } from '../lib/advisor/runtime.js'
+import { AdvisorRuntime, parseReviewOutput, AdvisorConversation, classifyCompletion, ADVISOR_MAX_TOKENS, ADVISOR_FINISH_KINDS, ADVISOR_CONVERSATION_MAX_CHARS } from '../lib/advisor/runtime.js'
 import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage } from '../lib/advisor/delivery.js'
 import { AdvisorStore, normalizeRecord, sessionConfigPath, sessionSeenPath, CONFIG_FILE } from '../lib/advisor/store.js'
 import { createAdvisorHandler, normalizeAdvisorPatch, normalizeSessionId, SESSION_ID_MAX } from '../lib/advisor/api.js'
@@ -1473,6 +1474,93 @@ export function testRuntime(t) {
     assert.ok(conv.stats().charCount >= 5)
     conv.reset()
     assert.equal(conv.length, 0)
+  })
+
+  // ── P1-3：评审员持续会话有界化（评审终稿 P1-3：无界累积 → 撞上下文上限 → 永久 error 停摆） ──
+
+  t('P1-3a：缺省构造即挂字符预算（生产无界 = 原缺陷形态）', () => {
+    const runtime = new AdvisorRuntime({ provider: 'p', model: 'm', systemPrompt: 's', llm: fakeLlm('{"notes":[]}'), deliver: () => 'recorded', record: () => {} })
+    assert.equal(runtime.conversation.maxChars, ADVISOR_CONVERSATION_MAX_CHARS,
+      '★缺省构造必须落到 ADVISOR_CONVERSATION_MAX_CHARS（引用常量不写死字面量）')
+    runtime.dispose()
+  })
+
+  t('P1-3b：持续会话超预算丢最旧 + 不留悬空 assistant 头', () => {
+    const conv = new AdvisorConversation({ maxChars: 100 })
+    conv.appendUser('u'.repeat(60))
+    conv.appendAssistant('a'.repeat(40)) // 60+40=100，恰好未超
+    assert.equal(conv.stats().charCount, 100)
+    conv.appendUser('n'.repeat(30)) // 130 > 100 → 淘汰 u(60)；剩余以 a(40) 开头（悬空）→ 淘汰
+    assert.equal(conv.length, 1, '★超预算必须丢最旧（无界累积 = P1-3 原缺陷）')
+    assert.equal(conv.messages[0].role, 'user', '修剪后不得以悬空 assistant 开头')
+    assert.equal(conv.messages[0].text, 'n'.repeat(30))
+    assert.ok(conv.stats().charCount <= 100, '★字符总量恒 ≤ 预算')
+  })
+
+  t('P1-3c：单条消息超预算 → 整条不进历史（本轮增量不走会话，照常单独送模型）', () => {
+    const conv = new AdvisorConversation({ maxChars: 50 })
+    conv.appendUser('x'.repeat(80))
+    assert.equal(conv.length, 0, '超预算的单条消息必须整条淘汰（判据是总量不是条数）')
+    conv.appendUser('y'.repeat(20))
+    assert.equal(conv.length, 1)
+  })
+
+  t('P1-3d：长会话模拟（多轮评审 + 全量重放形态巨型增量）→ 重放历史恒 ≤ 预算且每轮照常评审', async () => {
+    const BUDGET = 400
+    const ROUNDS = 12
+    // 证据收集在桩内、断言在回合结束后统一做——桩回调里的 assert 异常会被
+    // callModel 的 catch 吞成 failure（静默无牙），先记录后断言才有牙齿。
+    const historySizes = []
+    const llm = fakeLlm((options) => {
+      const texts = options.messages.map((m) => m.content?.[0]?.text ?? '')
+      historySizes.push(texts.slice(0, -1).reduce((sum, t) => sum + t.length, 0))
+      return '{"notes":[{"severity":"info","text":"意见"}]}'
+    })
+    const runtime = new AdvisorRuntime({
+      provider: 'p', model: 'm', systemPrompt: 's',
+      llm,
+      deliver: () => 'recorded',
+      record: () => {},
+      conversationMaxChars: BUDGET,
+    })
+    for (let i = 0; i < ROUNDS; i++) {
+      // 第 8 轮（i=7）注入一条远超预算的巨型增量——模拟 compact/重写后的全量重放形态；
+      // 其余轮次是常态增量。两种形态下会话都必须有界。
+      const big = i === 7
+      const markdown = (big ? 'FULL-REPLAY' : `round-${i}`) + '-'.repeat(big ? 2000 : 60)
+      runtime.enqueue({ markdown }, { sessionId: 's' })
+      await runtime.waitForDrain()
+      assert.ok(runtime.conversation.stats().charCount <= BUDGET, `round ${i}：会话长度必须有界`)
+    }
+    assert.equal(llm.calls.length, ROUNDS, '有界化不得中断评审循环（每轮照常调用模型）')
+    assert.equal(historySizes.length, ROUNDS, '每轮都真实到达了模型调用（否则下面的历史断言是空门）')
+    for (const [i, h] of historySizes.entries()) {
+      assert.ok(h <= BUDGET, `★round ${i}：重放历史 ${h} 字符必须 ≤ 预算 ${BUDGET}（P1-3 停摆根因）`)
+    }
+    runtime.dispose()
+  })
+
+  // ── P1-4：契约 0.1「关闭不了」枚举完整（写/读/触发三面）且 SKILL.md 边界 1 同步 ──
+
+  t('P1-4：契约 0.1 三面暴露面（写/读/触发）已声明，SKILL.md 边界 1 同步', () => {
+    const contract = readFileSync(fileURLToPath(new URL('../docs/advisor-contract.md', import.meta.url)), 'utf8')
+    const start = contract.indexOf('### 0.1')
+    const end = contract.indexOf('### 0.2')
+    assert.ok(start >= 0 && end > start, '契约必须存在 0.1 节（找不到 = 文档结构漂移）')
+    const sec = contract.slice(start, end)
+    // 三面枚举的 grep 可断言声明（bullet 头形态锚定，防说明性字面量误命中）
+    assert.match(sec, /\*\*写\*\*[：:]/, '★写面（PATCH 改他人配置）必须显式声明')
+    assert.match(sec, /\*\*读\*\*[：:]/, '★读面必须显式声明（security 终稿：GET 他人评审记录正文 + runtime.error 模型原文片段）')
+    assert.match(sec, /\*\*触发\*\*[：:]/, '★触发面必须显式声明（POST review 烧他人额度）')
+    // 读面要点与触发面要点（security P2-4）
+    assert.match(sec, /评审记录正文/, '读面要点：他人活跃会话的评审记录正文')
+    assert.match(sec, /只防[^。\n]*堆叠/, '触发面要点：busy 门只防堆叠')
+    assert.match(sec, /不防持续触发/, '触发面要点：不防持续触发（P2-4）')
+    // SKILL.md 边界 1 与契约同步（同三面）
+    const skill = readFileSync(fileURLToPath(new URL('../skills/advisor/SKILL.md', import.meta.url)), 'utf8')
+    assert.match(skill, /\*\*写\*\*——/, '★SKILL.md 边界 1 必须同步写面')
+    assert.match(skill, /\*\*读\*\*——/, '★SKILL.md 边界 1 必须同步读面')
+    assert.match(skill, /\*\*触发\*\*——/, '★SKILL.md 边界 1 必须同步触发面')
   })
 }
 

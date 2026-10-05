@@ -73,7 +73,7 @@ advisor = **每个 turn 结束后自动调一个模型，给主会话「把控�
 
 | # | 边界 | 事实与依据 | 后果 |
 |---|---|---|---|
-| 1 | **`sessionId` 校验是 liveness check, not authorization** | 宿主 `WebRoute` 只有 `kind`/`path`/`handler`，**没有鉴权钩子**，handler 拿的是裸 `IncomingMessage`；宿主自述原文「Ambient presence is neither liveness proof nor authorization」（`lib/advisor/index.js:343-350`） | 能关闭：不存在/已 dispose 的 sessionId → `404`，PATCH 零写盘、GET 响应体零泄露。**关闭不了：同机另一页面仍可能修改他人活跃会话的 advisor 配置**——该残余风险用户已知情接受，靠当前宿主能力无法关闭 |
+| 1 | **`sessionId` 校验是 liveness check, not authorization** | 宿主 `WebRoute` 只有 `kind`/`path`/`handler`，**没有鉴权钩子**，handler 拿的是裸 `IncomingMessage`；宿主自述原文「Ambient presence is neither liveness proof nor authorization」（`lib/advisor/index.js:343-350`） | 能关闭：不存在/已 dispose 的 sessionId → `404`，PATCH 零写盘、GET 响应体零泄露。**关闭不了（同根因 liveness≠authz 的三件暴露面）**：**写**——同机另一页面修改他人活跃会话的 advisor 配置（PATCH）；**读**——GET 他人活跃会话的全部评审记录正文与 runtime 状态（records 按会话过滤只是展示口径、过滤≠鉴权，`runtime.error` 还携带模型原文片段）；**触发**——POST `review` 烧他人会话的评审额度（`busy` 门只防同一时刻堆叠、不防持续触发，等空闲后再 POST 即可连环消耗）——该残余风险（三面）用户已知情接受，靠当前宿主能力无法关闭 |
 | 2 | **「恰好一次」实为「至多一次」** | 幂等键与水位的消耗发生在**渲染之前**；无可渲染增量的 turn（典型：模型只发工具调用、结果 role=`tool` 被 user/assistant 白名单滤掉）被键 + 水位**双杀**（`lib/advisor/observer.js:385`、`:393` 直接 return） | 该 turn **永久不评**——事后补上可见内容再重放同一 turn，实测仍 0 次。需要补评走面板「立即评审一次」 |
 | 3 | **agentic 分支跨重启会对整段历史补评一次（重复计费）** | agentic 路径（从不发 `turn/end` 的会话）**不碰 seen**（它没有 turn 边界可依，`lib/advisor/observer.js:263-277` 无持久化调用），幂等**只**靠内存游标；重启后游标归零 | **每重启一次，下一次人类输入就对整段历史补评一次** |
 | 4 | **只评审主会话汇总，子会话内部 step 不可见** | 数据源封闭：只调当前会话 `deriveMessages()`，无子会话展开路径；子会话产出回父会话是 `tool/result`（role=`tool`），被 user/assistant 白名单直接滤掉（契约 6.2） | 父会话评审看到的是**父会话 assistant 自己的汇总文本**；子会话要评审得单独给子会话开 advisor |
@@ -87,9 +87,9 @@ advisor = **每个 turn 结束后自动调一个模型，给主会话「把控�
 
 ## 5. 成本口径与何时不该开
 
-- **单轮输入 ≈8.5K tokens 起步**（口径：`lib/advisor/runtime.js:31` 记录的量级估算「单轮 input≈8.5K + output 封顶 ≈16K ≈ 25K tokens」；随对话变长与配置 `advisorMaxMessages` 变化，**这是量级不是精确值**）。
-- 输出预算 `ADVISOR_MAX_TOKENS = 16384`，**抬高预算不对冲输入窗口**（`advisorMaxMessages` 保持 60），单轮最坏 ≈25K tokens——用户知情接受。
-- **成本随 turn 数线性涨**：评审员是持续会话，跨回合累积，**每次评审全量重放**（无截断）。
+- **单轮输入 ≈8.5K tokens 起步**（口径：`lib/advisor/runtime.js:33` 记录的量级估算「单轮 input≈8.5K + output 封顶 ≈16K ≈ 25K tokens」；随对话变长与配置 `advisorMaxMessages` 变化，**这是量级不是精确值**）。
+- 输出预算 `ADVISOR_MAX_TOKENS = 16384`，**抬高预算不对冲输入窗口**（`advisorMaxMessages` 保持 60），首轮最坏 ≈25K tokens——用户知情接受。
+- **成本随 turn 数先线性涨、到预算后封顶**：评审员是持续会话，跨回合累积，每次评审重放**有界**历史（字符预算 `ADVISOR_CONVERSATION_MAX_CHARS`，超预算丢最旧——2026-10-06 P1-3 修复；此前无截断累积会让长会话撞模型上下文上限后**永久 error 停摆**）+ 本轮增量。
 - **据此的开关判据**：不需要「每轮都要有人把关」的轻量任务**不要开**——每轮一次模型调用就是一份起步成本，而这类任务主会话自己就做得完。需要把关的场合（大改造、多轮长跑、方向容易跑偏的活）才值得。
 
 ## 6. 出问题时的排查顺序
