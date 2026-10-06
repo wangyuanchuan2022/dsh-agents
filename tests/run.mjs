@@ -1117,6 +1117,132 @@ await testEndpointForms('新宿主 forms：resetAll 走 mutate(unset tiers) 回�
   assert.equal(res.json().tiers.HIGH.provider, 'prov-x', 'unset 后回落 cordis 基底')
 })
 
+// ── 忠实宿主假体：复刻 0.1.7 的「写单档」真实语义（2026-10-06 活体实测） ──
+/**
+ * 与上面 fakeSettingsForms 的关键差别（后者是**空门**，永远测不出回退缺陷）：
+ *  ① describe() 同时回报两个层——`value` = **loader 内存快照**（entry.fiber.config /
+ *     entry.options.config）、`user` = **profile patch 覆盖层**（宿主每次 describe
+ *     从磁盘重读，见 dsh-config-editor/lib/index.js:45 `loadProfileDirectory`）；
+ *  ② update() 的**合并基底是 loader 快照**（dsh-settings/lib/index.js:471-472
+ *     `mergeLayers(current = entry.options.config, input)`），不是上一次写入的结果；
+ *     落盘写回的是整个 volatile 投影（dsh-config-editor/lib/index.js:104）；
+ *  ③ 写盘**不刷新 loader 快照**——2026-10-06 活体实测：PATCH 改 LOW 后 MEDIUM 从
+ *     磁盘层 deepseek-official/deepseek-flash 被写回内存层 openrouter-ai/…（陈旧值）。
+ * 这三个语义合起来才是「保存一档 → 另外两档掉回基底」的成因；缺①或②的假体测不出。
+ *
+ * ⚠️ `patch` 参数 = profile patch 的 **entry config 层**（形如 `{ tiers: {…} }`），
+ * 不是裸 tiers 映射。传错形状会让 `entry.user.tiers === undefined`，插件静默按「无用户层」
+ * 处理 —— 整个回归锁会变成空门（2026-10-06 本席实测踩中，靠 tests/probe-tier-save-loss.mjs
+ * 的 plumbing 自检抓出）。故 hostTierFixture 里加了形状自检断言，见下。
+ */
+function hostTierFake({ memory, patch = {} } = {}) {
+  const clone = (v) => JSON.parse(JSON.stringify(v))
+  let revision = 1
+  let memorySnapshot = clone({ tiers: memory }) // loader 内存快照：写盘后不刷新
+  let patchLayer = clone(patch) // profile patch 覆盖层：每次 describe 从磁盘重读
+  const calls = { update: [] }
+  const deepMerge = (under, over) => {
+    if (under === null || typeof under !== 'object' || Array.isArray(under)) return over
+    if (over === null || typeof over !== 'object' || Array.isArray(over)) return over
+    const out = { ...under }
+    for (const [key, value] of Object.entries(over)) {
+      Object.defineProperty(out, key, {
+        value: Object.hasOwn(out, key) ? deepMerge(out[key], value) : value,
+        enumerable: true, configurable: true, writable: true,
+      })
+    }
+    return out
+  }
+  return {
+    calls,
+    /** 测试钩子：直接改「磁盘层」，模拟别处（其它会话/手改/上一次写入）留下的用户层覆盖。 */
+    setPatchLayer: (next) => { patchLayer = clone(next); revision += 1 },
+    patchLayer: () => clone(patchLayer),
+    describe: () => [{
+      ns: 'dsh-agents', autoGenerate: false, schema: null, applies: 'live', revision,
+      value: clone(memorySnapshot), // 陈旧层
+      user: clone(patchLayer), // 新鲜层
+    }],
+    configure: () => () => {},
+    update: async (ns, input, expectedRevision) => {
+      calls.update.push({ ns, input, expectedRevision })
+      if (ns !== 'dsh-agents') throw new Error(`unexpected ns ${ns}`)
+      if (expectedRevision !== undefined && expectedRevision !== revision) {
+        const e = new Error('settings conflict'); e.code = 'SETTINGS_CONFLICT'; throw e
+      }
+      patchLayer = deepMerge(memorySnapshot, input) // 合并基底 = 陈旧的 loader 快照
+      revision += 1 // ⚠️ memorySnapshot 故意不刷新（复刻实测到的非热更新）
+    },
+    mutate: async () => { throw new Error('hostTierFake.mutate 未实现（本组用例不走 resetAll）') },
+  }
+}
+
+/** 三档全给、值互不相同——单元素断言分不出「整份写回」与「只写一档」，必须三档同时可判。 */
+const HOST_MEMORY_TIERS = {
+  LOW: { provider: 'mem-low', model: 'mem-low-m' },
+  MEDIUM: { provider: 'mem-med', model: 'mem-med-m' },
+  HIGH: { provider: 'mem-high', model: 'mem-high-m' },
+}
+const HOST_PATCH_TIERS = {
+  LOW: { provider: 'user-low', model: 'user-low-m' },
+  MEDIUM: { provider: 'user-med', model: 'user-med-m' },
+  HIGH: { provider: 'user-high', model: 'user-high-m' },
+}
+
+/** 造一套「内存层陈旧 + 磁盘层已有三档用户覆盖」的宿主，返回端点与写日志。 */
+function hostTierFixture() {
+  const settings = hostTierFake({ memory: HOST_MEMORY_TIERS, patch: { tiers: HOST_PATCH_TIERS } })
+  // plumbing 自检：假体的两层形状不对 → 直接炸，绝不让回归锁退化成空门。
+  const probe = settings.describe()[0]
+  assert.equal(probe.value?.tiers?.MEDIUM?.model, 'mem-med-m', '假体 value 层（陈旧）形状不对')
+  assert.equal(probe.user?.tiers?.MEDIUM?.model, 'user-med-m', '假体 user 层（新鲜）形状不对——传错 patch 形状会让回归锁变空门')
+  const { ctx } = fakeCtx({ settings })
+  const tiersApi = createTiersApi(ctx, resolveTierTable(HOST_MEMORY_TIERS))
+  const handler = createConfigHandler({ tiersApi, loadCatalog: async () => ({ 'new-low': ['new-low-m'] }) })
+  return { settings, tiersApi, handler }
+}
+
+await testAsync('负向自测（假体有牙）：按修复前的载荷形状（整份取陈旧 value 层）写单档 → 必须复现另两档回退', async () => {
+  const { settings } = hostTierFixture()
+  const stale = settings.describe()[0].value.tiers // 修复前 writeTiers 读的就是这一层
+  await settings.update('dsh-agents', { tiers: { ...stale, LOW: { provider: 'new-low', model: 'new-low-m' } } }, 1)
+  const after = settings.patchLayer().tiers
+  assert.equal(after.MEDIUM.model, 'mem-med-m', '陈旧层写回必须把 MEDIUM 打回内存层值——假体若无此行为则回归锁是空门')
+  assert.equal(after.HIGH.model, 'mem-high-m', '同一断言对 HIGH 也必须成立')
+})
+
+await testAsync('回归锁：writeTiers 写单档不得丢掉其余档的既有用户层值（文件:行号 settings.js:226-230）', async () => {
+  const { settings, tiersApi } = hostTierFixture()
+  await tiersApi.writeTiers({ LOW: { provider: 'new-low', model: 'new-low-m' } })
+  const after = settings.patchLayer().tiers
+  assert.equal(after.LOW.model, 'new-low-m', '被改的那一档必须落库')
+  assert.equal(after.MEDIUM.model, 'user-med-m', '未被改的 MEDIUM 必须保留用户层值，不许被陈旧内存层 mem-med-m 覆盖')
+  assert.equal(after.HIGH.model, 'user-high-m', '未被改的 HIGH 必须保留用户层值，不许被陈旧内存层 mem-high-m 覆盖')
+})
+
+await testAsync('回归锁（端点层）：PATCH 改一档后其余两档仍报「用户层覆盖」（用户原话症状的可判定判据）', async () => {
+  const { handler } = hostTierFixture()
+  const res = fakeRes()
+  await handler(fakeReq({ method: 'PATCH', body: { tier: 'LOW', provider: 'new-low', model: 'new-low-m' } }), res)
+  assert.equal(res.statusCode, 200)
+  const body = res.json()
+  assert.equal(body.tiers.LOW.model, 'new-low-m')
+  assert.equal(body.tiers.MEDIUM.model, 'user-med-m', 'PATCH 回读里 MEDIUM 不得掉回基底')
+  assert.equal(body.tiers.HIGH.model, 'user-high-m', 'PATCH 回读里 HIGH 不得掉回基底')
+  assert.equal(body.sources.MEDIUM, '设置（用户层覆盖）', 'MEDIUM 值 ≠ 基底 → 必须报「用户层覆盖」而不是「cordis 配置基底」')
+  assert.equal(body.sources.HIGH, '设置（用户层覆盖）', 'HIGH 同理')
+})
+
+await testAsync('回归锁：连续写两档时先前写入的那一档不被后一次写回退（陈旧层只在首次暴露）', async () => {
+  const { settings, tiersApi } = hostTierFixture()
+  await tiersApi.writeTiers({ LOW: { provider: 'new-low', model: 'new-low-m' } })
+  await tiersApi.writeTiers({ HIGH: { provider: 'new-high', model: 'new-high-m' } })
+  const after = settings.patchLayer().tiers
+  assert.equal(after.LOW.model, 'new-low-m', '第二次写 HIGH 不得把第一次写的 LOW 打回去')
+  assert.equal(after.HIGH.model, 'new-high-m')
+  assert.equal(after.MEDIUM.model, 'user-med-m', '两次写都不许动未被触及的 MEDIUM')
+})
+
 test('entry Config：导出 schema 且三档标 volatile（否则宿主 describe() 直接跳过本 entry）', () => {
   assert.ok(Config !== undefined, 'lib/index.js 必须导出 Config（宿主从 entry 模块读取）')
   assert.equal(Config, CONFIG_SCHEMA, 'index.js 的 Config 必须就是 settings.js 的 CONFIG_SCHEMA')
