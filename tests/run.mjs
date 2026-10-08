@@ -1328,6 +1328,11 @@ for (const suite of [
   advisorTests.testSessionStore,
   advisorTests.testPerSessionEndpoint,
   advisorTests.testIntegration,
+  // S0 Phase 0 Baseline（advisor V3 节 2 S0）：runtimeSignature 三态锁定 +
+  // 新增测试模块（isolation-gate / advisor-llm-replay）的**加载期零副作用**机检。
+  // 位置约束：必须排在 testRealDataDirIsolation **之前**——后者是收尾断言，
+  // 任何新用例都不得绕到它之后（见下方注释）。
+  advisorTests.testV3Baseline,
   // 必须最后：它比对的是「模块加载时的真实用户数据目录快照」与「现在」，
   // 只有排在所有 advisor 用例之后才是真正的收尾断言。
   advisorTests.testRealDataDirIsolation,
@@ -1343,4 +1348,9 @@ for (const suite of [
 // ── 汇总 ──────────────────────────────────────────────────────────────────
 console.log(`dsh-agents tests: ${passed} passed, ${failures.length} failed`)
 for (const failure of failures) console.log(`  FAIL ${failure}`)
-process.exit(failures.length === 0 ? 0 : 1)
+// 退出码语义不变（0=全绿 / 1=有失败），但**不再强制终止进程**：
+// tests/isolation-gate.mjs 需要 `await import('./run.mjs')` 之后继续拍 after 快照并断言相等。
+// 若这里仍用 process.exit(...)，包装器的 after 快照与断言永远不会执行（S0 判据 9 的实现约束）。
+// 代价（C-1）：残留句柄（setTimeout / AbortController / 未 dispose 的 runtime 池）不再被强制
+// 切断 ⇒ 由隔离门在 after 快照之后**显式收口**，并用「N 秒内退出」的可跑看门狗断言兜住。
+process.exitCode = failures.length === 0 ? 0 : 1

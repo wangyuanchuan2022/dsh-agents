@@ -2724,3 +2724,164 @@ export function testRealDataDirIsolation(t) {
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 }
+
+// ── 9. S0 Phase 0 Baseline 锁定（advisor V3 plan 节 2 S0：判据 3 + 判据 11）─────
+//
+// 为什么必须**追加在同一个文件**（而不是新开一个 suite 文件）：
+// 隔离门 `testRealDataDirIsolation` 的真实 dataDir 基线是**模块加载时**捕获的
+// （上面 `REAL_DATA_DIR_BASELINE`，:2138）。若新用例放进新文件、且在 run.mjs:1319
+// 的 `import * as advisorTests from './advisor.test.mjs'` **之前**被 import，新模块
+// 加载期的写盘残留会被烘焙进基线，收尾断言就再也看不见它。同文件追加 = 与既有
+// suite 同一次求值、同一条基线。
+//
+// 加载期零副作用（S0 判据 11）：本段只有常量与函数声明；任何写盘都在 `t(...)` 体内。
+
+/** `runtimeSignature`（lib/advisor/index.js:376-385）第三态 join 串的字段清单与顺序。 */
+const RUNTIME_SIGNATURE_FIELDS = [
+  'route.provider',
+  'route.model',
+  'systemPromptOf()',
+  'config.advisorMaxQueued',
+  'config.advisorCallTimeoutMs',
+  'config.advisorPersistLimit',
+  'JSON.stringify(config.advisorSteerSeverities)',
+  'config.advisorInfoInject',
+  'config.advisorImmuneTurns',
+]
+
+/**
+ * 取出 `runtimeSignature` 的函数体源码文本。
+ *
+ * 用「函数头定位 + 花括号配平」而不是写死行号：行号会随任何无关改动漂移，
+ * 写死行号的锁会在重构时变成**假红**（锁的是位置而不是行为）。
+ *
+ * @returns {string} 从 `const runtimeSignature = (sessionId) => {` 到配平右花括号
+ */
+function extractRuntimeSignatureSource() {
+  const src = readFileSync(fileURLToPath(new URL('../lib/advisor/index.js', import.meta.url)), 'utf8')
+  const start = src.indexOf('const runtimeSignature = (sessionId) => {')
+  assert.ok(start >= 0, 'runtimeSignature 必须存在（找不到 = 键函数被改名/删除，锁定失效）')
+  let depth = 0
+  for (let i = src.indexOf('{', start); i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1
+    else if (src[i] === '}') {
+      depth -= 1
+      if (depth === 0) return src.slice(start, i + 1)
+    }
+  }
+  throw new Error('runtimeSignature 函数体花括号不配平（源码形态已变，锁定需同步）')
+}
+
+/**
+ * `runtimeSignature` 三态形态的违规清单（纯函数 ⇒ 可直接喂变异体，L1-15）。
+ *
+ * @param {string} body
+ * @returns {string[]} 空数组 = 三态形态逐字保持
+ */
+function runtimeSignatureShapeViolations(body) {
+  const violations = []
+  if (!/if \(!enabled\) return 'off'/.test(body)) violations.push('第一态 off 缺失/被改')
+  if (!/if \(route\.modelSource !== 'session'\) return `unset:\$\{route\.reason \?\? ''\}`/.test(body)) {
+    violations.push('第二态 unset:<reason> 缺失/被改（reason 必须内联且缺省为空串）')
+  }
+  const joinMatch = body.match(/return \[\s*([\s\S]*?)\s*\]\.join\(' '\)/)
+  if (joinMatch === null) {
+    violations.push("第三态 join 串形态缺失（必须 [...].join(' ')）")
+  } else {
+    const fields = joinMatch[1].split(',').map((s) => s.trim()).filter((s) => s !== '')
+    if (JSON.stringify(fields) !== JSON.stringify(RUNTIME_SIGNATURE_FIELDS)) {
+      violations.push(`第三态字段清单漂移：实得 ${JSON.stringify(fields)}`)
+    }
+  }
+  return violations
+}
+
+/** S0 判据 3 + 判据 11：runtimeSignature 三态锁定 + 新增测试模块加载期零副作用。 */
+export function testV3Baseline(t) {
+  t('S0-3 runtimeSignature 三态锁定：off / unset:<reason> / join 串（源级形态 + 装配行为双证）', () => {
+    const body = extractRuntimeSignatureSource()
+
+    // ① 源级形态：三态字面量 + join 字段清单（字段与顺序都锁）
+    assert.deepEqual(runtimeSignatureShapeViolations(body), [], 'runtimeSignature 三态形态必须逐字保持')
+
+    // ② 变异控（L1-15：变异体与断言类别一一对应）——证明 ① 不是空门
+    const mutants = [
+      ['第一态', (s) => s.replace("if (!enabled) return 'off'", "if (!enabled) return 'on'")],
+      ['第二态', (s) => s.replace("`unset:${route.reason ?? ''}`", '`unset:${route.reason}`')],
+      ['第三态', (s) => s.replace('config.advisorInfoInject, ', '')],
+    ]
+    for (const [label, mutate] of mutants) {
+      const mutated = mutate(body)
+      assert.notEqual(mutated, body, `变异体必须真的注入到文本里（${label}）`)
+      assert.ok(runtimeSignatureShapeViolations(mutated).length > 0, `注入后锁必须变红（${label}）`)
+    }
+
+    // ③ 装配行为：三态在真实 installAdvisor 下可观察（源级锁之外的第二手段）
+    const dir = tempDir('v3sig')
+    try {
+      const { ctx, emit } = fakeCtx()
+      const agent = fakeAgent('s-sig')
+      ctx.agents.get = (id) => (id === 's-sig' ? agent : undefined)
+      const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => fakeLlm('{"notes":[]}') })
+      try {
+        // 态 1 `off`：无会话配置 → enabled=false ⇒ 直接返回 'off'，且绝不建运行时
+        assert.equal(installed.ctrl.snapshot('s-sig').enabled, false, '态 1 前提：未配即未启用')
+        assert.equal(installed.ctrl.runtimeOf('s-sig'), undefined, "态 1（'off'）：不得建运行时")
+
+        // 态 2 `unset:<reason>`：enabled=true 但会话无模型。
+        // 这里**手工写**配置文件（绕过 API 的 U2 成对规则），因为该态正是引擎必须
+        // 防御的「旧文件 / 手改文件」形态——它**不代表** API 放开成对规则。
+        mkdirSync(join(dir, 'sessions'), { recursive: true })
+        writeFileSync(sessionConfigPath(dir, 's-sig'), JSON.stringify({ enabled: true }))
+        const unsetSnap = installed.ctrl.snapshot('s-sig')
+        assert.equal(unsetSnap.enabled, true, '态 2 前提：enabled 真值必须在位（否则退化成态 1）')
+        assert.equal(unsetSnap.modelSource, 'unset', "态 2：modelSource 必须是 'unset'")
+        assert.match(String(unsetSnap.runtime.error), /未指定评审模型/, '态 2 的 <reason> 必须由 route.reason 提供')
+        assert.equal(installed.ctrl.runtimeOf('s-sig'), undefined, '态 2：未指定模型绝不建运行时（硬门禁）')
+
+        // 态 3 join 串：会话配了模型 → 走第三态；join 串里任一字段变化必须触发运行时重建
+        installed.ctrl.patchConfig('s-sig', { enabled: true, provider: 'p-sig', model: 'm-sig' })
+        emit('agent/created', { agent })
+        const first = installed.ctrl.runtimeOf('s-sig')
+        assert.equal(first.provider, 'p-sig', '态 3：运行时按会话路由建出')
+        installed.ctrl.patchConfig('s-sig', { enabled: true, provider: 'p-sig2', model: 'm-sig' })
+        const second = installed.ctrl.runtimeOf('s-sig')
+        assert.equal(second.provider, 'p-sig2', '态 3：join 串漂移必须重建运行时')
+        assert.notEqual(second, first, '态 3：重建必须产生新实例（签名的唯一可观察后果）')
+      } finally { installed.dispose() }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('S0-11 加载期零副作用：新增测试模块 import 前后快照根逐字节不变（含判据 12 的录制件根）', async () => {
+    const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+    const fixtureRoot = join(repoRoot, 'agent-out', 'v3-fixtures')
+    const before = {
+      real: snapshotTree(DEFAULT_ADVISOR_DATA_DIR),
+      fixtures: snapshotTree(fixtureRoot),
+    }
+
+    // 两个新增模块在本套件里**首次**求值（gate 是入口直跑时才自跑，被 import 时不应有副作用）
+    const gate = await import('./isolation-gate.mjs')
+    const replay = await import('./advisor-llm-replay.mjs')
+
+    const after = {
+      real: snapshotTree(DEFAULT_ADVISOR_DATA_DIR),
+      fixtures: snapshotTree(fixtureRoot),
+    }
+    assert.deepEqual(after.real, before.real, '加载新增测试模块不得触碰真实用户 dataDir')
+    assert.deepEqual(after.fixtures, before.fixtures, '加载新增测试模块不得写录制件根')
+
+    // 阳性对照：两个模块必须**真的被求值**——否则上面的「没变化」是空门
+    // （import 打错路径、导出改名等同样会让快照「没变化」）。
+    assert.equal(typeof gate.snapshotTree, 'function', 'isolation-gate.mjs 必须被求值（导出 snapshotTree）')
+    assert.equal(typeof gate.SNAPSHOT_ROOTS?.includes, 'function', 'isolation-gate.mjs 必须导出快照根列表')
+    assert.equal(typeof replay.createReplayLlm, 'function', 'advisor-llm-replay.mjs 必须被求值（导出 createReplayLlm）')
+    assert.equal(typeof replay.createRecordingLlm, 'function', 'advisor-llm-replay.mjs 必须导出录制端')
+
+    // 门的快照目标必须与 lib 常量同源（否则门在守一个早已换址的目录 = 空门）
+    assert.equal(gate.REAL_DATA_DIR, DEFAULT_ADVISOR_DATA_DIR, 'gate 的真实 dataDir 必须与 lib 常量一致')
+    // 判据 12 的录制件落点必须**显式**列入快照根（否则是 architect P1-9 的「第三类无门落盘点」）
+    assert.ok(gate.SNAPSHOT_ROOTS.includes(DEFAULT_ADVISOR_DATA_DIR), '真实 dataDir 必须是快照根')
+    assert.ok(gate.SNAPSHOT_ROOTS.includes(fixtureRoot), '录制件根必须显式列入快照根列表')
+  })
+}
