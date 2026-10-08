@@ -110,10 +110,18 @@ function fakeLlm(script) {
   }
 }
 
+/**
+ * 为用例造一个**真实存在**的临时目录（`os.tmpdir()` 下，名字带 tag + 随机后缀）。
+ *
+ * B0 遗留缺陷修复（登记于 `agent-out/v3-s1a-retrieval.md` 节「顺手修复」）：
+ * 旧实现先拼出 `dsh-agents-advisor-<tag>-<pid>-0<时间戳>` 这个路径，又调用
+ * `mkdtempSync(...)` 却**丢弃了返回值**，于是 ① 返回的路径**根本不存在**（各用例
+ * 靠 installAdvisor 的 mkdir 顺带补上）；② 每次调用都在系统临时目录**多留一个空目录**
+ * （没人清它）。现在直接返回 `mkdtempSync` 的结果：路径真实存在，且各用例 finally 里的
+ * `rmSync(dir, { recursive: true, force: true })` 能真正把它清掉。
+ */
 function tempDir(tag) {
-  const dir = join(tmpdir(), `dsh-agents-advisor-${tag}-${process.pid}-${Math.floor(process.randomUUID ? 0 : 0)}${Date.now()}`)
-  mkdtempSync(join(tmpdir(), `dsh-adv-${tag}-`))
-  return dir
+  return mkdtempSync(join(tmpdir(), `dsh-adv-${tag}-`))
 }
 
 // ── 1. 配置校验 + 模型回落链 ─────────────────────────────────────────────
@@ -2883,5 +2891,742 @@ export function testV3Baseline(t) {
     // 判据 12 的录制件落点必须**显式**列入快照根（否则是 architect P1-9 的「第三类无门落盘点」）
     assert.ok(gate.SNAPSHOT_ROOTS.includes(DEFAULT_ADVISOR_DATA_DIR), '真实 dataDir 必须是快照根')
     assert.ok(gate.SNAPSHOT_ROOTS.includes(fixtureRoot), '录制件根必须显式列入快照根列表')
+  })
+}
+
+// ── 10. S1a：零依赖只读检索地基（advisor V3 节 2 S1a，判据 1–13）──────────────
+//
+// 追加在同一文件（与既有 suite 同一次求值、同一条基线）——理由同 S0 段。
+// 本段所有 import 都是**声明**：retrieval/* 模块顶层无任何写盘/建目录副作用
+// （由 S1a-13 的源码级写 API 门 + isolation-gate 的进程边界快照双重覆盖）。
+//
+// 本段自带的判据锚点（报告引用用）：S1a-1/2…S1a-13，逐条对应任务书 13 条判据。
+
+import {
+  BASE_CONTEXT_BYTES, RETRIEVAL_CALL_BYTES, RETRIEVAL_TOTAL_BYTES, TOTAL_INJECTION_BYTES, BUDGET_ITEMS,
+  budgetVerdict, accountRetrieval, budgetExhaustedCarrier, measureInjection,
+  createRetrieval, createBundle, isTestPath,
+  createPathPolicy, createRejectionLog, REJECT, PathPolicyError,
+  createGitReader, GitError,
+  compileQuery, searchFiles, searchText, findRelatedTests, testCandidatesFor, NO_TEST_ANNOTATION,
+  DEFAULT_EXCLUDED_DIRS, parseGitignore, parseGitattributes, createIgnoreMatcher, listFiles, snapshotWorktree,
+} from '../lib/advisor/retrieval/index.js'
+import { assertReadonlyArgv, tempFileName, parsePorcelain, parseNumstat, parseLog } from '../lib/advisor/retrieval/git.js'
+
+/** retrieval 模块目录（源码级门的扫描面）。 */
+const RETRIEVAL_DIR = fileURLToPath(new URL('../lib/advisor/retrieval', import.meta.url))
+/** lib/advisor 全树（判据 13 的写 API 门的扫描面）。 */
+const ADVISOR_DIR = fileURLToPath(new URL('../lib/advisor', import.meta.url))
+
+/** fixture 独特串（AC-2b / AC-2c / AC-3 的锚）。 */
+const S1A_SOURCE_MARK = 'UNIQUE_SOURCE_MARK_S1A'
+const S1A_TEST_MARK = 'UNIQUE_TEST_MARK_S1A'
+
+/** 只读写 API 门的**基线豁免面**（逐条钉死：文件 + 行内片段；每条都必须命中 ≥1 处）。 */
+const WRITE_API_ALLOWLIST = [
+  { file: 'lib/advisor/index.js', snippet: 'mkdirSync(dataDir, { recursive: true })', reason: '既有（S0 前）：installAdvisor 建数据目录' },
+  { file: 'lib/advisor/index.js', snippet: "appendFileSync(join(dataDir, 'chunk-trace.jsonl')", reason: '既有（S0 前）：trace sink' },
+  { file: 'lib/advisor/store.js', snippet: 'this.fs.mkdirSync(dir, { recursive: true })', reason: '既有（S0 前）：#atomicWrite 临时目录' },
+  { file: 'lib/advisor/store.js', snippet: 'this.fs.writeFileSync(tmp, data)', reason: '既有（S0 前）：#atomicWrite 写临时件' },
+  { file: 'lib/advisor/store.js', snippet: 'this.fs.renameSync(tmp, path)', reason: '既有（S0 前）：#atomicWrite 原子替换' },
+  { file: 'lib/advisor/store.js', snippet: 'this.fs.mkdirSync(this.dataDir, { recursive: true })', reason: '既有（S0 前）：records 目录' },
+  { file: 'lib/advisor/store.js', snippet: 'this.fs.appendFileSync(this.recordsFile', reason: '既有（S0 前）：records.jsonl 追加' },
+  { file: 'lib/advisor/retrieval/git.js', snippet: "fs.openSync(tmpPath, 'w')", reason: 'S1a 判据 13 豁免②：fd-stdio 子进程输出句柄（只写子进程输出）' },
+  { file: 'lib/advisor/retrieval/git.js', snippet: 'fs.unlinkSync(tmpPath)', reason: 'S1a 判据 13 豁免②：同一临时文件的清理' },
+]
+
+/** 计划 S1a 判据 13 点名的写 API（**调用形态**；成员调用 `this.fs.x(` 与裸调用同等对待）。 */
+const WRITE_API_NAMES = [
+  'writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream',
+  'rmSync', 'rm', 'unlinkSync', 'unlink', 'mkdirSync', 'mkdir', 'renameSync', 'rename',
+  'copyFileSync', 'copyFile', 'truncate', 'truncateSync', 'chmod', 'chmodSync', 'utimes', 'utimesSync',
+  'writeText', 'editText',
+]
+
+/** AC-15 点名的预算字面量（**在运行时由幂运算拼出**，否则本文件自己就会命中门线）。 */
+const BUDGET_LITERAL_STRINGS = [String(2 ** 13), String(2 ** 12 * 5), String(2 ** 13 * 5)]
+
+/**
+ * 去注释（**保留字符串内容**）。
+ *
+ * 为什么必须去注释：门线会被注释里的说明文字误触发（L1-14 的既定教训）——
+ * 本仓 git.js 的文档注释里就写着 `openSync(tmp,'w')` 与 `exec(`/`spawn(` 这些字样。
+ * 字符串**不去**：豁免判定要看 `'w'` 这类字面量。
+ */
+function stripCodeComments(src) {
+  let out = ''
+  let i = 0
+  let state = 'code'
+  while (i < src.length) {
+    const ch = src[i]
+    const next = src[i + 1]
+    if (state === 'code') {
+      if (ch === '/' && next === '/') { state = 'line'; i += 2; continue }
+      if (ch === '/' && next === '*') { state = 'block'; i += 2; continue }
+      if (ch === "'") { state = 'single'; out += ch; i += 1; continue }
+      if (ch === '"') { state = 'double'; out += ch; i += 1; continue }
+      if (ch === '`') { state = 'template'; out += ch; i += 1; continue }
+      out += ch; i += 1; continue
+    }
+    if (state === 'line') { if (ch === '\n') { state = 'code'; out += ch } i += 1; continue }
+    if (state === 'block') { if (ch === '*' && next === '/') { state = 'code'; i += 2; continue } if (ch === '\n') out += ch; i += 1; continue }
+    if (ch === '\\') { out += ch + (next ?? ''); i += 2; continue }
+    if ((state === 'single' && ch === "'") || (state === 'double' && ch === '"') || (state === 'template' && ch === '`')) {
+      out += ch; state = 'code'; i += 1; continue
+    }
+    out += ch; i += 1
+  }
+  return out
+}
+
+/** 递归收集 lib/advisor 下的 .js（**只读**；用于源码级门）。 */
+function collectAdvisorModules() {
+  const out = []
+  const walk = (dir, relDir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const abs = join(dir, entry.name)
+      const rel = relDir === '' ? entry.name : `${relDir}/${entry.name}`
+      if (entry.isDirectory()) { walk(abs, rel); continue }
+      if (entry.name.endsWith('.js')) out.push({ rel: `lib/advisor/${rel}`, abs })
+    }
+  }
+  walk(ADVISOR_DIR, '')
+  return out
+}
+
+/** 扫描源码里的写 API 调用形态（**去注释后**；`openSync` 只在 mode 为 w/a 时算调用点）。 */
+function scanWriteApis(sourceText, fileLabel) {
+  const code = stripCodeComments(sourceText)
+  const hits = []
+  const lines = code.split('\n')
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    for (const name of WRITE_API_NAMES) {
+      const re = new RegExp(`\\b${name}\\s*\\(`)
+      if (re.test(line)) hits.push({ file: fileLabel, line: i + 1, api: name, text: line.trim() })
+    }
+    const openRe = /\bopenSync\s*\(([^)]*)\)/g
+    let m
+    while ((m = openRe.exec(line)) !== null) {
+      if (/['"][wa]['"]/.test(m[1])) hits.push({ file: fileLabel, line: i + 1, api: 'openSync(w|a)', text: line.trim() })
+    }
+  }
+  return hits
+}
+
+/**
+ * 写 API 门：返回 `{violations, exempted, staleAllowlist, allHits}`。
+ * `allowlist` 传 `[]` = 关闭豁免（用于证明扫描器不是失明的）。
+ */
+function scanWriteApiGate(files, allowlist = WRITE_API_ALLOWLIST) {
+  const allHits = []
+  for (const file of files) {
+    const text = file.text ?? readFileSync(file.abs, 'utf8')
+    allHits.push(...scanWriteApis(text, file.rel))
+  }
+  const usedAllow = new Set()
+  const violations = []
+  for (const hit of allHits) {
+    const idx = allowlist.findIndex((e) => e.file === hit.file && hit.text.includes(e.snippet))
+    if (idx >= 0) { usedAllow.add(idx); continue }
+    violations.push(hit)
+  }
+  const staleAllowlist = allowlist.filter((e, i) => !usedAllow.has(i)).map((e) => e.reason)
+  return { violations, exempted: usedAllow.size, staleAllowlist, allHits }
+}
+
+/** AC-10①：shell 拼接形态（`exec(` / `execSync(` / `spawn(` / `shell:true`）；`.exec(` 是 RegExp 方法，不算。 */
+function scanShellExec(sourceText) {
+  const code = stripCodeComments(sourceText)
+  const patterns = [
+    { id: 'exec(', re: /(?<![.\w$])exec\s*\(/ },
+    { id: 'execSync(', re: /(?<![.\w$])execSync\s*\(/ },
+    { id: 'spawn(', re: /(?<![.\w$])spawn\s*\(/ },
+    { id: 'shell:true', re: /shell\s*:\s*true/ },
+  ]
+  const hits = []
+  code.split('\n').forEach((line, i) => {
+    for (const p of patterns) if (p.re.test(line)) hits.push({ id: p.id, line: i + 1, text: line.trim() })
+  })
+  return hits
+}
+
+/** AC-10① 第二半：每个 `spawnSync(` 的**首参**不得是含 backtick/`${` 的字符串拼接。 */
+function spawnFirstArgOffences(sourceText) {
+  const code = stripCodeComments(sourceText)
+  const hits = []
+  const re = /spawnSync\s*\(([^,]*),/g
+  let m
+  while ((m = re.exec(code)) !== null) {
+    if (m[1].includes('`') || m[1].includes('${') || m[1].includes('+')) {
+      hits.push({ snippet: m[0].slice(0, 80) })
+    }
+  }
+  return hits
+}
+
+/** 在**真实文件**上做变异 → 读回被变异的文本 → `finally` 用内存原字节还原 + SHA256 校验。 */
+function withMutatedFile(relPath, mutate) {
+  const abs = fileURLToPath(new URL(`../${relPath}`, import.meta.url))
+  const original = readFileSync(abs)
+  const before = createHash('sha256').update(original).digest('hex')
+  try {
+    writeFileSync(abs, mutate(original.toString('utf8')), 'utf8')
+    return { mutatedText: readFileSync(abs, 'utf8'), before }
+  } finally {
+    writeFileSync(abs, original) // 内存原字节还原（**不用** git checkout --：本仓 autocrlf 事故纪律）
+    const after = createHash('sha256').update(readFileSync(abs)).digest('hex')
+    if (after !== before) throw new Error(`变异还原失败（${relPath}）：${before} → ${after}`)
+  }
+}
+
+/** 建 S1a fixture 工作树（含 git 仓库；**全部在 os.tmpdir() 内**，不碰真实仓库）。 */
+function buildS1aFixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-s1a-fixture-'))
+  mkdirSync(join(dir, 'src'), { recursive: true })
+  mkdirSync(join(dir, 'test'), { recursive: true })
+  mkdirSync(join(dir, 'assets'), { recursive: true })
+  mkdirSync(join(dir, 'sub'), { recursive: true })
+  writeFileSync(join(dir, 'src', 'foo.js'), `// ${S1A_SOURCE_MARK}\nexport function foo() {\n  return 1\n}\n`)
+  writeFileSync(join(dir, 'test', 'foo.test.js'), `// ${S1A_TEST_MARK}\nimport { foo } from '../src/foo.js'\nassert.equal(foo(), 1)\n`)
+  writeFileSync(join(dir, 'src', 'bar.js'), 'export const bar = 2\n')
+  writeFileSync(join(dir, 'sub', 'inner.js'), 'export const inner = 3\n')
+  writeFileSync(join(dir, '.gitignore'), 'ignored.txt\nsub/\n')
+  writeFileSync(join(dir, 'ignored.txt'), 'IGNORED_CONTENT\n')
+  writeFileSync(join(dir, '.env'), 'SECRET_TOKEN=abc\n')
+  writeFileSync(join(dir, 'id_rsa'), 'PRIVATE KEY\n')
+  writeFileSync(join(dir, 'assets', 'blob.bin'), Buffer.from([0, 1, 2, 0, 255, 65]))
+  writeFileSync(join(dir, 'big.txt'), 'x'.repeat(2048))
+  return dir
+}
+
+/** 测试侧的 fd-stdio git（**不用 pipe**：受限沙箱内 pipe 捕获必 EPERM）。 */
+async function gitRunIn(cwd, args) {
+  const { spawnSync } = await import('node:child_process')
+  const tmp = join(tmpdir(), `dsh-s1a-git-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.out`)
+  const fd = nodeFs.openSync(tmp, 'w')
+  let result = null
+  try {
+    result = spawnSync('git', args, { cwd, stdio: ['ignore', fd, fd], windowsHide: true })
+  } finally { nodeFs.closeSync(fd) }
+  let out = ''
+  try { out = nodeFs.readFileSync(tmp, 'utf8') } catch { out = '' }
+  try { nodeFs.rmSync(tmp, { force: true }) } catch { /* 忽略 */ }
+  return { status: result?.status ?? null, out }
+}
+
+/** 把 fixture 变成真 git 仓库（一次提交），供 AC-2(d) / AC-11 用。 */
+async function initFixtureRepo(dir) {
+  await gitRunIn(dir, ['init', '-q'])
+  await gitRunIn(dir, ['-c', 'user.name=s1a', '-c', 'user.email=s1a@example.invalid', 'add', '-A'])
+  await gitRunIn(dir, ['-c', 'user.name=s1a', '-c', 'user.email=s1a@example.invalid', 'commit', '-q', '-m', 'fixture'])
+}
+
+/** AC-36 口径的**路径闭包断言**（无 B4 时的判据口径：只断「引用 ⊆ 本轮检索集」）。 */
+function assertPathsWithinBundle(bundle, paths, label) {
+  const known = new Set(bundle.files)
+  const missing = paths.filter((p) => !known.has(p))
+  assert.deepEqual(missing, [], `${label}：被引用的路径必须 ⊆ 本轮检索集（缺：${missing.join(', ')}）`)
+}
+
+/** 真跑 git 的渲染器（S1a 用例复用）。 */
+export function testS1aRetrieval(t) {
+  t('S1a-1/2 AC-2 + AC-3：一轮输入四类齐备；测试存在/删除两态（删后显式「无对应测试」）', async () => {
+    const dir = buildS1aFixture()
+    const scratch = mkdtempSync(join(tmpdir(), 'dsh-s1a-scratch-'))
+    try {
+      await initFixtureRepo(dir)
+      const retrieval = createRetrieval({ root: dir, dataDir: scratch })
+      // focusSource 显式点名（缺省的「前 2 个非测试文件」会被 .gitignore/big.txt 之类占掉，
+      // 那是遍历口径的正确行为，但本用例要断的是「源码正文进了输入」，故显式指定）
+      const round = retrieval.collect({
+        focusSource: ['src/foo.js'],
+        queries: [{ literal: S1A_SOURCE_MARK }, { pattern: 'export (function|const)' }],
+      })
+      const text = round.inputText
+
+      // AC-2a：≥2 条文件路径
+      const presentPaths = [round.bundle.toJSON().files, ['src/foo.js', 'src/bar.js', 'test/foo.test.js']]
+      const pathHits = presentPaths[1].filter((p) => round.bundle.files.includes(p) && text.includes(p))
+      assert.ok(pathHits.length >= 2, `AC-2a：同轮输入必须含 ≥2 条文件路径（实得 ${JSON.stringify(pathHits)}）`)
+      // AC-2b：至少一段源码正文（独特串在正文段里）
+      assert.ok(text.includes(S1A_SOURCE_MARK), 'AC-2b：源码正文必须进输入（fixture 独特串可见）')
+      assert.ok(/## 源码：src\/foo\.js/.test(text), 'AC-2b：源码段必须点名文件')
+      // AC-2c：至少一个测试文件内容
+      assert.ok(text.includes(S1A_TEST_MARK), 'AC-2c：测试文件内容必须进输入（fixture 独特串可见）')
+      assert.ok(/## 对应测试：test\/foo\.test\.js/.test(text), 'AC-2c：测试段必须点名文件')
+      // AC-2d：git 事实
+      assert.equal(typeof round.gitFacts?.headSha, 'string')
+      assert.match(round.gitFacts.headSha, /^[0-9a-f]{40}$/, 'AC-2d：HEAD sha 必须是完整 sha')
+      assert.ok(text.includes(round.gitFacts.headSha), 'AC-2d：git 事实必须进输入')
+      assert.ok(text.includes('## Git 事实'), 'AC-2d：Git 事实段必须在')
+      // AC-3 前半：源与测试**同轮同时存在**（且顺序无关，这里同轮断言）
+      assert.ok(text.indexOf(S1A_SOURCE_MARK) >= 0 && text.indexOf(S1A_TEST_MARK) >= 0, 'AC-3：源与测试必须同轮同时存在')
+      assert.deepEqual(round.annotations, [], 'AC-3 阳性对照：测试存在时**不得**出现「无对应测试」标注')
+      const beforeDelete = findRelatedTests({ files: round.files.map((f) => f.rel), sourceRel: 'src/foo.js' })
+      assert.deepEqual(beforeDelete.tests, ['test/foo.test.js'], 'AC-3：候选测试必须被找到')
+
+      // AC-3 后半：删除测试文件 → 输入出现**逐字**「无对应测试」（不得静默省略）
+      rmSync(join(dir, 'test', 'foo.test.js'))
+      const afterRound = createRetrieval({ root: dir, dataDir: scratch }).collect({ focusSource: ['src/foo.js'], queries: [{ literal: S1A_SOURCE_MARK }] })
+      assert.ok(afterRound.inputText.includes('## 标注'), 'AC-3：删测试后必须有标注段')
+      assert.ok(afterRound.inputText.includes(NO_TEST_ANNOTATION), `AC-3：必须逐字出现「${NO_TEST_ANNOTATION}」`)
+      assert.deepEqual(afterRound.annotations, [{ source: 'src/foo.js', annotation: NO_TEST_ANNOTATION }])
+      assert.ok(!afterRound.inputText.includes(S1A_TEST_MARK), 'AC-3：测试内容确实已不在输入中（阳性对照）')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  t('S1a-3 AC-10①：检索/git 模块无 shell 拼接形态（argv 直传）+ 正向锚点', () => {
+    const files = collectAdvisorModules().filter((f) => f.rel.startsWith('lib/advisor/retrieval/'))
+    assert.ok(files.length >= 6, `扫描面必须覆盖全部 retrieval 模块（实得 ${files.length}）`)
+    const allHits = []
+    let spawnSyncSites = 0
+    for (const f of files) {
+      const text = readFileSync(f.abs, 'utf8')
+      allHits.push(...scanShellExec(text).map((h) => ({ ...h, file: f.rel })))
+      spawnSyncSites += (stripCodeComments(text).match(/spawnSync\s*\(/g) ?? []).length
+      assert.deepEqual(spawnFirstArgOffences(text), [], `${f.rel}：spawnSync 首参不得是字符串拼接（必须 argv 数组直传）`)
+    }
+    assert.deepEqual(allHits, [], `AC-10①：不得出现 shell 拼接形态（${JSON.stringify(allHits)}）`)
+    assert.ok(spawnSyncSites >= 1, 'AC-10① 正向锚点：git 面确实用 spawnSync（否则「零命中」是空门）')
+
+    // 变异体：注入 shell 拼接形态 → 必红（与断言类别一一对应）
+    const mutants = [
+      ['exec(模板串)', 'exec(`git log ${needle}`)'],
+      ['execSync(拼接)', "execSync('git log ' + needle)"],
+      ['spawn(非 spawnSync)', 'spawn(cmd, args)'],
+      ['shell:true', "spawnSync('git', argv, { shell: true })"],
+    ]
+    for (const [label, line] of mutants) {
+      assert.ok(scanShellExec(`function f(){ ${line} }`).length > 0, `AC-10① 变异必红：${label}`)
+    }
+    // 阴性对照：RegExp.prototype.exec 不得误伤
+    assert.deepEqual(scanShellExec('const m = re.exec(line)'), [], 'AC-10① 阴性对照：re.exec( 不算 shell 拼接')
+  })
+
+  t('S1a-3b AC-10②：注入 ; rm -rf / 、$(...) 、&& del → argv 逐元素等于预期且未被解释', async () => {
+    const payloads = ['; rm -rf /', '$(del /f /q C:\\*)', '&& del foo.txt', '`whoami`', '| cat /etc/passwd']
+    const calls = []
+    const fakeSpawn = (cmd, argv, options) => {
+      calls.push({ cmd, argv: [...argv], options })
+      return { status: 0, error: null, signal: null }
+    }
+    const fakeFs = {
+      openSync: () => 7,
+      closeSync: () => {},
+      readFileSync: () => '',
+      unlinkSync: () => {},
+    }
+    const scratch = mkdtempSync(join(tmpdir(), 'dsh-s1a-inject-'))
+    try {
+      const git = createGitReader({ cwd: scratch, scratchDir: scratch, fs: fakeFs, spawnSync: fakeSpawn })
+      for (const payload of payloads) {
+        calls.length = 0
+        git.grepLog({ needle: payload, limit: 3 })
+        const argv = calls[0].argv
+        assert.equal(calls[0].cmd, 'git', '子命令必须逐元素 argv 直传（cmd=git）')
+        assert.deepEqual(argv, ['log', '--oneline', '--max-count=3', `--grep=${payload}`], `载荷必须原样成为**一个** argv 元素：${payload}`)
+        assert.equal(argv.filter((a) => a === payload || a === `--grep=${payload}`).length, 1, '载荷不得被拆分/拼接')
+        assert.equal(argv.includes(payload), false, '载荷在 --grep= 形态下只出现在同一元素内（未被拆成裸位置参数）')
+
+        calls.length = 0
+        git.diffNumstat({ from: payload })
+        assert.deepEqual(calls[0].argv, ['diff', '--numstat', payload], '位置参数载荷必须原样直传')
+      }
+      // 未被解释执行：假 spawn 收到的永远是数组，且 options 里没有 shell
+      assert.equal(calls[0].options.shell, undefined, '不得开 shell（argv 直传 ⇒ 载荷不可能被解释）')
+      assert.deepEqual(calls[0].options.stdio, ['ignore', 7, 7], 'stdio 必须是 fd 继承')
+      // 真跑一次（fixture 仓库）：载荷不解释、不炸、不改工作树
+      const dir = buildS1aFixture()
+      try {
+        await initFixtureRepo(dir)
+        // 真跑用真 fs；注入 '; rm -rf /' 只为证明它不会被解释
+        const real = createGitReader({ cwd: dir, scratchDir: scratch })
+        const rows = real.grepLog({ needle: '; rm -rf /', limit: 5 })
+        assert.deepEqual(rows, [], '真跑：无匹配即空数组（不是抛错、也不是把载荷当命令）')
+        assert.ok(existsSync(join(dir, 'src')), '真跑后 fixture 结构不得被改动（载荷未被解释）')
+      } finally { rmSync(dir, { recursive: true, force: true }) }
+    } finally { rmSync(scratch, { recursive: true, force: true }) }
+  })
+
+  t('S1a-4 AC-11：fixture 工作树 SHA256 前后完全相同；真实仓库 git status 前后一致', async () => {
+    const dir = buildS1aFixture()
+    const scratch = mkdtempSync(join(tmpdir(), 'dsh-s1a-ac11-'))
+    try {
+      await initFixtureRepo(dir)
+      const retrieval = createRetrieval({ root: dir, dataDir: scratch })
+      const before = retrieval.worktreeSnapshot()
+      assert.ok(before.entries.length >= 5, `fixture 快照必须真的看见文件（实得 ${before.entries.length}）`)
+      // 一轮完整「评审」（读源码 + 读测试 + 检索 + git 事实）
+      const round = retrieval.collect({ queries: [{ literal: 'export' }, { pattern: 'foo' }] })
+      assert.ok(round.inputText.length > 100, '本轮必须真的产出了输入文本（否则下面的「零变化」是空门）')
+      const after = retrieval.worktreeSnapshot()
+      assert.equal(after.digest, before.digest, 'AC-11：fixture 工作树评审前后 SHA256 必须完全相同')
+      assert.deepEqual(after.entries.map((e) => e.rel), before.entries.map((e) => e.rel), 'AC-11：文件集合也必须相同')
+
+      // 真实仓库 status 前后一致
+      const realRoot = fileURLToPath(new URL('..', import.meta.url))
+      const realBefore = await gitRunIn(realRoot, ['status', '--porcelain'])
+      const realRetrieval = createRetrieval({ root: realRoot, dataDir: scratch, maxEntries: 400 })
+      realRetrieval.collect({ queries: [{ literal: 'S1a' }], focusSource: ['tests/advisor.test.mjs'], includeGit: true })
+      const realAfter = await gitRunIn(realRoot, ['status', '--porcelain'])
+      assert.equal(realAfter.out, realBefore.out, 'AC-11：真实仓库 git status --porcelain 前后必须一致')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  t('S1a-5 AC-12：越界/凭据/.git 内部/二进制/超大 → 拒绝 + 可查拒绝记录（不静默返空）', () => {
+    const dir = buildS1aFixture()
+    try {
+      const log = createRejectionLog({ limit: 50 })
+      const retrieval = createRetrieval({ root: dir, maxFileBytes: 1024, rejectionLog: log })
+      const cases = [
+        ['../outside.txt', REJECT.OUT_OF_ROOT],
+        ['src/../../escape.js', REJECT.OUT_OF_ROOT],
+        ['.env', REJECT.CREDENTIAL],
+        ['id_rsa', REJECT.CREDENTIAL],
+        ['keys/server.pem', REJECT.CREDENTIAL],
+        ['.git/config', REJECT.GIT_INTERNALS],
+        ['assets/blob.bin', REJECT.BINARY],
+        ['big.txt', REJECT.OVERSIZED],
+        ['src', REJECT.NOT_A_FILE],
+        ['nope.js', REJECT.MISSING],
+      ]
+      for (const [rel, expected] of cases) {
+        let thrown = null
+        try {
+          const got = retrieval.readFile(rel)
+          assert.fail(`AC-12：${rel} 必须被拒（实得 ok=${got.ok}）——绝不允许静默返回空内容`)
+        } catch (error) { thrown = error }
+        assert.ok(thrown instanceof PathPolicyError, `AC-12：${rel} 必须抛 PathPolicyError（实得 ${thrown?.name}）`)
+        assert.equal(thrown.code, expected, `AC-12：${rel} 的拒绝码必须是 ${expected}（实得 ${thrown.code}：${thrown.reason}）`)
+      }
+      // 可查拒绝记录：逐条 + 按 code 汇总
+      assert.equal(log.count(), cases.length, 'AC-12：每次拒绝都必须留痕（一拒一条）')
+      const byCode = log.byCode()
+      for (const [, code] of cases) assert.ok((byCode[code] ?? 0) >= 1, `AC-12：拒绝记录必须能按 ${code} 点名`)
+      assert.ok(log.list().every((e) => typeof e.rel === 'string' && typeof e.reason === 'string'), 'AC-12：记录必须含 rel 与 reason')
+      // 阳性对照：合法文件照样能读（判据不是「一律拒绝」）
+      assert.ok(retrieval.readFile('src/foo.js').text.includes(S1A_SOURCE_MARK), 'AC-12 阳性对照：合法文件必须读得到')
+      // 空内容 vs 被拒必须可区分：合法空文件返回 ok，被拒抛错
+      writeFileSync(join(dir, 'empty.js'), '')
+      const empty = retrieval.readFile('empty.js')
+      assert.equal(empty.ok, true)
+      assert.equal(empty.text, '')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('S1a-6 AC-13：预算三项独立声明 + 唯一计量函数（Base 与 Repository 互不占用，总 ≤48KB）', () => {
+    // ① 三项独立声明（值由幂运算表达 ⇒ 本文件不含被禁字面量）
+    assert.equal(typeof BASE_CONTEXT_BYTES, 'number')
+    assert.equal(BASE_CONTEXT_BYTES, 2 ** 13, 'Base Context 必须独立声明为 8KB')
+    assert.equal(RETRIEVAL_CALL_BYTES, 2 ** 12 * 5, '单次 retrieval 必须独立声明为 20KB')
+    assert.equal(RETRIEVAL_TOTAL_BYTES, 2 ** 13 * 5, '检索段合计必须独立声明为 40KB')
+    assert.equal(TOTAL_INJECTION_BYTES, BASE_CONTEXT_BYTES + RETRIEVAL_TOTAL_BYTES, '总注入 = Base + Repository（并列相加）')
+    assert.equal(TOTAL_INJECTION_BYTES, 2 ** 13 * 6, '总注入上限 = 48KB')
+    // 结构化声明：两项互相 excludes（防「第二种读法」复活）
+    assert.equal(BUDGET_ITEMS.base.bytes, BASE_CONTEXT_BYTES)
+    assert.equal(BUDGET_ITEMS.repository.bytes, RETRIEVAL_TOTAL_BYTES)
+    assert.match(BUDGET_ITEMS.base.excludes, /会话消息历史/, 'Base 必须声明不含会话消息历史（G-2）')
+    assert.match(BUDGET_ITEMS.repository.excludes, /Base Context/, 'Repository 必须声明不含 Base（并列项）')
+
+    // ② 唯一计量函数：字节而非字符（多字节内容上必须被区分）
+    const cjk = '中文字符'
+    assert.equal(measureInjection(cjk).chars, cjk.length)
+    assert.equal(measureInjection(cjk).bytes, Buffer.byteLength(cjk, 'utf8'))
+    assert.notEqual(measureInjection(cjk).bytes, measureInjection(cjk).chars, '计量对象是**字节**：多字节文本必须与字符数不同')
+    // 生产与测试同源：collect() 的 bytes 必须由同一函数量出
+    const dir = buildS1aFixture()
+    try {
+      const round = createRetrieval({ root: dir }).collect({ includeGit: false, queries: [{ literal: 'export' }] })
+      assert.equal(round.bytes, measureInjection(round.inputText).bytes, 'AC-13：bundle.bytes 必须由唯一计量函数量出')
+      assert.equal(round.bundle.bytes, round.bytes, 'AC-13：bundle 上的 bytes 与外层一致（同一口径）')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+
+    // ③ 互不占用 / 互不挤压（禁止第二种读法）
+    const atLimit = accountRetrieval({
+      baseText: 'x'.repeat(BASE_CONTEXT_BYTES),
+      calls: [
+        { text: 'y'.repeat(RETRIEVAL_CALL_BYTES) },
+        { text: 'y'.repeat(RETRIEVAL_CALL_BYTES) },
+      ],
+    })
+    assert.equal(atLimit.baseBytes, BASE_CONTEXT_BYTES)
+    assert.equal(atLimit.repositoryBytes, RETRIEVAL_TOTAL_BYTES)
+    assert.equal(atLimit.verdicts.base.over, false, 'Base 恰好到顶 → 不算超')
+    assert.equal(atLimit.verdicts.repository.over, false, 'Repository 恰好到顶 → 不算超')
+    assert.equal(atLimit.verdicts.total.over, false, 'Base 与 Repository 各自到顶时，总量判定仍必须通过（互不占用）')
+    const baseOver = accountRetrieval({ baseText: 'x'.repeat(BASE_CONTEXT_BYTES + 1), calls: [{ text: 'y' }] })
+    assert.equal(baseOver.verdicts.base.over, true, 'Base 超 1 字节 → Base 判超')
+    assert.equal(baseOver.verdicts.repository.over, false, '★Base 超限**不得**挤压 Repository 的判定（禁止第二种读法）')
+    const repoOver = accountRetrieval({ calls: [{ text: 'y'.repeat(RETRIEVAL_CALL_BYTES) }, { text: 'y'.repeat(RETRIEVAL_CALL_BYTES + 1) }] })
+    assert.equal(repoOver.verdicts.repository.over, true)
+    assert.equal(repoOver.verdicts.perCall[1].over, true, '单次 retrieval 超限必须单独可见')
+    assert.equal(repoOver.verdicts.base.over, false, 'Repository 超限不得挤压 Base 判定')
+    assert.equal(budgetVerdict({ usedBytes: 10, limitBytes: 10 }).over, false)
+    assert.deepEqual(budgetVerdict({ usedBytes: 12, limitBytes: 10 }), { ok: false, over: true, usedBytes: 12, limitBytes: 10, remaining: 0, overflowBytes: 2 })
+  })
+
+  t('S1a-7 AC-14：预算耗尽载体与触顶同形（records outcome=dropped + runtime.error），且能过记录规范化', () => {
+    const carrier = budgetExhaustedCarrier({ sessionId: 's-budget', label: 'retrieval#2', usedBytes: RETRIEVAL_TOTAL_BYTES + 1, limitBytes: RETRIEVAL_TOTAL_BYTES, reason: '检索段合计超限' })
+    assert.equal(carrier.record.outcome, 'dropped', 'AC-14：records 那条必须是 dropped')
+    assert.equal(carrier.record.severity, 'info', 'AC-14：与触顶未投递同形（severity=info）')
+    assert.equal(carrier.record.sessionId, 's-budget')
+    assert.ok(carrier.record.text.includes('预算耗尽') && carrier.record.text.includes('retrieval#2'))
+    assert.ok(carrier.record.text.length <= 200, '单条记录 ≤200 字（与 store 规范化一致）')
+    assert.ok(carrier.runtimeError.includes('预算耗尽'), 'AC-14：runtime.error 必须记明原因')
+    // 与真实记录规范化同源：载体会被 store 接受且 outcome 保持 dropped
+    const normalized = normalizeRecord(carrier.record)
+    assert.notEqual(normalized, null, 'AC-14：载体必须能过 store.normalizeRecord')
+    assert.equal(normalized.outcome, 'dropped')
+    assert.equal(normalized.severity, 'info')
+    // 反例：缺 runtimeError 或 outcome 的载体不合格（防「只留 status」形态）
+    assert.equal(typeof carrier.carrier, 'string')
+    assert.match(carrier.carrier, /records\.outcome=dropped/)
+  })
+
+  t('S1a-8 AC-15：测试码无预算字面量（grep 门 + 阳性对照 + 既有行豁免活性）+ 常量调小必红', () => {
+    const selfPath = fileURLToPath(new URL('./advisor.test.mjs', import.meta.url))
+    const text = readFileSync(selfPath, 'utf8')
+    const lines = text.split('\n')
+    // 既有用例（S0 前既存）的豁免：逐行片段钉死，不允许泛化。
+    // ⚠️ 片段本身必须在**运行时拼出**——否则豁免表自己的那一行就成了新的字面量命中
+    //    （自指陷阱：豁免表命中自己 ⇒ 命中数 2 ≠ 豁免数 1）。
+    const legacyAllow = [{ snippet: `maxTokens: ${BUDGET_LITERAL_STRINGS[0]}, outputTokens: 100`, reason: '既有用例（S0 前既存；非预算常量）' }]
+    const hits = []
+    for (let i = 0; i < lines.length; i += 1) {
+      if (BUDGET_LITERAL_STRINGS.some((needle) => lines[i].includes(needle))) hits.push({ line: i + 1, text: lines[i].trim() })
+    }
+    const exempted = hits.filter((h) => legacyAllow.some((e) => h.text.includes(e.snippet)))
+    const violations = hits.filter((h) => !exempted.includes(h))
+    assert.deepEqual(violations, [], `AC-15：测试码不得出现预算字面量（${JSON.stringify(violations)}）`)
+    assert.equal(exempted.length, legacyAllow.length, 'AC-15：既有行豁免必须**活性**（命中数 == 豁免条数，防豁免虚化）')
+
+    // 阳性对照：同一个匹配器必须能抓到运行时拼出的字面量
+    const probeLine = `const x = ${2 ** 13} // 运行时拼出的禁字面量`
+    assert.ok(BUDGET_LITERAL_STRINGS.some((n) => probeLine.includes(n)), 'AC-15 阳性对照：匹配器必须能抓注入的字面量')
+
+    // 源级常量锁 + 变异必红（把常量调小）
+    const budgetRel = 'lib/advisor/retrieval/budget.js'
+    const budgetText = readFileSync(fileURLToPath(new URL(`../${budgetRel}`, import.meta.url)), 'utf8')
+    const locks = [
+      /export const BASE_CONTEXT_BYTES = 8 \* KB/,
+      /export const RETRIEVAL_CALL_BYTES = 20 \* KB/,
+      /export const RETRIEVAL_TOTAL_BYTES = 40 \* KB/,
+    ]
+    const violationsOf = (src) => locks.filter((re) => !re.test(src)).length
+    assert.equal(violationsOf(budgetText), 0, 'AC-15：三项常量必须逐字独立声明（8/20/40 × KB）')
+    for (const [label, re, repl] of [
+      ['Base 调小', /BASE_CONTEXT_BYTES = 8 \* KB/, 'BASE_CONTEXT_BYTES = 4 * KB'],
+      ['单次 retrieval 调小', /RETRIEVAL_CALL_BYTES = 20 \* KB/, 'RETRIEVAL_CALL_BYTES = 10 * KB'],
+      ['合计调小', /RETRIEVAL_TOTAL_BYTES = 40 \* KB/, 'RETRIEVAL_TOTAL_BYTES = 20 * KB'],
+    ]) {
+      const mutated = budgetText.replace(re, repl)
+      assert.notEqual(mutated, budgetText, `变异体必须真的注入（${label}）`)
+      assert.ok(violationsOf(mutated) > 0, `AC-15 变异必红：${label}`)
+    }
+    // 真文件变异（跑完还原 + SHA256 校验）：调小常量 → 真源码锁必红
+    const mutated = withMutatedFile(budgetRel, (src) => src.replace(/BASE_CONTEXT_BYTES = 8 \* KB/, 'BASE_CONTEXT_BYTES = 4 * KB'))
+    assert.ok(violationsOf(mutated.mutatedText) > 0, 'AC-15：真文件变异后源码锁必须变红')
+  })
+
+  t('S1a-9 AC-45：检索产物四元组可枚举（files/ranges/bytes/queries）+ 引用闭包比对', async () => {
+    const dir = buildS1aFixture()
+    const scratch = mkdtempSync(join(tmpdir(), 'dsh-s1a-ac45-'))
+    try {
+      await initFixtureRepo(dir)
+      const round = createRetrieval({ root: dir, dataDir: scratch }).collect({ queries: [{ literal: S1A_SOURCE_MARK }, { pattern: 'export' }] })
+      const bundle = round.bundle
+      assert.deepEqual(Object.keys(bundle.toJSON()).sort(), ['bytes', 'files', 'queries', 'ranges'], 'AC-45：四元组必须**恰好**是 files/ranges/bytes/queries')
+      assert.ok(bundle.files.length >= 3, `AC-45：files 必须可枚举（实得 ${bundle.files.length}）`)
+      assert.ok(bundle.ranges.length >= 1, 'AC-45：ranges 必须可枚举')
+      for (const range of bundle.ranges) {
+        assert.equal(typeof range.file, 'string')
+        assert.ok(Number.isInteger(range.start) && Number.isInteger(range.end) && range.start >= 1 && range.end >= range.start, `AC-45：range 形状非法 ${JSON.stringify(range)}`)
+        assert.ok(bundle.files.includes(range.file), `AC-45：range 的文件必须 ⊆ files（${range.file}）`)
+      }
+      assert.ok(bundle.queries.includes(S1A_SOURCE_MARK) && bundle.queries.includes('/export/'), `AC-45：queries 必须记录本轮用过的查询（实得 ${JSON.stringify(bundle.queries)}）`)
+      assert.ok(bundle.bytes > 0 && Number.isInteger(bundle.bytes))
+      // 引用闭包：本轮所有被引用路径 ⊆ 本轮检索集（AC-36 的判据口径载体）
+      const referenced = [...new Set([...bundle.ranges.map((r) => r.file), ...round.annotations.map((a) => a.source)])]
+      assertPathsWithinBundle(bundle, referenced, 'AC-45')
+      assert.ok(referenced.length >= 2, 'AC-45：闭包比对必须有足够样本（否则是空门）')
+      // 变异体：bundle 变成不可枚举（例如只剩 files）→ 上面的四元组断言必须红
+      const broken = { ...bundle.toJSON() }
+      delete broken.ranges
+      assert.notDeepEqual(Object.keys(broken).sort(), ['bytes', 'files', 'queries', 'ranges'], 'AC-45 变异必红：四元组缺项')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  t('S1a-10 H-1/H-11：fd-stdio 通道（无 pipe）+ spawn 失败 fail-closed 不静默 skip', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'dsh-s1a-fd-'))
+    try {
+      const seen = []
+      const fakeFs = {
+        openSync: (p, mode) => { seen.push({ open: p, mode }); return 11 },
+        closeSync: (fd) => seen.push({ close: fd }),
+        readFileSync: () => 'ok\n',
+        unlinkSync: (p) => seen.push({ unlink: p }),
+      }
+      const git = createGitReader({
+        cwd: scratch,
+        scratchDir: scratch,
+        fs: fakeFs,
+        spawnSync: (cmd, argv, options) => { seen.push({ cmd, argv, options }); return { status: 0, error: null } },
+      })
+      assert.equal(git.statusText(), 'ok\n')
+      const spawnCall = seen.find((s) => s.cmd === 'git')
+      assert.deepEqual(spawnCall.options.stdio, ['ignore', 11, 11], 'H-1/H-11：必须是 fd 继承（[\'ignore\', fd, fd]）')
+      assert.equal(spawnCall.options.stdio.includes('pipe'), false, 'H-1/H-11：不得使用 pipe 捕获（沙箱内必 EPERM）')
+      const openCall = seen.find((s) => s.open !== undefined)
+      assert.equal(openCall.mode, 'w', 'fd-stdio 输出句柄必须是写模式')
+      assert.ok(openCall.open.startsWith(scratch), '判据 11：fd-stdio 临时文件必须落在注入的 scratchDir 内')
+      assert.equal(tempFileName(1234, 5), '.advisor-retrieval-1234-5.out', '临时文件名必须只含进程号与序号（不含外部输入）')
+      assert.ok(seen.some((s) => s.unlink !== undefined), '临时文件必须用完即删（否则是泄漏点）')
+
+      // fail-closed：spawn 启动失败 → 抛错，绝不静默 skip
+      const brokenSpawn = () => ({ error: new Error('spawn git EPERM'), status: null })
+      const gitBroken = createGitReader({ cwd: scratch, scratchDir: scratch, fs: fakeFs, spawnSync: brokenSpawn })
+      assert.throws(() => gitBroken.headSha(), (e) => e instanceof GitError && e.code === 'GIT_SPAWN_ERROR', 'H-1/H-11：spawn 失败必须 fail-closed 抛错')
+      // fail-closed：非零退出 → 抛错（含 stderr 摘要）
+      const nonZero = () => ({ status: 128, error: null })
+      const gitNonZero = createGitReader({ cwd: scratch, scratchDir: scratch, fs: fakeFs, spawnSync: nonZero })
+      assert.throws(() => gitNonZero.headSha(), (e) => e instanceof GitError && e.code === 'GIT_FAILED' && e.status === 128, 'H-1/H-11：非零退出必须 fail-closed')
+      // fail-closed：超时 → GIT_TIMEOUT
+      const timedOut = () => ({ error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }), status: null })
+      const gitTimeout = createGitReader({ cwd: scratch, scratchDir: scratch, fs: fakeFs, spawnSync: timedOut })
+      assert.throws(() => gitTimeout.headSha(), (e) => e instanceof GitError && e.code === 'GIT_TIMEOUT', 'H-1/H-11：超时必须 fail-closed')
+      // 白名单：非只读子命令 / 未知标志一律拒绝（防参数位被当开关）
+      assert.throws(() => assertReadonlyArgv(['config', '--global', 'user.name', 'x']), (e) => e.code === 'GIT_SUBCOMMAND_DENIED')
+      assert.throws(() => assertReadonlyArgv(['log', '--upload-pack=/bin/sh']), (e) => e.code === 'GIT_FLAG_DENIED')
+      // 阳性对照：合法只读 argv 通过
+      assert.equal(assertReadonlyArgv(['log', '--oneline', '--max-count=3', '--grep=; rm -rf /']), true)
+    } finally { rmSync(scratch, { recursive: true, force: true }) }
+  })
+
+  t('S1a-11 落盘点：fd-stdio 落 scratchDir(=dataDir) 且探针在快照根内必红→移除必绿', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'dsh-s1a-landing-'))
+    const fixtureDir = buildS1aFixture()
+    try {
+      await initFixtureRepo(fixtureDir)
+      // ① 生产缺省：scratchDir 缺省 = dataDir（隔离门快照根①内）
+      const viaDataDir = createRetrieval({ root: fixtureDir, dataDir: scratch })
+      assert.equal(viaDataDir.scratchDir, scratch, '判据 11：fd-stdio 落点缺省必须是 dataDir（快照根①）')
+      const explicit = createRetrieval({ root: fixtureDir, scratchDir: scratch, dataDir: '/nope' })
+      assert.equal(explicit.scratchDir, scratch, '判据 11：显式 scratchDir 优先于 dataDir')
+      assert.throws(() => createRetrieval({ root: fixtureDir }).git(), (e) => e instanceof GitError && e.code === 'GIT_SCRATCH_MISSING',
+        '判据 11：既无 scratchDir 也无 dataDir → git 面必须 fail-closed（不得偷偷写 os.tmpdir）')
+      // ② 真跑一次：临时文件确实落在 scratchDir 内、且跑完不残留
+      const before = readdirSync(scratch).length
+      const git = createGitReader({ cwd: fixtureDir, scratchDir: scratch })
+      git.headSha()
+      assert.equal(readdirSync(scratch).length, before, '判据 11：fd-stdio 临时文件必须用完即删（不残留）')
+      assert.ok(git.spawns().every((s) => dirname(s.tmpPath) === scratch), '判据 11：每个子进程的临时文件都在 scratchDir 内')
+
+      // ③ 元测试（判据 11）：在**生产落点所在的快照根**内写探针 → 包装器判定必红；移除 → 必绿
+      const gate = await import('./isolation-gate.mjs')
+      const fixtureRoot = fileURLToPath(new URL('../agent-out/v3-fixtures', import.meta.url))
+      assert.ok(gate.SNAPSHOT_ROOTS.includes(fixtureRoot), '判据 11：探针根必须已在隔离门快照根列表内')
+      const probeDir = join(fixtureRoot, 'retrieval-scratch')
+      const probe = join(probeDir, tempFileName(process.pid, 999))
+      const snapBefore = gate.snapshotRoots()
+      mkdirSync(probeDir, { recursive: true })
+      writeFileSync(probe, 'leaked fd-stdio temp\n')
+      const redDiffs = gate.diffSnapshots(snapBefore, gate.snapshotRoots())
+      assert.ok(redDiffs.length > 0, '判据 11 必红：新增落点里的探针必须让隔离门判定变红（diffs>0 ≡ runGate 的 exit=1 条件）')
+      // 探针**与新建的目录**都要清掉：目录本身（`retrieval-scratch/`）也是一条快照项，
+      // 只删文件不删目录的话「必绿」会假红（B0 的 snapshotTree 会记目录项）。
+      rmSync(probeDir, { recursive: true, force: true })
+      const greenDiffs = gate.diffSnapshots(snapBefore, gate.snapshotRoots())
+      assert.deepEqual(greenDiffs, [], '判据 11 阳性对照：移除探针后必须恢复逐字节相等（必绿）')
+      assert.deepEqual(gate.diffSnapshots(snapBefore, gate.snapshotRoots()), [], '判据 11：清理后零残留')
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  })
+
+  t('S1a-12 符号面口径：正则启发式（无 AST / 零新依赖）+ AC-36 的路径闭包粒度', () => {
+    // ① 零新依赖：retrieval 面不得 import tree-sitter / 任何三方包
+    const files = collectAdvisorModules().filter((f) => f.rel.startsWith('lib/advisor/retrieval/'))
+    for (const f of files) {
+      const text = readFileSync(f.abs, 'utf8')
+      const imports = [...text.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1])
+      for (const spec of imports) {
+        assert.ok(spec.startsWith('node:') || spec.startsWith('./'), `${f.rel}：不得引入非标准库依赖（实得 ${spec}）—— 零依赖是本批的硬约束`)
+      }
+      assert.ok(!/tree-sitter|web-tree-sitter/.test(text.replace(/^\s*\*.*$/gm, '')), `${f.rel}：不得出现 tree-sitter（B4 未批准，L3 已移出 V3 射程）`)
+    }
+    // ② 粒度声明必须在源码里（审定面纪律：不得只写在文档里）
+    const searchText = readFileSync(join(RETRIEVAL_DIR, 'search.js'), 'utf8')
+    assert.match(searchText, /正则启发式/, 'S1a-12：必须声明符号面 = 正则启发式')
+    assert.match(searchText, /无 AST 精度|无语义作用域/, 'S1a-12：必须声明粒度上限（无 AST 精度）')
+    // ③ AC-36 的判据口径载体：只断「引用 ⊆ 本轮检索集」
+    const bundle = createBundle().addFile('src/foo.js')
+    assert.doesNotThrow(() => assertPathsWithinBundle(bundle, ['src/foo.js'], 'S1a-12'))
+    assert.throws(() => assertPathsWithinBundle(bundle, ['src/not-retrieved.js'], 'S1a-12'), /必须 ⊆ 本轮检索集/)
+    // ④ isTestPath / testCandidatesFor 是启发式（不是 AST）：候选清单必须可枚举
+    assert.equal(isTestPath('test/foo.test.js'), true)
+    assert.equal(isTestPath('src/foo.js'), false)
+    assert.ok(testCandidatesFor('src/foo.js').includes('test/foo.test.js'))
+    assert.ok(testCandidatesFor('src/foo.js').includes('src/foo.test.js'))
+  })
+
+  t('S1a-13 只读边界源码级门：lib/advisor/** 无未豁免写 API（基线 + 豁免② + 注入必红 + 阳性对照）', () => {
+    const files = collectAdvisorModules()
+    assert.ok(files.length >= 12, `扫描面必须覆盖 lib/advisor 全树（实得 ${files.length} 个 .js）`)
+
+    // ① 真实工作树：零未豁免违规 + 每个豁免条目都必须活性（命中 ≥1）
+    const gate = scanWriteApiGate(files)
+    assert.deepEqual(gate.violations, [], `S1a-13：lib/advisor/** 不得出现未豁免的写 API 调用（${JSON.stringify(gate.violations)}）`)
+    assert.deepEqual(gate.staleAllowlist, [], 'S1a-13：豁免条目必须条条活性（虚化的豁免 = 把门开成默认放行）')
+    assert.equal(gate.exempted, WRITE_API_ALLOWLIST.length, 'S1a-13：9 条豁免（7 既有 + 2 豁免②）必须条条命中')
+
+    // ② 阳性对照 A：关掉豁免 → 扫描器必须看得见那 9 处（证明门不是失明的）
+    const withoutAllow = scanWriteApiGate(files, [])
+    assert.equal(withoutAllow.violations.length, WRITE_API_ALLOWLIST.length, 'S1a-13 阳性对照：关豁免后必须恰好看到 9 处（既有 + 豁免②）')
+
+    // ③ 阳性对照 B：stub 与真实写入都不得被误伤（免伤面）
+    const storeText = readFileSync(join(ADVISOR_DIR, 'store.js'), 'utf8')
+    assert.ok(/writeSeen|writeSessionConfig/.test(storeText), 'S1a-13 阳性对照：豁免面内的既有写入必须在（否则豁免无意义）')
+    assert.equal(scanWriteApiGate([{ rel: 'lib/advisor/store.js', text: storeText }]).violations.length, 0, 'S1a-13：既有落盘路径不得报红')
+
+    // ④ 注入必红（真文件变异 → 还原 + SHA256 校验）
+    const mutated = withMutatedFile('lib/advisor/retrieval/budget.js', (src) => `${src}\nexport function __probe() { writeFileSync('probe.txt', 'x') }\n`)
+    const mutatedGate = scanWriteApiGate([{ rel: 'lib/advisor/retrieval/budget.js', text: mutated.mutatedText }])
+    assert.ok(mutatedGate.violations.length > 0, 'S1a-13 注入必红：注入 writeFileSync 后门必须变红')
+    assert.equal(mutatedGate.violations[0].api, 'writeFileSync')
+
+    // ⑤ 注入必红（每个类别各一，与断言类别一一对应）
+    for (const line of [
+      "fs.appendFileSync('a', 'b')",
+      "fs.rmSync('a')",
+      "fs.mkdirSync('a')",
+      "fs.renameSync('a', 'b')",
+      "fs.copyFileSync('a', 'b')",
+      "fs.chmodSync('a', 0o644)",
+      "fs.createWriteStream('a')",
+      "fs.openSync('a', 'w')",
+      "ctx.fs.writeText('a')",
+      "ctx.fs.editText('a')",
+    ]) {
+      const hits = scanWriteApis(`function probe(){ ${line} }`, 'probe.js')
+      assert.ok(hits.length > 0, `S1a-13 注入必红：${line} 必须被门抓到`)
+    }
+    // ⑥ 阴性对照：注释里的写 API 字样不得误伤（L1-14 的注释误触发陷阱）
+    assert.deepEqual(scanWriteApis('// 这里说明 writeFileSync( 是被禁的形态\nconst a = 1\n', 'probe.js'), [], 'S1a-13 阴性对照：注释不得误触发')
+    assert.deepEqual(scanWriteApis('/* openSync(tmp, "w") 是豁免② */\nconst a = 1\n', 'probe.js'), [], 'S1a-13 阴性对照：块注释不得误触发')
+    // ⑦ 只读面在 retrieval 模块里不得出现（豁免② 之外的 retrieval 文件零写 API）
+    const retrievalFiles = files.filter((f) => f.rel.startsWith('lib/advisor/retrieval/') && !f.rel.endsWith('git.js'))
+    const retrievalGate = scanWriteApiGate(retrievalFiles, [])
+    assert.deepEqual(retrievalGate.violations, [], `S1a-13：retrieval 除 git.js 豁免② 外必须零写 API（${JSON.stringify(retrievalGate.violations)}）`)
   })
 }
