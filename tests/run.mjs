@@ -1336,6 +1336,8 @@ for (const suite of [
   // S1a：零依赖只读检索地基（advisor V3 节 2 S1a，AC-2/3/10/11/12/13/14/15/45/refs）
   // 位置约束同上：必须排在 testRealDataDirIsolation **之前**。
   advisorTests.testS1aRetrieval,
+  // S2：三层上下文装配 + 规则预筛 + 配置面（advisor V3 节 2 S2，判据 1–16）
+  advisorTests.testS2Context,
   // 必须最后：它比对的是「模块加载时的真实用户数据目录快照」与「现在」，
   // 只有排在所有 advisor 用例之后才是真正的收尾断言。
   advisorTests.testRealDataDirIsolation,

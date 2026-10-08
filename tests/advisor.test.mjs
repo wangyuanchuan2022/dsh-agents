@@ -3630,3 +3630,761 @@ export function testS1aRetrieval(t) {
     assert.deepEqual(retrievalGate.violations, [], `S1a-13：retrieval 除 git.js 豁免② 外必须零写 API（${JSON.stringify(retrievalGate.violations)}）`)
   })
 }
+
+// ── 11. S2：三层上下文装配 + 规则预筛 + 配置面（advisor V3 节 2 S2，判据 1–16）──
+//
+// 追加在同一文件（同一次求值、同一条基线）。本段 import 全是声明：
+// context/**、decision/** 顶层零写盘副作用（由 S1a-13 的写 API 门覆盖）。
+
+import {
+  buildContext, renderContextSection, renderUnavailableContext, describeBudgetRelation,
+  BUDGET_RELATION, BUDGET_RELATION_STATEMENT, trimToBudget, BASE_TITLE, REPOSITORY_TITLE,
+  UNAVAILABLE_MARK as CTX_UNAVAILABLE,
+} from '../lib/advisor/context/build.js'
+import {
+  loadDecisions, parseDecisions, renderDecisions, DECISIONS_REL_PATH, DECISION_FIELDS,
+  DECISION_STATES, DECISION_CLASSES, UNAVAILABLE_MARK as DEC_UNAVAILABLE,
+} from '../lib/advisor/context/decisions.js'
+import { buildProjectState, heuristicPhase, assertPhase, PROJECT_PHASES } from '../lib/advisor/context/project.js'
+import { buildRepositoryContext, extractSymbolRanges, L3_NOT_IMPLEMENTED_NOTE, mentionedPaths } from '../lib/advisor/context/repository.js'
+import {
+  screen, classifyMessage, shouldRunRepoAnalysis, isChatter, PREFILTER_SAMPLES, matchedSignals,
+  PRE_FILTER_BLOCK, SCREEN_BLOCKED, SCREEN_NOT_SCREENED, TRIGGER_MANUAL, TRIGGER_ASSISTANT, TRIGGER_USER,
+} from '../lib/advisor/decision/prefilter.js'
+import { SESSION_CONFIG_KEYS } from '../lib/advisor/store.js'
+
+/** S2 fixture 的决策文件内容（六字段 × 五类 × 三态）。 */
+const S2_DECISIONS_TEXT = [
+  '# 项目决策记录（fixture）',
+  '',
+  '## D-012 · active · 已确认决策',
+  '- 决策或约束正文：DECISION_BODY_MARK session 配置按会话分文件存',
+  '- 理由：避免与全局配置互踩',
+  '- 否决记录：—',
+  '- 所属阶段：S2',
+  '',
+  '## C-003 · active · 不可违反约束',
+  '- 决策或约束正文：[约束] CONSTRAINT_MARK advisor 只读，不得写文件',
+  '- 理由：产品第 1 条',
+  '- 否决记录：—',
+  '- 所属阶段：S2',
+  '',
+  '## T-004 · active · 已知技术债',
+  '- 决策或约束正文：[技术债] DEBT_MARK 检索面仍是正则启发式',
+  '- 理由：B4 未批准',
+  '- 否决记录：—',
+  '- 所属阶段：S2',
+  '',
+  '## R-005 · rejected · 已否决方案',
+  '- 决策或约束正文：REJECTED_MARK 用模型判要不要评审',
+  '- 理由：每轮多一次调用',
+  '- 否决记录：2026-10-09 产品裁决否决',
+  '- 所属阶段：S2',
+  '',
+  '## G-006 · active · 当前阶段目标',
+  '- 决策或约束正文：[阶段目标] GOAL_MARK 本批只做上下文装配',
+  '- 理由：与 S3 串行',
+  '- 否决记录：—',
+  '- 所属阶段：S2',
+  '',
+  '## D-007 · superseded · 已确认决策',
+  '- 决策或约束正文：SUPERSEDED_MARK 旧的全局配置兜底',
+  '- 理由：已被会话级取代',
+  '- 否决记录：—',
+  '- 所属阶段：S1',
+  '',
+].join('\n')
+
+/** 用户/助手消息的渲染片段（与 observer 的渲染格式同源）。 */
+const s2UserMarkdown = (text) => `<用户对Agent说>\n${text}\n</用户对Agent说>`
+const s2AssistantMarkdown = (text) => `<Agent对用户说>\n${text}\n</Agent对用户说>`
+
+/**
+ * 从源码里取出 `ALLOWED_KEYS` 的成员（AC-53 的四面对账用）。
+ * **从源码派生**而不是手抄一份：手抄的快照会和代码各自漂移，那就成了第二个口径。
+ */
+function allowedKeysFromSource() {
+  const src = readFileSync(new URL('../lib/advisor/index.js', import.meta.url), 'utf8')
+  const at = src.indexOf('const ALLOWED_KEYS = new Set([')
+  assert.ok(at >= 0, 'ALLOWED_KEYS 必须存在')
+  const end = src.indexOf('])', at)
+  return [...src.slice(at, end).matchAll(/'([^']+)'/g)].map((m) => m[1])
+}
+
+/** 建 S2 fixture 根（S1a 的 fixture + `docs/DECISIONS.md`）。 */function buildS2Fixture() {
+  const dir = buildS1aFixture()
+  mkdirSync(join(dir, 'docs'), { recursive: true })
+  writeFileSync(join(dir, 'docs', 'DECISIONS.md'), S2_DECISIONS_TEXT)
+  return dir
+}
+
+/** 造一个只读检索面（fixture 根 + 独立 scratch）。 */
+function s2Retrieval(root, extra = {}) {
+  const scratch = mkdtempSync(join(tmpdir(), 'dsh-s2-scratch-'))
+  return { retrieval: createRetrieval({ root, dataDir: scratch, ...extra }), scratch }
+}
+
+/** 计数代理：AC-62 要求「零检索零子进程」是**可计数**的。 */
+function countingRetrieval(facet) {
+  const counts = { listFiles: 0, readFile: 0, search: 0, relatedTests: 0, gitFacts: 0, gitSubprocess: 0, worktreeSnapshot: 0 }
+  const readers = ['listFiles', 'readFile', 'search', 'relatedTests', 'worktreeSnapshot']
+  const proxy = {}
+  for (const name of readers) {
+    proxy[name] = (...args) => { counts[name] += 1; return facet[name](...args) }
+  }
+  proxy.git = () => {
+    const git = facet.git()
+    return {
+      ...git,
+      facts: (...args) => { counts.gitFacts += 1; return git.facts(...args) },
+      diffNumstat: (...args) => { counts.gitSubprocess += 1; return git.diffNumstat(...args) },
+      statusText: (...args) => { counts.gitSubprocess += 1; return git.statusText(...args) },
+      headSha: (...args) => { counts.gitSubprocess += 1; return git.headSha(...args) },
+      recentLog: (...args) => { counts.gitSubprocess += 1; return git.recentLog(...args) },
+    }
+  }
+  proxy.policy = facet.policy
+  proxy.root = facet.root
+  proxy.scratchDir = facet.scratchDir
+  return { proxy, counts }
+}
+
+/** 造一个注入了上下文/预筛钩子的 runtime（S2 的直接驱动方式）。 */
+function s2Runtime({ llm, context, prefilter, records = [], trace = [], conversationMaxChars } = {}) {
+  return new AdvisorRuntime({
+    provider: 'p-s2',
+    model: 'm-s2',
+    systemPrompt: 'S2 系统提示（合成值）',
+    llm: llm ?? fakeLlm('{"notes":[]}'),
+    deliver: () => 'recorded',
+    record: (r) => records.push(r),
+    onStatus: () => {},
+    trace: (row) => trace.push(row),
+    logger: { warn: () => {}, error: () => {}, log: () => {} },
+    context,
+    prefilter,
+    conversationMaxChars,
+    maxQueued: 8,
+    callTimeoutMs: 5000,
+    maxMessages: 60,
+  })
+}
+
+/** 用真实 `buildContext` 组一个 runtime 用的 context 钩子。 */
+function s2ContextHook({ retrieval, root, maxFiles = 4 }) {
+  return ({ markdown }) => {
+    const decisions = loadDecisions({ readText: (rel) => retrieval.readFile(rel) })
+    const result = buildContext({
+      retrieval,
+      messageText: markdown,
+      systemPrompt: 'S2 系统提示（合成值）',
+      decisions,
+      project: { phase: null },
+      maxFiles,
+      queries: [],
+    })
+    return { section: renderContextSection(result), result }
+  }
+}
+
+/** 抓 runtime 实际送进模型的文本（AC-1 的三条断言都基于它）。 */
+function capturedInput(llm, callIndex = 0) {
+  const call = llm.calls[callIndex]
+  return (call?.messages ?? []).map((m) => (m.content ?? []).map((c) => c.text ?? '').join('')).join('\n')
+}
+
+/** S2 判据套件。 */
+export function testS2Context(t) {
+  // ── 判据 1（AC-1）：三层三条可区分断言 ─────────────────────────────────
+  t('S2-1 AC-1：三层上下文三条可区分断言（会话独特串 / 决策记录文本 / 仓库文件路径名）', async () => {
+    const dir = buildS2Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await initFixtureRepo(dir)
+      const llm = fakeLlm('{"notes":[]}')
+      const rt = s2Runtime({ llm, context: s2ContextHook({ retrieval, root: dir }) })
+      rt.conversation.appendUser('S2-CONV-MARK 会话独特串')
+      rt.enqueue(
+        { markdown: s2UserMarkdown('帮我看看 src/foo.js 的实现'), trigger: TRIGGER_USER },
+        { sessionId: 's-s2', sessionName: null },
+      )
+      await rt.waitForDrain()
+      assert.equal(llm.calls.length, 1, '正样本必须真的发起一次评审（否则三条断言是空门）')
+      const captured = capturedInput(llm)
+      assert.ok(captured.includes('S2-CONV-MARK'), '① 会话层：会话可见消息（持续会话窗口）必须进输入')
+      assert.ok(captured.includes('DECISION_BODY_MARK'), '② 决策保护层：决策记录文本必须进输入')
+      assert.ok(captured.includes('src/foo.js'), '③ 仓库层：仓库文件路径名必须进输入')
+      // 三层各自出现在自己的段里（可区分，不是碰巧同一个字符串）
+      assert.ok(captured.includes(BASE_TITLE), '基础上下文段标题必须在')
+      assert.ok(captured.includes('仓库上下文（Repository Context'), '仓库上下文段标题必须在')
+      assert.ok(captured.includes('### 决策保护'), '决策保护小节必须在')
+      rt.dispose()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── 判据 2（AC-4）：任一层缺失 → 显式「不可用」，其余层正常 ──────────────
+  t('S2-2 AC-4：三层各自缺失 → 显式「不可用」标注且其余层照常进入', async () => {
+    const dir = buildS2Fixture()
+    const emptyDir = mkdtempSync(join(tmpdir(), 'dsh-s2-empty-'))
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await initFixtureRepo(dir)
+      // ① 决策文件缺失（读面抛 ENOENT）
+      const noDecisions = loadDecisions({ readText: () => { throw Object.assign(new Error('no file'), { code: 'ENOENT' }) } })
+      assert.equal(noDecisions.available, false)
+      const ctx1 = buildContext({ retrieval, messageText: '请检查 src/foo.js', decisions: noDecisions, systemPrompt: 'S' })
+      assert.ok(ctx1.base.text.includes(DEC_UNAVAILABLE), '① 决策层缺失 ⇒ base 必须显式标「不可用」')
+      assert.ok(ctx1.base.text.includes('### 项目状态'), '① 其余层（项目状态）必须照常进入')
+      assert.ok(ctx1.repository.available === true, '① 其余层（仓库）必须照常进入')
+
+      // ② git 事实不可用（非 git 仓库）
+      const { retrieval: emptyRetrieval, scratch: scratch2 } = s2Retrieval(emptyDir)
+      const ctx2 = buildContext({ retrieval: emptyRetrieval, messageText: '请检查 src/foo.js', decisions: noDecisions, systemPrompt: 'S' })
+      assert.ok(ctx2.repository.text.includes(CTX_UNAVAILABLE), '② git 不可用 ⇒ 仓库层必须显式标「不可用」（不静默省略）')
+      assert.ok(ctx2.base.text.includes('### 决策保护'), '② 其余层（决策保护小节）必须照常进入')
+      rmSync(scratch2, { recursive: true, force: true })
+
+      // ③ 仓库层被 AC-62 门挡下（普通聊天）⇒ 只该层标不可用，base 完整
+      const ctx3 = buildContext({ retrieval, messageText: '今天天气不错', decisions: loadDecisions({ readText: (rel) => retrieval.readFile(rel) }), systemPrompt: 'S' })
+      assert.equal(ctx3.repository.available, false)
+      assert.ok(ctx3.repository.text.includes(CTX_UNAVAILABLE), '③ 仓库层不可用必须显式')
+      assert.ok(ctx3.base.text.includes('DECISION_BODY_MARK') && ctx3.base.text.includes('### 项目状态'), '③ base 两层必须照常进入')
+
+      // ④ 会话层无消息：conversation 是**声明**（内容由 runtime 承载），且 base 里不得出现会话内容
+      assert.equal(ctx3.conversation.layer, 'conversation')
+      assert.ok(!ctx3.base.text.includes('S2-CONV-MARK'), '④ 会话无消息 ⇒ base 里不得出现任何会话内容（G-2）')
+
+      // ⑤ 项目层（Project State）：阶段来源可观测 + 非法值 fail-closed + 本地启发确定性
+      assert.deepEqual([...PROJECT_PHASES], ['design', 'build', 'review', 'ship'], 'G-4：阶段枚举唯一源')
+      assert.throws(() => assertPhase('wrong'), /projectPhase/, 'G-4：非法阶段值必须 fail-closed')
+      assert.equal(assertPhase(undefined), null, 'G-4：未设置 ⇒ null（不落盘）')
+      assert.equal(heuristicPhase({ gitFacts: null }).phase, 'design', 'G-4：无 git 事实 ⇒ design（本地规则，零模型）')
+      const phaseFacts = { statusPaths: ['tests/a.test.js'], recent: [], statusSummary: { total: 1, modified: 1, untracked: 0 } }
+      assert.equal(heuristicPhase({ gitFacts: phaseFacts }).phase, 'review', 'G-4：改动全在测试 ⇒ review')
+      const projectState = buildProjectState({ gitFacts: phaseFacts, phase: 'build' })
+      assert.equal(projectState.phase, 'build', 'G-4：会话级配置优先于启发')
+      assert.equal(projectState.phaseSource, 'session-config')
+      assert.ok(projectState.text.includes('阶段：build'), '项目层必须渲染阶段')
+      const unavailableProject = buildProjectState({ gitFacts: null })
+      assert.equal(unavailableProject.available, false)
+      assert.ok(unavailableProject.text.includes(CTX_UNAVAILABLE), 'AC-4：git 不可用时项目层必须显式标不可用')
+      assert.ok(renderUnavailableContext('测试原因').includes(CTX_UNAVAILABLE), 'AC-4：不可用渲染器必须含逐字标注')
+      // 按字节裁剪器（Base 8KB 硬上限的唯一实现点）
+      const trimmed = trimToBudget('中'.repeat(BASE_CONTEXT_BYTES), 4096, '测试段')
+      assert.ok(trimmed.bytes <= 4096 && trimmed.trimmed === true && trimmed.droppedBytes > 0, 'AC-13：裁剪器必须按**字节**收口并留痕')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(emptyDir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── 判据 3（AC-5）：C7 负向 + numstat 正向对账 ──────────────────────────
+  t('S2-3 AC-5：负向（工具过程文本不进输入，C7 保持）+ 正向（numstat 数字与独立计算一致）', async () => {
+    const dir = buildS2Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await initFixtureRepo(dir)
+      // 负向：会话里混入 tool 角色的过程文本 + 子会话文本
+      const messages = [
+        msg('user', '帮我修复 src/foo.js 的报错'),
+        { role: 'tool', content: [{ type: 'text', text: 'TOOL_PROCESS_TEXT_MARK' }], source: { kind: 'tool' } },
+        { role: 'system', content: [{ type: 'text', text: 'SYSTEM_HIDDEN_MARK' }], source: { kind: 'system' } },
+        msg('assistant', '好了'),
+      ]
+      const surface = renderVisibleSurface(messages, 60)
+      assert.ok(surface.markdown.includes('src/foo.js'), '可见面必须含用户/助手正文（否则下面的负向是空门）')
+      assert.ok(!surface.markdown.includes('TOOL_PROCESS_TEXT_MARK'), 'AC-5①：工具调用过程文本不得进渲染面（C7）')
+      assert.ok(!surface.markdown.includes('SYSTEM_HIDDEN_MARK'), 'AC-5①：system 角色内容不得进渲染面（C7）')
+      const llm = fakeLlm('{"notes":[]}')
+      const rt = s2Runtime({ llm, context: s2ContextHook({ retrieval, root: dir }) })
+      rt.enqueue({ markdown: surface.markdown, trigger: TRIGGER_USER }, { sessionId: 's-s2', sessionName: null })
+      await rt.waitForDrain()
+      const captured = capturedInput(llm)
+      assert.ok(!captured.includes('TOOL_PROCESS_TEXT_MARK'), 'AC-5①：捕获的模型输入里不得出现工具过程文本')
+      assert.ok(!captured.includes('SYSTEM_HIDDEN_MARK'), 'AC-5①：捕获的模型输入里不得出现隐藏系统内容')
+      rt.dispose()
+
+      // 正向：制造一处工作树改动 → numstat 数字必须与输入里的一致
+      const fooPath = join(dir, 'src', 'foo.js')
+      writeFileSync(fooPath, `${readFileSync(fooPath, 'utf8')}// S2 added line\n`)
+      const mine = await gitRunIn(dir, ['diff', '--numstat', 'HEAD'])
+      // ⚠️ fd-stdio 把 stderr 也写进同一个文件（git 的 LF→CRLF 警告会混进来），
+      // 故只收真正的 numstat 行（`<num>\t<num>\t` 或 `-\t-\t`）——这是**测试侧**的
+      // 独立计算，不能借用产品解析器（否则就是对账自己对账）。
+      const rows = mine.out.split(/\r?\n/)
+        .filter((l) => /^(\d+|-)\t(\d+|-)\t/.test(l))
+        .map((l) => l.split('\t'))
+      const files = rows.length
+      const added = rows.reduce((n, r) => n + Number(r[0]), 0)
+      const deleted = rows.reduce((n, r) => n + Number(r[1]), 0)
+      assert.ok(files >= 1, '正向样本必须真的有一处改动（否则对账是空门）')
+      const repo = buildRepositoryContext({ retrieval, messageText: '请检查 src/foo.js 的改动', includeGit: true, maxFiles: 1 })
+      const expected = `diff --numstat HEAD：${files} 个文件，+${added} / -${deleted} 行`
+      assert.ok(repo.text.includes(expected), `AC-5②：输入里的 numstat 数字必须与独立计算一致（期望 "${expected}"）`)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── 判据 4（AC-6）：决策来源唯一声明 + 决策文本入输入 + 可引 D-012 ────────
+  t('S2-4 AC-6：决策来源唯一声明 + 决策文本进输入 + note 可引具体决策标识', () => {
+    const dir = buildS2Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      const loaded = loadDecisions({ readText: (rel) => retrieval.readFile(rel) })
+      assert.equal(loaded.available, true)
+      assert.equal(loaded.relPath, DECISIONS_REL_PATH)
+      const rendered = renderDecisions(loaded)
+      // ① 唯一声明：来源 / 格式 / 维护者三问必须在同一处逐字给出
+      assert.ok(rendered.includes('来源 / 格式 / 维护者**唯一声明**'), 'AC-6①：三问必须显式声明')
+      assert.ok(rendered.includes(DECISIONS_REL_PATH), 'AC-6①：来源路径必须写死')
+      assert.ok(rendered.includes('维护者：用户与主 agent'), 'AC-6①：维护者必须写明')
+      assert.ok(rendered.includes('advisor **只读**'), 'AC-6①：只读边界必须写明')
+      // 「唯一」的机检：路径字面量在 lib/advisor 全树只出现在 decisions.js 一处
+      const owners = collectAdvisorModules().filter((f) => readFileSync(f.abs, 'utf8').includes(DECISIONS_REL_PATH))
+      assert.deepEqual(owners.map((o) => o.rel), ['lib/advisor/context/decisions.js'], 'AC-6①：来源路径只允许出现在唯一模块里')
+      // ② 决策文本入输入
+      const ctx = buildContext({ retrieval, messageText: '请检查 src/foo.js', decisions: loaded, systemPrompt: 'S' })
+      assert.ok(ctx.base.text.includes('DECISION_BODY_MARK'), 'AC-6②：决策正文必须进模型输入')
+      // ③ note 可引用具体决策标识
+      assert.ok(rendered.includes('D-012'), 'AC-6③：渲染文本必须含决策标识 D-012（note 才能引用它）')
+      assert.ok(ctx.base.text.includes('D-012'), 'AC-6③：输入里必须含 D-012')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── 判据 5（AC-13）：Base ≤8KB、与 Repository 并列独立、不含会话历史 ──────
+  t('S2-5 AC-13：Base ≤8KB 且与 Repository 互不占用；基础上下文不含会话消息历史', async () => {
+    const dir = buildS2Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await initFixtureRepo(dir)
+      const loaded = loadDecisions({ readText: (rel) => retrieval.readFile(rel) })
+      const ctx = buildContext({ retrieval, messageText: '请检查 src/foo.js 的实现', decisions: loaded, systemPrompt: 'S', maxFiles: 2 })
+      assert.ok(ctx.baseBytes <= BASE_CONTEXT_BYTES, `AC-13：Base 必须 ≤ ${BASE_CONTEXT_BYTES} 字节（实得 ${ctx.baseBytes}）`)
+      assert.ok(ctx.repositoryBytes <= RETRIEVAL_TOTAL_BYTES, 'AC-13：Repository 必须 ≤ 40KB')
+      assert.ok(ctx.bytes <= TOTAL_INJECTION_BYTES, 'AC-13：总注入 ≤ 48KB（Base + Repository 并列相加）')
+      assert.equal(ctx.bytes, measureInjection(ctx.text).bytes, 'AC-13：计量对象 = 最终注入文本（唯一计量函数）')
+
+      // 互不占用：Base 到顶不影响 Repository 判定（反之亦然）
+      const acc = ctx.accounting
+      assert.equal(acc.verdicts.base.over, false)
+      assert.equal(acc.verdicts.repository.over, false)
+      assert.equal(acc.baseBytes, ctx.baseBytes, 'accounting 的 base 与装配口径一致')
+
+      // 裁剪可观测：把决策文件撑到超 8KB → 必须裁剪且裁剪事实可见（不是静默超限）
+      const huge = { available: true, relPath: DECISIONS_REL_PATH, entries: [], errors: [], byClass: {}, bytes: 0 }
+      for (const k of DECISION_CLASSES) huge.byClass[k] = Array.from({ length: 60 }, (_, i) => ({ id: `D-${100 + i}`, state: 'active', klass: k, text: '长'.repeat(40), reason: 'r', rejected: '-', phase: 'S2' }))
+      huge.entries = DECISION_CLASSES.flatMap((k) => huge.byClass[k])
+      const big = buildContext({ retrieval, messageText: '请检查 src/foo.js', decisions: huge, systemPrompt: 'S' })
+      assert.ok(big.baseBytes <= BASE_CONTEXT_BYTES, 'AC-13：撑爆后 Base 仍必须 ≤ 8KB（硬上限）')
+      assert.equal(big.base.trimmed, true, 'AC-13：裁剪事实必须可观测（trimmed=true）')
+      assert.ok(big.base.droppedBytes > 0, 'AC-13：裁剪字节数必须可观测')
+      assert.ok(big.base.text.includes('超出预算'), 'AC-13：裁剪必须在文本里留痕')
+
+      // G-2：基础上下文不含会话消息历史（用真实 runtime 走一遍，证明是结构性的而不是巧合）
+      const llm = fakeLlm('{"notes":[]}')
+      const rt = s2Runtime({ llm, context: s2ContextHook({ retrieval, root: dir }) })
+      rt.conversation.appendUser('S2-CONV-MARK 必须只出现在历史里')
+      rt.enqueue({ markdown: s2UserMarkdown('请检查 src/foo.js 的实现'), trigger: TRIGGER_USER }, { sessionId: 's-s2', sessionName: null })
+      await rt.waitForDrain()
+      const captured = capturedInput(llm)
+      assert.ok(captured.includes('S2-CONV-MARK'), '阳性对照：会话内容确实进了模型输入')
+      assert.ok(!rt.lastContext.base.text.includes('S2-CONV-MARK'), 'AC-13（G-2）：Base Context 里不得出现会话消息历史')
+      rt.dispose()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── 判据 6（AC-16）：40KB 与 96K 字符的唯一关系声明（叠加）+ 边界测试 ────
+  t('S2-6 AC-16：40KB 与 96K 字符历史的「叠加」唯一口径声明 + 历史满 + 满额仓库面边界', async () => {
+    // ① 唯一口径声明（代码常量即契约措辞的来源）
+    assert.equal(BUDGET_RELATION, 'additive')
+    const statement = describeBudgetRelation()
+    assert.ok(statement.includes('叠加'), 'AC-16：必须逐字声明「叠加」')
+    assert.ok(statement.includes('96_000') || statement.includes('96000'), 'AC-16：必须点名 96K 字符历史')
+    assert.ok(statement.includes(String(2 ** 13 * 5)) || statement.includes('40KB'), 'AC-16：必须点名 40KB')
+    assert.ok(statement.includes(String(2 ** 13)) || statement.includes('8KB'), 'AC-16：必须点名 8KB')
+    assert.equal(BUDGET_RELATION_STATEMENT, statement)
+    // 声明只能有一处：全 lib 里出现该措辞的模块唯一
+    const owners = collectAdvisorModules().filter((f) => readFileSync(f.abs, 'utf8').includes('ADVISOR_CONVERSATION_MAX_CHARS'))
+    assert.deepEqual(owners.map((o) => o.rel).sort(), ['lib/advisor/context/build.js', 'lib/advisor/runtime.js'], 'AC-16：96K 常量只允许被 runtime 与 build 两处引用（声明唯一在 build）')
+
+    const dir = buildS2Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await initFixtureRepo(dir)
+      const loaded = loadDecisions({ readText: (rel) => retrieval.readFile(rel) })
+      // ② 边界：历史「满」+ 满额仓库面 → 行为符合唯一口径、不溢出不崩
+      const llm = fakeLlm('{"notes":[]}')
+      const rt = s2Runtime({ llm, context: s2ContextHook({ retrieval, root: dir }), conversationMaxChars: 300 })
+      rt.conversation.appendUser('x'.repeat(500))
+      const trimmedChars = rt.conversation.snapshot().reduce((n, m) => n + m.text.length, 0)
+      assert.ok(trimmedChars <= 300, `AC-16：历史必须被修剪到预算内（实得 ${trimmedChars}）`)
+      rt.enqueue({ markdown: s2UserMarkdown('请检查 src/foo.js 的实现'), trigger: TRIGGER_USER }, { sessionId: 's-s2', sessionName: null })
+      await rt.waitForDrain()
+      assert.equal(llm.calls.length, 1, 'AC-16：历史满 + 满额仓库面仍必须正常评审（不溢出崩溃）')
+      const baseBytesWithFullHistory = rt.lastContext.baseBytes
+      assert.ok(baseBytesWithFullHistory <= BASE_CONTEXT_BYTES, 'AC-16：Base 仍 ≤8KB')
+      assert.ok(rt.lastContext.repositoryBytes <= RETRIEVAL_TOTAL_BYTES, 'AC-16：Repository 仍 ≤40KB')
+
+      // ③ 叠加（互不占用）的可跑证明：换一个**更满**的历史，base/repo 计量不变
+      const rt2 = s2Runtime({ llm: fakeLlm('{"notes":[]}'), context: s2ContextHook({ retrieval, root: dir }), conversationMaxChars: 600 })
+      rt2.conversation.appendUser('y'.repeat(1200))
+      rt2.enqueue({ markdown: s2UserMarkdown('请检查 src/foo.js 的实现'), trigger: TRIGGER_USER }, { sessionId: 's-s2b', sessionName: null })
+      await rt2.waitForDrain()
+      assert.equal(rt2.lastContext.baseBytes, baseBytesWithFullHistory, 'AC-16：历史长度不得影响 Base 预算（叠加 = 互不占用）')
+      assert.equal(rt2.lastContext.repositoryBytes, rt.lastContext.repositoryBytes, 'AC-16：历史长度不得影响 Repository 预算')
+      rt.dispose()
+      rt2.dispose()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── 判据 7/8（AC-17 / AC-18）：阴性零调用、阳性 ≥1、零 token ─────────────
+  t('S2-7/8 AC-17 + AC-18：阴性 ≥5 条零 llm 调用零 token；阳性 ≥3 条 ≥1 次', async () => {
+    assert.ok(PREFILTER_SAMPLES.negative.length >= 5, 'AC-17：阴性样本必须 ≥5 条（写死清单，不临时挑）')
+    assert.ok(PREFILTER_SAMPLES.positive.length >= 3, 'AC-17：阳性样本必须 ≥3 条')
+    // 离线口径自检（每条样本的判定都必须与清单方向一致）
+    for (const text of PREFILTER_SAMPLES.negative) {
+      const verdict = screen({ text, trigger: TRIGGER_USER })
+      assert.equal(verdict.decision, PRE_FILTER_BLOCK, `AC-17：阴性样本必须被拦："${text}"（reason=${verdict.reason}）`)
+      assert.equal(verdict.screening, SCREEN_BLOCKED)
+    }
+    for (const text of PREFILTER_SAMPLES.positive) {
+      assert.equal(screen({ text, trigger: TRIGGER_USER }).decision, 'pass', `AC-17：阳性样本必须放行："${text}"`)
+    }
+    // 阳性对照（判据本身不是空门）：把某条阴性样本改成代码相关 → 必须放行
+    assert.equal(screen({ text: '谢谢，但请顺便检查 src/foo.js 的报错', trigger: TRIGGER_USER }).decision, 'pass',
+      'AC-17 阳性对照：含代码信号时寒暄词不得拦')
+    assert.ok(matchedSignals('谢谢，但请顺便检查 src/foo.js 的报错').length > 0, 'AC-17：白名单命中的信号必须可枚举')
+    assert.equal(isChatter('谢谢').chatter, true, 'AC-17：寒暄判定可单独调用')
+    assert.equal(isChatter('做 X').chatter, false, 'AC-17：既有用例的合成短文本不得被判成寒暄（否则会误伤真工作）')
+    assert.equal(classifyMessage({ text: '继续', trigger: TRIGGER_USER }).decision, PRE_FILTER_BLOCK, 'AC-17：classifyMessage 与 screen 同源')
+
+    // 真跑：阴性 → 零调用零 token；阳性 → ≥1
+    const negativeLlm = fakeLlm('{"notes":[]}')
+    const negativeRecords = []
+    const negativeTrace = []
+    const rtNeg = s2Runtime({ llm: negativeLlm, prefilter: screen, records: negativeRecords, trace: negativeTrace })
+    for (const text of PREFILTER_SAMPLES.negative) {
+      rtNeg.enqueue({ markdown: s2UserMarkdown(text), trigger: TRIGGER_USER }, { sessionId: 's-neg', sessionName: null })
+    }
+    await rtNeg.waitForDrain()
+    assert.equal(negativeLlm.calls.length, 0, 'AC-17/18：阴性样本必须零 llm.stream 调用')
+    assert.equal(negativeRecords.length, 0, 'AC-18：阴性路径零记录（不产生 notes 面数据）')
+    assert.equal(rtNeg.lastReview.outcome, 'prefilter-blocked', 'AC-18：三态之「预筛拦截」可观测')
+    assert.equal(negativeLlm.calls.length, 0, 'AC-18：零 token（无调用即无 token 计量）')
+    assert.ok(negativeTrace.filter((r) => r.phase === 'prefilter').length >= PREFILTER_SAMPLES.negative.length, 'AC-19/21：每次预筛都必须留痕')
+
+    const positiveLlm = fakeLlm('{"notes":[]}')
+    const rtPos = s2Runtime({ llm: positiveLlm, prefilter: screen })
+    for (const text of PREFILTER_SAMPLES.positive) {
+      rtPos.enqueue({ markdown: s2UserMarkdown(text), trigger: TRIGGER_USER }, { sessionId: 's-pos', sessionName: null })
+    }
+    await rtPos.waitForDrain()
+    assert.ok(positiveLlm.calls.length >= 1, 'AC-17：阳性样本必须 ≥1 次调用')
+    rtNeg.dispose()
+    rtPos.dispose()
+  })
+
+  // ── 判据 9（AC-19）：三态可观测判据分开 ────────────────────────────────
+  t('S2-9 AC-19：三态（未过预筛 / 预筛拦截 / 评审过但 notes:[]）判据分开可观测', async () => {
+    const blockedLlm = fakeLlm('{"notes":[]}')
+    const rtBlocked = s2Runtime({ llm: blockedLlm, prefilter: screen })
+    rtBlocked.enqueue({ markdown: s2UserMarkdown('谢谢'), trigger: TRIGGER_USER }, { sessionId: 's-a', sessionName: null })
+    await rtBlocked.waitForDrain()
+    assert.equal(rtBlocked.lastScreening.screening, SCREEN_BLOCKED, '① 预筛拦截态')
+    assert.equal(rtBlocked.lastReview.outcome, 'prefilter-blocked')
+    assert.equal(blockedLlm.calls.length, 0)
+
+    const notScreenedLlm = fakeLlm('{"notes":[]}')
+    const rtNotScreened = s2Runtime({ llm: notScreenedLlm, prefilter: screen })
+    rtNotScreened.enqueue({ markdown: s2AssistantMarkdown('我改完了'), trigger: TRIGGER_ASSISTANT }, { sessionId: 's-b', sessionName: null })
+    await rtNotScreened.waitForDrain()
+    assert.equal(rtNotScreened.lastScreening.screening, SCREEN_NOT_SCREENED, '② 未过预筛态（触发源不是用户消息，G-13 缺省）')
+    assert.equal(notScreenedLlm.calls.length, 1, '未过预筛 ≠ 拦截：照常评审')
+
+    const emptyLlm = fakeLlm('{"notes":[]}')
+    const rtEmpty = s2Runtime({ llm: emptyLlm, prefilter: screen })
+    rtEmpty.enqueue({ markdown: s2UserMarkdown('请检查 src/foo.js 的报错'), trigger: TRIGGER_USER }, { sessionId: 's-c', sessionName: null })
+    await rtEmpty.waitForDrain()
+    assert.equal(rtEmpty.lastScreening.screening, 'prefilter-passed', '③ 过预筛态')
+    assert.equal(rtEmpty.lastReview.notes, 0, '③ 评审过但 notes:[]（第三态）')
+    assert.notEqual(rtEmpty.lastReview.outcome, 'prefilter-blocked', '三态必须可区分（不是同一个标记）')
+    rtBlocked.dispose()
+    rtNotScreened.dispose()
+    rtEmpty.dispose()
+  })
+
+  // ── 判据 10（AC-21）：拦截留可查事实 + 数据面可区分 + 补评可用 ──────────
+  t('S2-10 AC-21：拦截留可查事实（含 reason）+ 与「评审过」数据面可区分 + 手动补评可用', async () => {
+    const dir = buildS2Fixture()
+    const dataDir = mkdtempSync(join(tmpdir(), 'dsh-s2-ac21-'))
+    try {
+      await initFixtureRepo(dir)
+      const traceRows = []
+      const records = []
+      const llm = fakeLlm('{"notes":[]}')
+      const agent = fakeAgent('s-post')
+      const { ctx, emit } = fakeCtx()
+      ctx.agents.get = (id) => (id === 's-post' ? agent : undefined)
+      const installed = installAdvisor(ctx, {}, {
+        dataDir,
+        resolveLlm: () => llm,
+        trace: (row) => traceRows.push(row),
+        resolutionRootOf: () => dir,
+      })
+      try {
+        // ⚠️ fake session 必须带 `id`：装配层的 session/event 处理按 `session.id`
+        //    查该会话是否已开启（既有 fakeSession 没有 id ⇒ 那条早退会让本用例空转）。
+        const session = { ...fakeSession([msg('user', '谢谢')]), id: 's-post' }
+        agent.session = session
+        installed.ctrl.patchConfig('s-post', { enabled: true, provider: 'p', model: 'm' })
+        emit('agent/created', { agent })
+        // 可评审 turn = [step/start, turn/end]（observer 只评审「进过 step 的回合」）
+        emit('session/event', session, { type: 'step/start', data: { turn: 1 } })
+        emit('session/event', session, { type: 'turn/end', seq: 1, data: { turn: 1, reason: { kind: 'completed' } } })
+        await new Promise((r) => setTimeout(r, 20))
+        await installed.ctrl.runtimeOf('s-post')?.waitForDrain()
+        // ① 拦截留可查事实（含 reason）
+        const prefilterRows = traceRows.filter((r) => r.phase === 'prefilter')
+        assert.ok(prefilterRows.length >= 1, 'AC-21：预筛必须留下可查事实（trace phase=prefilter）')
+        const blockedRow = prefilterRows.find((r) => r.decision === 'block')
+        assert.ok(blockedRow !== undefined, 'AC-21：拦截事实必须含 decision=block')
+        assert.ok(typeof blockedRow.reason === 'string' && blockedRow.reason.includes('寒暄'), `AC-21：拦截事实必须含 reason（实得 ${blockedRow?.reason}）`)
+        assert.equal(llm.calls.length, 0, 'AC-21：被拦截的那一轮零调用')
+        // ② 与「评审过」数据面可区分：被拦截 ⇒ records 面零条；评审过 ⇒ 有记录
+        assert.equal(installed.ctrl.snapshot('s-post').records.length, 0, 'AC-21：被拦截不得产出 records（与「评审过」可区分）')
+        const runtime = installed.ctrl.runtimeOf('s-post')
+        assert.equal(runtime.lastReview.outcome, 'prefilter-blocked')
+        // ③ 补评可用：手动 POST 不过预筛
+        const handler = createAdvisorHandler({ ctrl: installed.ctrl, loadCatalog: async () => ({}) })
+        const res = fakeRes()
+        await handler(fakeReq('POST', { action: 'review', sessionId: 's-post' }), res)
+        assert.equal(res.statusCode, 200, 'AC-21：手动 POST 恒 200')
+        assert.equal(res.json().ok, true, 'AC-21：补评必须真的发起（ok=true）')
+        await runtime.waitForDrain()
+        assert.equal(llm.calls.length, 1, 'AC-21：手动补评必须绕过预筛（人明确要求评审）')
+        assert.equal(runtime.lastScreening.triggerSource, TRIGGER_MANUAL, 'AC-21：补评的触发源必须是 manual-post（可观测）')
+        assert.equal(runtime.lastScreening.screening, SCREEN_NOT_SCREENED, 'AC-21：补评标记为「未过预筛」而不是「拦下来」')
+      } finally { installed.dispose() }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  // ── 判据 11（AC-53）：新键四处齐 + 未登记键仍抛错 + 注释无 H-5 四禁区 ────
+  t('S2-11 AC-53：新键 advisorContextMaxFiles 位置齐备（①ALLOWED_KEYS ②resolveConfig ③cordis ④契约待同步）+ 未登记键仍抛错', () => {
+    const newKey = 'advisorContextMaxFiles'
+    // ② resolveAdvisorConfig：默认值 + 规范化 + 非法值抛错
+    assert.equal(resolveAdvisorConfig({})[newKey], 4, 'AC-53②：必须有确定默认值 4')
+    assert.equal(resolveAdvisorConfig({ [newKey]: 9 })[newKey], 9, 'AC-53②：必须能被规范化返回')
+    assert.equal(resolveAdvisorConfig({ [newKey]: '3' })[newKey], 3, 'AC-53②：数字串必须被 readInt 接受（与既有键同源）')
+    assert.throws(() => resolveAdvisorConfig({ [newKey]: -1 }), /非负整数/, 'AC-53②：非法值必须大声失败')
+    // ③ cordis.patch.yml
+    const bundle = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+    assert.match(bundle, new RegExp(`^\\s*${newKey}:\\s*4\\s*$`, 'm'), 'AC-53③：cordis.patch.yml 必须有该键（否则 boot 缺省与代码不一致）')
+    // ① ALLOWED_KEYS（源码级锁 + 变异必红：把这个键从集合里删掉，锁必须红）
+    const indexSrc = readFileSync(new URL('../lib/advisor/index.js', import.meta.url), 'utf8')
+    const setBlock = indexSrc.slice(indexSrc.indexOf('const ALLOWED_KEYS = new Set(['), indexSrc.indexOf('])', indexSrc.indexOf('const ALLOWED_KEYS = new Set([')))
+    assert.ok(setBlock.includes(`'${newKey}'`), 'AC-53①：ALLOWED_KEYS 必须含该键')
+    const mutant = setBlock.replace(`  '${newKey}',\n`, '')
+    assert.notEqual(mutant, setBlock, '变异体必须真的注入')
+    assert.ok(!mutant.includes(`'${newKey}'`), 'AC-53① 变异必红：删掉该键后锁必须失败（= 老配置 boot 抛错的老病会复发）')
+    // ④ 契约 §1：只允许「已知待同步」的差集（S2 新键），且不得出现计划外的键
+    const contract = readFileSync(new URL('../docs/advisor-contract.md', import.meta.url), 'utf8')
+    const contractKeys = [...contract.matchAll(/^\s*(advisor[A-Za-z]+):/gm)].map((m) => m[1])
+    const allowedKeys = allowedKeysFromSource()
+    assert.equal(allowedKeys.length, 14, `AC-53：ALLOWED_KEYS 应是 13 既有 + 1 新键 = 14（实得 ${allowedKeys.length}）`)
+    const unknownInContract = [...new Set(contractKeys)].filter((k) => !allowedKeys.includes(k))
+    assert.deepEqual(unknownInContract, [], 'AC-53④：契约不得声明代码不认识的 advisor 键')
+    const pending = allowedKeys.filter((k) => !contractKeys.includes(k))
+    assert.deepEqual(pending, [newKey], 'AC-53④：契约 §1 的待同步差集只允许是本批新键（docs/ 不在本批写面 ⇒ 登记 S5）')
+    // 负向：未登记键仍抛错（既有行为不得被新键开放策略带坏）
+    assert.throws(() => resolveAdvisorConfig({ advisorDefinitelyNotAKey: 1 }), /未知 advisor 配置键/, 'AC-53：未登记键必须仍抛错')
+    // 注释无 H-5 四禁区（既有门）+ 新键注释确实在（阳性对照）
+    assert.deepEqual(staleBundleComments(bundle), [], 'AC-53：cordis 注释不得描述已删行为（H-5 四禁区）')
+    assert.ok(bundle.includes('advisorContextMaxFiles: 4') && bundle.includes('L2 层'), 'AC-53 阳性对照：新键的注释必须在（说明其语义）')
+    const staleMutant = bundle.replace('# 记录保留条数上限', '# 模型回落链：任一为空 → 回落 tiers.HIGH')
+    assert.ok(staleBundleComments(staleMutant).length > 0, 'AC-53 变异必红：注入已删行为字样后注释门必须红')
+  })
+
+  // ── 判据 12（AC-54）：新会话键可读写 + U2 仍 400 零写盘 + 未知键仍丢弃 ──
+  t('S2-12 AC-54：projectPhase 可落盘读回；enabled=true 缺模型仍 400 零写盘；未知键仍丢弃', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-s2-ac54-'))
+    try {
+      // X10：每键四要素齐（type / default / semantics / validate）
+      for (const [key, spec] of Object.entries(SESSION_CONFIG_KEYS)) {
+        assert.equal(typeof spec.type, 'string', `AC-54/X10：${key} 必须声明 type`)
+        assert.ok('default' in spec, `AC-54/X10：${key} 必须声明 default`)
+        assert.equal(typeof spec.semantics, 'string', `AC-54/X10：${key} 必须声明 semantics`)
+        assert.equal(typeof spec.validate, 'function', `AC-54/X10：${key} 必须声明 validate`)
+      }
+      assert.ok(Object.keys(SESSION_CONFIG_KEYS).includes('projectPhase'), 'AC-54：新会话级键 projectPhase 必须在显式键集合里')
+      const store = new AdvisorStore({ dataDir: dir })
+      // ① 可落盘可读回
+      store.writeSessionConfig('s-54', { enabled: true, provider: 'p', model: 'm', projectPhase: 'build' })
+      const onDisk = JSON.parse(readFileSync(sessionConfigPath(dir, 's-54'), 'utf8'))
+      assert.deepEqual(onDisk, { enabled: true, provider: 'p', model: 'm', projectPhase: 'build' }, 'AC-54①：新键必须真的落盘')
+      assert.equal(store.readSessionConfig('s-54').projectPhase, 'build', 'AC-54①：新键必须能读回')
+      assert.equal(store.readSessionConfig('s-54').enabled, true)
+      // ①b 非法值 fail-closed + 零写盘
+      const before = readFileSync(sessionConfigPath(dir, 's-54'), 'utf8')
+      assert.throws(() => store.writeSessionConfig('s-54', { projectPhase: 'wrong-phase' }), /projectPhase/, 'AC-54①：非法阶段值必须抛错')
+      assert.equal(readFileSync(sessionConfigPath(dir, 's-54'), 'utf8'), before, 'AC-54①：非法值必须零写盘')
+      // ② enabled=true 缺 provider/model → 400 + 零写盘（U2 语义保持）
+      const ctrl = {
+        isActiveSession: () => true,
+        snapshot: () => ({ enabled: false, provider: null, model: null, modelSource: 'unset', runtime: { status: 'disabled', lastAt: 0, queue: 0, error: null }, records: [] }),
+        patchConfig: (id, patch) => store.writeSessionConfig(id, patch),
+      }
+      const handler = createAdvisorHandler({ ctrl, loadCatalog: async () => ({}) })
+      const res = fakeRes()
+      await handler(fakeReq('PATCH', { sessionId: 's-u2', enabled: true }), res)
+      assert.equal(res.statusCode, 400, 'AC-54②：enabled=true 缺模型必须 400')
+      assert.equal(existsSync(sessionConfigPath(dir, 's-u2')), false, 'AC-54②：校验失败必须零写盘')
+      // ③ 未知键仍被丢弃（手工构造 + 通过写路径）
+      writeFileSync(sessionConfigPath(dir, 's-unknown'), JSON.stringify({ enabled: true, provider: 'p', model: 'm', bogusKey: 1, projectPhase: 'ship' }))
+      const readBack = store.readSessionConfig('s-unknown')
+      assert.equal('bogusKey' in readBack, false, 'AC-54③：未知键必须被丢弃')
+      assert.equal(readBack.projectPhase, 'ship', 'AC-54③：已知键必须保留（阳性对照）')
+      store.writeSessionConfig('s-unknown', { bogusKey: 2, provider: 'p2' })
+      const afterWrite = JSON.parse(readFileSync(sessionConfigPath(dir, 's-unknown'), 'utf8'))
+      assert.equal('bogusKey' in afterWrite, false, 'AC-54③：写路径也必须丢弃未知键')
+      assert.equal(afterWrite.provider, 'p2')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // ── 判据 13（H-7）：api.js 保持零 import ──────────────────────────────
+  t('S2-13 H-7：api.js 保持零 import（不得为新动作引入任何模块）', () => {
+    const src = readFileSync(new URL('../lib/advisor/api.js', import.meta.url), 'utf8')
+    const code = stripCodeComments(src)
+    const imports = [...code.matchAll(/^\s*import\s/gm)]
+    const requires = [...code.matchAll(/\brequire\s*\(/g)]
+    assert.deepEqual(imports.map((m) => m[0].trim()), [], 'H-7：api.js 不得有 import 语句')
+    assert.deepEqual(requires.map((m) => m[0]), [], 'H-7：api.js 不得有 require 调用')
+    // 阳性对照：同一检查在别的模块上必须能抓到 import（否则「零 import」是失明假空）
+    const other = stripCodeComments(readFileSync(new URL('../lib/advisor/store.js', import.meta.url), 'utf8'))
+    assert.ok([...other.matchAll(/^\s*import\s/gm)].length >= 2, 'H-7 阳性对照：检查器必须能抓到 import')
+    assert.ok(src.includes('export function createAdvisorHandler'), 'H-7 阳性对照：api.js 确实被读到（不是空文件）')
+  })
+
+  // ── 判据 14（AC-59）：五类 × 三态 + 不可用 + 只读 ──────────────────────
+  t('S2-14 AC-59：决策保护五类可区分 + 三态齐 + 缺文件显式不可用 + 模块只读', () => {
+    assert.deepEqual([...DECISION_FIELDS].length, 6, 'AC-59：六字段')
+    assert.deepEqual([...DECISION_STATES].sort(), ['active', 'rejected', 'superseded'], 'AC-59：三态齐')
+    assert.equal(DECISION_CLASSES.length, 5, 'AC-59：五类上下文')
+    const parsed = parseDecisions(S2_DECISIONS_TEXT)
+    assert.deepEqual(parsed.errors, [], 'AC-59：fixture 必须零解析错误（否则在测残废格式）')
+    // 五类各 ≥1 条 + 五条**可区分**断言（类标题 + 该类条目 ID 同时可见）
+    const expect = {
+      已确认决策: 'D-012', 不可违反约束: 'C-003', 已知技术债: 'T-004', 已否决方案: 'R-005', 当前阶段目标: 'G-006',
+    }
+    const dir = buildS2Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      const rendered = renderDecisions(loadDecisions({ readText: (rel) => retrieval.readFile(rel) }))
+      for (const [klass, id] of Object.entries(expect)) {
+        assert.equal(parsed.entries.filter((e) => e.klass === klass).length >= 1, true, `AC-59：${klass} 必须至少一条`)
+        assert.ok(rendered.includes(`#### ${klass}（`), `AC-59：渲染必须含类标题 ${klass}`)
+        assert.ok(rendered.includes(id), `AC-59：${klass} 的条目标识必须可见（${id}）`)
+      }
+      assert.ok(parsed.entries.some((e) => e.state === 'superseded'), 'AC-59：superseded 态可见')
+      assert.ok(parsed.entries.some((e) => e.state === 'rejected' && e.klass === '已否决方案'), 'AC-59：rejected → 已否决方案')
+      // 缺字段/非法状态 ⇒ errors（不静默丢弃）+ 变异必红
+      const broken = parseDecisions('## D-900 · active · 已确认决策\n- 理由：缺正文\n## X` · active · 已确认决策\n')
+      assert.ok(broken.errors.length >= 1, 'AC-59：残缺条目必须进 errors（不静默）')
+      // 不可用：文件不存在
+      const missing = loadDecisions({ readText: () => { throw Object.assign(new Error('gone'), { code: 'ENOENT' }) } })
+      assert.equal(missing.available, false)
+      assert.ok(renderDecisions(missing).includes(DEC_UNAVAILABLE), 'AC-59：文件不存在 ⇒ 显式「不可用」')
+      // 只读：decisions.js 不得 import fs / 不得含写 API
+      const decSrc = readFileSync(join(RETRIEVAL_DIR, '..', 'context', 'decisions.js'), 'utf8')
+      assert.ok(!/from 'node:fs'/.test(decSrc), 'AC-59：decisions.js 不得 import fs（只读面由调用方注入）')
+      assert.deepEqual(scanWriteApis(decSrc, 'context/decisions.js'), [], 'AC-59：decisions.js 不得含任何写 API')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── 判据 15（AC-62）：普通聊天零仓库分析（可计数）+ 阳性对照 ─────────────
+  t('S2-15 AC-62：普通聊天零检索零 git 子进程；代码相关消息 → 检索计数 ≥1（阳性对照）', async () => {
+    const dir = buildS2Fixture()
+    try {
+      await initFixtureRepo(dir)
+      const { retrieval, scratch } = s2Retrieval(dir)
+      try {
+        const { proxy, counts } = countingRetrieval(retrieval)
+        for (const text of PREFILTER_SAMPLES.plainChat) {
+          const before = { ...counts }
+          const result = buildRepositoryContext({ retrieval: proxy, messageText: text, includeGit: true })
+          assert.equal(result.available, false, `AC-62：普通聊天不得产出仓库面（"${text}"）`)
+          assert.equal(result.retrievalCalls, 0)
+          assert.equal(result.gitCalls, 0)
+          assert.deepEqual(counts, before, `AC-62：普通聊天必须零检索零子进程（"${text}"）`)
+          assert.ok(result.text.includes(CTX_UNAVAILABLE), 'AC-62：不做分析必须显式标注（不静默省略）')
+        }
+        assert.deepEqual(counts, { listFiles: 0, readFile: 0, search: 0, relatedTests: 0, gitFacts: 0, gitSubprocess: 0, worktreeSnapshot: 0 },
+          'AC-62：5 条普通聊天之后所有计数必须仍为 0（零昂贵分析）')
+        // 阳性对照：同一 fixture 改成代码相关消息 → 计数必须起来
+        const codeResult = buildRepositoryContext({ retrieval: proxy, messageText: '请检查 src/foo.js 的报错并修复', includeGit: true })
+        assert.equal(codeResult.available, true)
+        assert.ok(counts.listFiles >= 1, 'AC-62 阳性对照：代码相关消息必须真的做检索（证明门看得见差异）')
+        assert.ok(counts.gitFacts + counts.gitSubprocess >= 1, 'AC-62 阳性对照：代码相关消息必须真的跑 git')
+      } finally { rmSync(scratch, { recursive: true, force: true }) }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // ── 判据 16（AC-60-L2）：L2 实装 + L3 标未实现 ─────────────────────────
+  t('S2-16 AC-60-L2：相关文件·符号精读实装（含配对测试与符号区间）；L3 显式标「未实现」', async () => {
+    const dir = buildS2Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await initFixtureRepo(dir)
+      const result = buildRepositoryContext({
+        retrieval,
+        messageText: '请检查 src/foo.js 的实现',
+        focusSource: ['src/foo.js'],
+        includeGit: true,
+        maxFiles: 2,
+      })
+      assert.equal(result.available, true)
+      assert.equal(result.l1.available, true, 'L1 层必须可用')
+      assert.equal(result.l2.available, true, 'AC-60-L2：L2 层必须实装且可用')
+      assert.ok(result.l2.filesRead >= 1, 'AC-60-L2：必须真的精读了源文件正文')
+      assert.ok(result.symbolRanges.length >= 1, 'AC-60-L2：必须给出符号区间（正则启发式）')
+      assert.ok(result.symbolRanges.every((r) => r.file === 'src/foo.js' && r.start >= 1 && r.end >= r.start), '符号区间形状必须合法')
+      assert.ok(result.text.includes('#### L2 · 相关文件 · 符号精读'), 'AC-60-L2：输入里必须有 L2 小节')
+      assert.ok(result.text.includes('配对测试 test/foo.test.js'), 'AC-60-L2：必须精读配对测试（与 AC-3 的 source↔test 配对同源）')
+      // 符号面口径（无 AST 精度）必须在文本里可见
+      assert.ok(/正则启发式，无 AST 精度/.test(result.text), 'AC-60-L2：粒度上限必须在输入里如实声明')
+      // L3：显式「未实现」+ 审定面措辞
+      assert.equal(result.l3.implemented, false, 'AC-60：L3 不得声称已实现')
+      assert.equal(result.l3.note, L3_NOT_IMPLEMENTED_NOTE)
+      assert.ok(result.l3.note.includes('设计意向（未实现，登记增强批次 B4）'), 'AC-60：L3 措辞必须是审定面「设计意向（未实现…）」')
+      assert.ok(result.text.includes(L3_NOT_IMPLEMENTED_NOTE), 'AC-60：L3 未实现必须写进输入/契约面')
+      // mentionedPaths 与符号抽取是纯函数（可独立测）
+      assert.deepEqual(mentionedPaths('看看 lib/advisor/runtime.js 与 tests/run.mjs'), ['lib/advisor/runtime.js', 'tests/run.mjs'])
+      const ranges = extractSymbolRanges('export function a() {}\nexport const b = 1\nclass C {}\n', 'x.js')
+      assert.ok(ranges.some((r) => r.symbol === 'a' && r.kind === 'function'))
+      assert.ok(ranges.some((r) => r.symbol === 'b' && r.kind === 'const'))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+}

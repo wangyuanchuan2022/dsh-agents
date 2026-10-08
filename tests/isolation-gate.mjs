@@ -255,7 +255,7 @@ export async function runGate(options = {}) {
     // 把 clearTimeout 放在这一支之前会把看门狗自己关掉，于是「挂住」只能等外部超时
     // ——正是 C-1 说的最坏形态（表现为超时而不是红）。不能那么写。
     process.exitCode = code
-    if (injectResidual) setTimeout(() => {}, 90000) // 未 unref 的长定时器 = advisorCallTimeoutMs 的形态
+    if (injectResidual) setTimeout(() => {}, 600000) // 未 unref 的长定时器 = advisorCallTimeoutMs 的形态（远大于任何测试预算）
     return code
   }
   // 正常路径：显式收口。runner 已改成 process.exitCode，若这里不 exit，残留句柄
@@ -369,10 +369,14 @@ export function selftest() {
     })
     lines.push(`[场景2] exit=${green.status}；[RESULT] PASS=${green.output.includes('[RESULT] PASS')}`)
 
+    // 场景 3/3b 的退出预算：**自适应**——先取场景 2（绿跑）实测的套件耗时，再给 2 倍余量。
+    // 写死预算会被「套件变慢」误伤：S2 让 run.mjs 从 ~6.7s 涨到 ~15.5s，写死的 8s 会让
+    // 看门狗把「套件变慢」误报成「有真实残留句柄」（本门自己的误诊，已修）。
+    const greenElapsed = Number((/退出预算：elapsed=(\d+)ms/.exec(green.output) ?? [])[1])
+    const hangBudgetMs = Math.max(20000, Number.isFinite(greenElapsed) ? greenElapsed * 2 : 20000)
+    lines.push(`[facts] 场景 3/3b 预算 = max(20s, 绿跑实测 ${Number.isFinite(greenElapsed) ? `${greenElapsed}ms` : '解析失败'} × 2) = ${hangBudgetMs}ms`)
     // 场景 3（退出预算必生效，确定性）：--no-exit-close --inject-residual 注入一个未 unref
     // 的长定时器（= advisorCallTimeoutMs 的形态）且不显式收口 → 看门狗必须把它变成 exit 3。
-    // 预算给 8s：实测门耗时约 3s（含整跑 run.mjs），留 2.6 倍余量，同时仍是「秒级」断言。
-    const hangBudgetMs = 8000
     const hang = runChild(['--no-exit-close', '--inject-residual'], hangBudgetMs)
     const hangOk = hang.status === EXIT_BUDGET_EXCEEDED && hang.output.includes(`未在 ${hangBudgetMs} ms 内收口`)
     results.push({
@@ -389,14 +393,15 @@ export function selftest() {
     // 断言只要求「在预算内有确定结局、且不是被外部保险丝杀掉」——两种结局都合法，但必须可辨。
     const plain = runChild(['--no-exit-close'], hangBudgetMs)
     const plainOk = plain.status !== null && plain.output.includes('[RESULT]')
+    const plainElapsed = (/(?:退出预算：elapsed=(\d+)ms)/.exec(plain.output) ?? [])[1] ?? '?'
     results.push({
       name: '场景3b 真实残留句柄实测：不注入时必须有确定结局（自然退出 或 看门狗 exit=3）',
       ok: plainOk,
-      detail: `exit=${plain.status} signal=${plain.signal}（${plain.status === EXIT_BUDGET_EXCEEDED ? '看门狗兜住 = 有真实残留句柄' : '自然退出 = 当前无残留句柄'}）`,
+      detail: `exit=${plain.status} signal=${plain.signal} elapsed=${plainElapsed}ms/${hangBudgetMs}ms（${plain.status === EXIT_BUDGET_EXCEEDED ? '看门狗兜住 = 超出预算仍有句柄存活' : '自然退出 = 当前无残留句柄'}）`,
     })
-    lines.push(`[场景3b] exit=${plain.status} signal=${plain.signal} —— `
+    lines.push(`[场景3b] exit=${plain.status} signal=${plain.signal} elapsed=${plainElapsed}ms/budget=${hangBudgetMs}ms —— `
       + (plain.status === EXIT_BUDGET_EXCEEDED
-        ? '实测：run.mjs 结束后**确实有**残留句柄（不显式收口就挂住）'
+        ? '实测：run.mjs 结束后**仍有**句柄存活（超出预算）'
         : '实测：run.mjs 结束后**无**残留句柄（自然退出）；显式收口为预防性条款'))
   } finally {
     // 父进程兜底清理探针（子进程内也清；这里保证即使子进程崩了也不留残渣）
