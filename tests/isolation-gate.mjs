@@ -19,7 +19,8 @@
  *
  * ## C-1（architect 留的硬条件）
  *
- * `tests/run.mjs:1346` 的 `process.exit(...)` 已按判据 9 改为 `process.exitCode = ...`，
+ * `tests/run.mjs` 的 `process.exit(...)` 已按判据 9 改为 `process.exitCode = ...`
+ * （**符号锚**：`process.exitCode = failures.length === 0 ? 0 : 1`——行号会漂移，不写行号），
  * runner **不再强制终止**。若 advisor runtime 的 `setTimeout` / `AbortController` /
  * 未 dispose 的 runtime 池仍有句柄存活，进程会**挂住**——在门线上表现为**超时**
  * 而非**红**，这是最坏的失败形态。故本门：

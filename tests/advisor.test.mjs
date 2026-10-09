@@ -2922,26 +2922,43 @@ const ADVISOR_DIR = fileURLToPath(new URL('../lib/advisor', import.meta.url))
 const S1A_SOURCE_MARK = 'UNIQUE_SOURCE_MARK_S1A'
 const S1A_TEST_MARK = 'UNIQUE_TEST_MARK_S1A'
 
-/** 只读写 API 门的**基线豁免面**（逐条钉死：文件 + 行内片段；每条都必须命中 ≥1 处）。 */
+/**
+ * 只读写 API 门的**基线豁免面**（逐条钉死：文件 + **行级锚定正则**；每条都必须命中 ≥1 处）。
+ *
+ * ⚠️ P1（security-reviewer 2026-10-09 实测）：旧实现按「同行 `includes(片段)`」匹配 ⇒
+ * **把写调用追加到豁免行尾，违规数 = 0**（豁免把整行都放过了）。现在改为**行级锚定**：
+ * 锚点必须**整行匹配**（`^…$`，测试对象是去注释后的 trim 行）——任何追加/改写都会让它失配。
+ */
 const WRITE_API_ALLOWLIST = [
-  { file: 'lib/advisor/index.js', snippet: 'mkdirSync(dataDir, { recursive: true })', reason: '既有（S0 前）：installAdvisor 建数据目录' },
-  { file: 'lib/advisor/index.js', snippet: "appendFileSync(join(dataDir, 'chunk-trace.jsonl')", reason: '既有（S0 前）：trace sink' },
-  { file: 'lib/advisor/store.js', snippet: 'this.fs.mkdirSync(dir, { recursive: true })', reason: '既有（S0 前）：#atomicWrite 临时目录' },
-  { file: 'lib/advisor/store.js', snippet: 'this.fs.writeFileSync(tmp, data)', reason: '既有（S0 前）：#atomicWrite 写临时件' },
-  { file: 'lib/advisor/store.js', snippet: 'this.fs.renameSync(tmp, path)', reason: '既有（S0 前）：#atomicWrite 原子替换' },
-  { file: 'lib/advisor/store.js', snippet: 'this.fs.mkdirSync(this.dataDir, { recursive: true })', reason: '既有（S0 前）：records 目录' },
-  { file: 'lib/advisor/store.js', snippet: 'this.fs.appendFileSync(this.recordsFile', reason: '既有（S0 前）：records.jsonl 追加' },
-  { file: 'lib/advisor/retrieval/git.js', snippet: "fs.openSync(tmpPath, 'w')", reason: 'S1a 判据 13 豁免②：fd-stdio 子进程输出句柄（只写子进程输出）' },
-  { file: 'lib/advisor/retrieval/git.js', snippet: 'fs.unlinkSync(tmpPath)', reason: 'S1a 判据 13 豁免②：同一临时文件的清理' },
+  { file: 'lib/advisor/index.js', anchor: /^mkdirSync\(dataDir, \{ recursive: true \}\)$/, reason: '既有（S0 前）：installAdvisor 建数据目录' },
+  { file: 'lib/advisor/index.js', anchor: /^appendFileSync\(join\(dataDir, 'chunk-trace\.jsonl'\), .+\)$/, reason: '既有（S0 前）：trace sink' },
+  { file: 'lib/advisor/store.js', anchor: /^this\.fs\.mkdirSync\(dir, \{ recursive: true \}\)$/, reason: '既有（S0 前）：#atomicWrite 临时目录' },
+  { file: 'lib/advisor/store.js', anchor: /^this\.fs\.writeFileSync\(tmp, data\)$/, reason: '既有（S0 前）：#atomicWrite 写临时件' },
+  { file: 'lib/advisor/store.js', anchor: /^this\.fs\.renameSync\(tmp, path\)$/, reason: '既有（S0 前）：#atomicWrite 原子替换' },
+  { file: 'lib/advisor/store.js', anchor: /^this\.fs\.mkdirSync\(this\.dataDir, \{ recursive: true \}\)$/, reason: '既有（S0 前）：records 目录' },
+  { file: 'lib/advisor/store.js', anchor: /^this\.fs\.appendFileSync\(this\.recordsFile, .+\)$/, reason: '既有（S0 前）：records.jsonl 追加' },
+  { file: 'lib/advisor/retrieval/git.js', anchor: /^fd = fs\.openSync\(tmpPath, 'w'\)$/, reason: 'S1a 豁免②：fd-stdio 子进程输出句柄（只写子进程输出）' },
+  { file: 'lib/advisor/retrieval/git.js', anchor: /^try \{ fs\.unlinkSync\(tmpPath\) \} catch \{\s*\}$/, reason: 'S1a 豁免②：同一临时文件的清理' },
 ]
 
-/** 计划 S1a 判据 13 点名的写 API（**调用形态**；成员调用 `this.fs.x(` 与裸调用同等对待）。 */
+/**
+ * 计划 S1a 判据 13 点名的写 API（**调用形态**；成员调用 `this.fs.x(` 与裸调用同等对待）。
+ *
+ * P1 补漏（security-reviewer 2026-10-09 实测）：`fs.cpSync` 完全失明；
+ * `openSync('w+')` 与旗标常量 `O_WRONLY` 形态也漏判。下面三处一并补上。
+ */
 const WRITE_API_NAMES = [
   'writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream',
   'rmSync', 'rm', 'unlinkSync', 'unlink', 'mkdirSync', 'mkdir', 'renameSync', 'rename',
-  'copyFileSync', 'copyFile', 'truncate', 'truncateSync', 'chmod', 'chmodSync', 'utimes', 'utimesSync',
-  'writeText', 'editText',
+  'copyFileSync', 'copyFile', 'cpSync', 'cp', 'truncate', 'truncateSync', 'chmod', 'chmodSync', 'utimes', 'utimesSync',
+  'writeText', 'editText', 'rmdirSync', 'rmdir',
 ]
+
+/** 以**写/追加**方式打开文件的旗标常量（`openSync(p, constants.O_WRONLY)` 这类形态）。 */
+const WRITE_FLAG_CONSTANTS = /\b(?:O_WRONLY|O_CREAT|O_RDWR|O_APPEND|O_TRUNC)\b/
+
+/** `openSync` 的写模式字面量（含 `w+` / `a+` / `rs+` 这类组合）。 */
+const WRITE_OPEN_MODE = /['"][wax](?:\+)?['"]/
 
 /** AC-15 点名的预算字面量（**在运行时由幂运算拼出**，否则本文件自己就会命中门线）。 */
 const BUDGET_LITERAL_STRINGS = [String(2 ** 13), String(2 ** 12 * 5), String(2 ** 13 * 5)]
@@ -2994,7 +3011,13 @@ function collectAdvisorModules() {
   return out
 }
 
-/** 扫描源码里的写 API 调用形态（**去注释后**；`openSync` 只在 mode 为 w/a 时算调用点）。 */
+/**
+ * 扫描源码里的写 API 调用形态（**去注释后**）。
+ *
+ * 覆盖面（含 P1 补漏）：具名写 API（含 `cpSync`/`cp`/`rmdirSync`）、
+ * `openSync` 的**写模式字面量**（`w`/`a`/`x` 及 `w+`/`a+` 组合）、
+ * `openSync` 的**旗标常量**形态（`O_WRONLY`/`O_CREAT`/`O_RDWR`/`O_APPEND`/`O_TRUNC`）。
+ */
 function scanWriteApis(sourceText, fileLabel) {
   const code = stripCodeComments(sourceText)
   const hits = []
@@ -3008,7 +3031,9 @@ function scanWriteApis(sourceText, fileLabel) {
     const openRe = /\bopenSync\s*\(([^)]*)\)/g
     let m
     while ((m = openRe.exec(line)) !== null) {
-      if (/['"][wa]['"]/.test(m[1])) hits.push({ file: fileLabel, line: i + 1, api: 'openSync(w|a)', text: line.trim() })
+      const args = m[1]
+      if (WRITE_OPEN_MODE.test(args)) hits.push({ file: fileLabel, line: i + 1, api: 'openSync(w|a|x)', text: line.trim() })
+      else if (WRITE_FLAG_CONSTANTS.test(args)) hits.push({ file: fileLabel, line: i + 1, api: 'openSync(flag-constant)', text: line.trim() })
     }
   }
   return hits
@@ -3017,6 +3042,8 @@ function scanWriteApis(sourceText, fileLabel) {
 /**
  * 写 API 门：返回 `{violations, exempted, staleAllowlist, allHits}`。
  * `allowlist` 传 `[]` = 关闭豁免（用于证明扫描器不是失明的）。
+ *
+ * 豁免匹配 = **整行锚定**（`anchor` 必须匹配整条 trim 后的去注释行）——见 WRITE_API_ALLOWLIST 的注释。
  */
 function scanWriteApiGate(files, allowlist = WRITE_API_ALLOWLIST) {
   const allHits = []
@@ -3027,7 +3054,7 @@ function scanWriteApiGate(files, allowlist = WRITE_API_ALLOWLIST) {
   const usedAllow = new Set()
   const violations = []
   for (const hit of allHits) {
-    const idx = allowlist.findIndex((e) => e.file === hit.file && hit.text.includes(e.snippet))
+    const idx = allowlist.findIndex((e) => e.file === hit.file && e.anchor.test(hit.text))
     if (idx >= 0) { usedAllow.add(idx); continue }
     violations.push(hit)
   }
@@ -3646,7 +3673,7 @@ import {
   DECISION_STATES, DECISION_CLASSES, UNAVAILABLE_MARK as DEC_UNAVAILABLE,
 } from '../lib/advisor/context/decisions.js'
 import { buildProjectState, heuristicPhase, assertPhase, PROJECT_PHASES } from '../lib/advisor/context/project.js'
-import { buildRepositoryContext, extractSymbolRanges, L3_NOT_IMPLEMENTED_NOTE, mentionedPaths } from '../lib/advisor/context/repository.js'
+import { buildRepositoryContext, extractSymbolRanges, L3_NOT_IMPLEMENTED_NOTE, mentionedPaths, LEVEL_L1 } from '../lib/advisor/context/repository.js'
 import {
   screen, classifyMessage, shouldRunRepoAnalysis, isPureAck, isNoInformation, resolveTier,
   PREFILTER_SAMPLES, matchedSignals, ACK_EXACT,
@@ -4711,5 +4738,241 @@ export function testRetrievalSecurity(t) {
       rmSync(other, { recursive: true, force: true })
       rmSync(scratch, { recursive: true, force: true })
     }
+  })
+}
+
+// ── 13. B1 第二批修复（code-reviewer P1-1/2/3 + security-reviewer 高优先 P1）────────
+
+export function testB1SecondPass(t) {
+  t('P1-3：collect() 的 Base 口径与 buildContext 一致（Base 不再计两次、单次 20KB 判定不含 Base）', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await initFixtureRepo(dir)
+      const baseText = 'B'.repeat(5000)
+      const round = retrieval.collect({ baseText, includeGit: true, queries: [{ literal: 'export' }] })
+      const baseBytes = measureInjection(baseText).bytes
+      assert.equal(round.baseBytes, baseBytes, 'P1-3：baseBytes 必须只按 baseText 计一次')
+      assert.equal(round.accounting.baseBytes, baseBytes, 'P1-3：accounting 的 base 口径必须同源')
+      assert.equal(round.bundle.bytes, round.repositoryBytes, 'P1-3：bundle.bytes = 检索段字节（不含 Base）')
+      assert.equal(round.accounting.repositoryBytes, round.repositoryBytes, 'P1-3：accounting 的 repository = 检索段')
+      // 单次 20KB 判定的计量对象 = **检索段**（旧实现把整段 inputText 当检索段 ⇒ 含 Base）
+      assert.equal(round.accounting.calls[0].bytes, round.repositoryBytes, 'P1-3：单次检索的计量对象必须是检索段')
+      assert.equal(round.accounting.verdicts.perCall[0].usedBytes, round.repositoryBytes, 'P1-3：单次预算判定不得含 Base')
+      // 总量 = base + 检索段（只多出 join 分隔符，绝不含第二份 Base）
+      assert.ok(round.totalBytes >= round.baseBytes + round.repositoryBytes, 'P1-3：总量 = base + 检索段')
+      assert.ok(round.totalBytes <= round.baseBytes + round.repositoryBytes + 8, `P1-3：总量不得虚增一个 Base（实得 total=${round.totalBytes}, base=${round.baseBytes}, repo=${round.repositoryBytes}）`)
+      assert.equal(round.bytes, round.totalBytes, 'P1-3：bytes 与 totalBytes 同源')
+      // 互不占用在 collect 路径同样成立：Base 超限不得挤压 Repository 判定
+      const overBase = retrieval.collect({ baseText: 'B'.repeat(BASE_CONTEXT_BYTES + 100), includeGit: false, queries: [{ literal: 'export' }] })
+      assert.equal(overBase.accounting.verdicts.base.over, true, 'P1-3：Base 超限必须被判超')
+      assert.equal(overBase.accounting.verdicts.repository.over, false, 'P1-3：★Base 超限不得挤压 Repository 判定（并列独立）')
+      // 必红：复刻旧口径（把整段 inputText 当检索段 + baseText 再传一次）
+      const legacy = accountRetrieval({ baseText, calls: [{ label: 'retrieval#1', text: round.inputText }] })
+      assert.ok(legacy.repositoryBytes > round.repositoryBytes, 'P1-3 必红：旧口径下 repositoryBytes 明显更大（把 Base 也算了进去）')
+      const delta = legacy.repositoryBytes - round.repositoryBytes
+      assert.ok(delta >= baseBytes && delta <= baseBytes + 8,
+        `P1-3 必红：旧口径多出来的部分应≈一整个 Base（实得 ${delta}，base=${baseBytes}；差值含 join 分隔符）`)
+      assert.equal(legacy.verdicts.perCall[0].usedBytes, round.totalBytes, 'P1-3 必红：旧口径的单次判定对象是整段文本（含 Base）')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  t('P1-1：advisorContextMaxFiles=0 = 关闭 L2 精读（文档与代码一致）+ 不喂 L3 假数据', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await initFixtureRepo(dir)
+      const base = { retrieval, messageText: '请检查 src/foo.js 的实现', includeGit: false }
+      // ① 0 = 关闭：不精读任何文件、无符号区间，且**显式**写进注入文本
+      const off = buildRepositoryContext({ ...base, maxFiles: 0 })
+      assert.equal(off.l2.disabled, true, 'P1-1：maxFiles=0 必须置 l2.disabled')
+      assert.equal(off.l2.filesRead, 0, 'P1-1：★maxFiles=0 时 filesRead 必须为 0（旧实现回落成 4）')
+      assert.equal(off.symbolRanges.length, 0, 'P1-1：0 时不得产出符号区间')
+      assert.ok(off.text.includes('【已关闭】'), 'P1-1：关闭状态必须显式写进文本（不静默）')
+      assert.equal(off.level, LEVEL_L1, 'P1-1：关闭 L2 后 level 只报 L1')
+      assert.equal(off.l1.available, true, 'P1-1 阳性对照：L1 仍照常')
+      // ② 缺省与显式值仍按预期工作
+      const two = buildRepositoryContext({ ...base, maxFiles: 2 })
+      assert.equal(two.l2.disabled, false)
+      assert.ok(two.l2.filesRead <= 2 && two.l2.filesRead >= 1, 'P1-1：maxFiles=2 必须生效')
+      const def = buildRepositoryContext({ ...base })
+      assert.ok(def.l2.filesRead >= 1 && def.l2.filesRead <= 4, 'P1-1：缺省仍是最多 4 个')
+      // ③ 配置面可达：resolveAdvisorConfig 允许 0（readInt 非负）
+      assert.equal(resolveAdvisorConfig({ advisorContextMaxFiles: 0 }).advisorContextMaxFiles, 0, 'P1-1：配置面必须允许 0（否则「0=关闭」不可达）')
+      assert.equal(resolveAdvisorConfig({}).advisorContextMaxFiles, 4, 'P1-1 阳性对照：缺省仍是 4')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  t('P1-2①/②：生产接线真实喂 gitFacts + **走真实装配路径**断言上下文内容进了模型输入', async () => {
+    const dir = buildS2Fixture() // 含 docs/DECISIONS.md
+    const dataDir = mkdtempSync(join(tmpdir(), 'dsh-p12-'))
+    try {
+      await initFixtureRepo(dir)
+      const traceRows = []
+      const llm = fakeLlm('{"notes":[]}')
+      const agent = fakeAgent('s-ctx')
+      const { ctx, emit } = fakeCtx()
+      ctx.agents.get = (id) => (id === 's-ctx' ? agent : undefined)
+      const installed = installAdvisor(ctx, {}, {
+        dataDir,
+        resolveLlm: () => llm,
+        trace: (row) => traceRows.push(row),
+        resolutionRootOf: () => dir, // ← 生产接线里由宿主会话 cwd 提供；测试注入夹具根
+      })
+      try {
+        const session = { ...fakeSession([msg('user', '请检查 src/foo.js 的实现')]), id: 's-ctx' }
+        agent.session = session
+        installed.ctrl.patchConfig('s-ctx', { enabled: true, provider: 'p', model: 'm' })
+        emit('agent/created', { agent })
+        emit('session/event', session, { type: 'step/start', data: { turn: 1 } })
+        emit('session/event', session, { type: 'turn/end', seq: 1, data: { turn: 1, reason: { kind: 'completed' } } })
+        await new Promise((r) => setTimeout(r, 30))
+        const runtime = installed.ctrl.runtimeOf('s-ctx')
+        await runtime?.waitForDrain()
+        assert.equal(llm.calls.length, 1, 'P1-2：真实装配路径必须真的发起一次评审')
+        const captured = capturedInput(llm)
+        // ② 上下文内容真的进了模型输入（三层各自可辨）
+        assert.ok(captured.includes(BASE_TITLE), 'P1-2②：基础上下文段必须进输入')
+        assert.ok(captured.includes('仓库上下文（Repository Context'), 'P1-2②：仓库上下文段必须进输入')
+        assert.ok(captured.includes('DECISION_BODY_MARK'), 'P1-2②：决策保护内容必须进输入')
+        assert.ok(captured.includes('src/foo.js'), 'P1-2②：仓库文件路径必须进输入')
+        // ① git 事实必须真的喂进 Project State（旧接线恒「不可用」）
+        assert.ok(captured.includes('### 项目状态'), 'P1-2①：项目状态段必须在')
+        assert.ok(!captured.includes('【不可用】git 事实'), 'P1-2①：★生产接线不得再恒显「git 事实不可用」')
+        assert.match(captured, /分支：/, 'P1-2①：必须真的渲染出分支（证明 gitFacts 到位）')
+        assert.equal(runtime.lastContext.l1?.gitAvailable ?? runtime.lastContext.repository?.l1?.gitAvailable, true, 'P1-2①：repository 层的 gitAvailable 必须为真')
+        assert.deepEqual(runtime.lastContext.layers, ['conversation', 'project', 'repository'], '三层顺序必须稳定')
+        // 必红：复刻旧接线（只给 phase、不给 gitFacts）⇒ 项目层恒「不可用」
+        const legacyProject = buildProjectState({ gitFacts: null, phase: null })
+        assert.equal(legacyProject.available, false, 'P1-2① 必红：旧接线（不喂 gitFacts）下项目层必然不可用')
+        assert.ok(legacyProject.text.includes(CTX_UNAVAILABLE), 'P1-2① 必红：正是被修掉的「永久不可用」症状')
+        assert.equal(legacyProject.phaseSource, 'unavailable', 'P1-2① 必红：启发阶段也因此恒 design')
+      } finally { installed.dispose() }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  t('P1-2③：上下文装配失败 = fail-open **但可见**（trace + lastContext.failed + 注入文本留痕）', async () => {
+    const llm = fakeLlm('{"notes":[]}')
+    const trace = []
+    const rt = s2Runtime({
+      llm,
+      trace,
+      context: () => { throw new Error('SIMULATED_CONTEXT_FAILURE') },
+      prefilter: screen,
+    })
+    rt.enqueue({ markdown: s2UserMarkdown('请检查 src/foo.js 的报错'), trigger: TRIGGER_USER }, { sessionId: 's-ctx-fail', sessionName: null })
+    await rt.waitForDrain()
+    assert.equal(llm.calls.length, 1, 'P1-2③：fail-open ⇒ 评审照常进行（不因上下文坏了停摆）')
+    assert.equal(rt.lastContext?.failed, true, 'P1-2③：★装配失败必须可见（lastContext.failed）')
+    assert.match(String(rt.lastContext.error), /SIMULATED_CONTEXT_FAILURE/, 'P1-2③：错误原因必须可读')
+    assert.ok(trace.some((r) => r.phase === 'context' && /SIMULATED_CONTEXT_FAILURE/.test(String(r.error))), 'P1-2③：trace 必须留痕（phase=context）')
+    assert.ok(capturedInput(llm).includes('advisor 上下文装配失败'), 'P1-2③：注入文本里必须带失败说明（不是静默变空）')
+    // 阳性对照：正常装配时 lastContext.failed 不得为真
+    const ok = s2Runtime({ llm: fakeLlm('{"notes":[]}'), context: () => ({ section: '<!-- ok -->', result: { layers: ['conversation'], bytes: 1 } }) })
+    ok.enqueue({ markdown: s2UserMarkdown('请检查 src/foo.js'), trigger: TRIGGER_USER }, { sessionId: 's-ok', sessionName: null })
+    await ok.waitForDrain()
+    assert.notEqual(ok.lastContext?.failed, true, 'P1-2③ 阳性对照：正常装配不得被标失败')
+    rt.dispose()
+    ok.dispose()
+  })
+
+  t('SEC-P1（凭据名单）：security-reviewer 实测放行的 10 个样态必须全部被拒（含必红 + 阳性对照）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-sec-cred-'))
+    try {
+      mkdirSync(join(dir, 'src'), { recursive: true })
+      writeFileSync(join(dir, 'src', 'foo.js'), 'export const ok = 1\n')
+      writeFileSync(join(dir, 'README.md'), '# readme\n')
+      const samples = [
+        'kubeconfig', '.pgpass', 'terraform.tfstate', 'secrets.yaml', 'vault.kdbx',
+        'signing.jwk', 'private.key.txt', 'key.json', 'token.txt', 'vault.json',
+      ]
+      const policy = createPathPolicy({ root: dir })
+      const missed = []
+      for (const rel of samples) {
+        const verdict = policy.check(rel)
+        if (verdict.ok !== false || verdict.code !== REJECT.CREDENTIAL) missed.push(`${rel}→${verdict.ok ? 'ok' : verdict.code}`)
+      }
+      assert.deepEqual(missed, [], `SEC-P1：10 个样态必须全部判 credential（未拦：${missed.join(', ')}）`)
+      // 阳性对照：普通文件不受影响
+      assert.equal(policy.check('src/foo.js').ok, true, 'SEC-P1 阳性对照：普通源码仍可读')
+      assert.equal(policy.check('README.md').ok, true, 'SEC-P1 阳性对照：普通文档仍可读')
+      // 必红：复刻**扩展前**的名单（旧 36 样态版本）⇒ 这 10 个全部放行
+      const OLD_BASENAMES = ['.env', '.env.local', '.env.production', '.env.development', '.envrc', '.npmrc', '.netrc', '.pypirc', '.htpasswd', '.git-credentials', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'known_hosts', 'credentials', 'credentials.json', 'service-account.json']
+      const OLD_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.asc', '.ppk']
+      const legacyCatches = samples.filter((rel) => {
+        const name = rel.toLowerCase()
+        return OLD_BASENAMES.includes(name) || OLD_EXTENSIONS.some((e) => name.endsWith(e))
+      })
+      assert.deepEqual(legacyCatches, [], `SEC-P1 必红：扩展前的名单对这 10 个样态**一个都拦不住**（实拦 ${legacyCatches.length} 个）`)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('SEC-P1（写门补漏 + 锚定豁免）：cpSync/openSync 模式与旗标必红；豁免行尾追加写调用必须变红', () => {
+    // ① 补漏：新纳入的写 API / 打开模式 / 旗标常量
+    const injections = [
+      ["fs.cpSync('a', 'b')", 'cpSync'],
+      ["fs.cp('a', 'b')", 'cp'],
+      ["fs.openSync(p, 'w+')", 'openSync(w|a|x)'],
+      ["fs.openSync(p, 'a+')", 'openSync(w|a|x)'],
+      ["fs.openSync(p, constants.O_WRONLY)", 'openSync(flag-constant)'],
+      ["fs.openSync(p, O_CREAT | O_TRUNC)", 'openSync(flag-constant)'],
+      ["fs.rmdirSync('a')", 'rmdirSync'],
+    ]
+    for (const [line, expectedApi] of injections) {
+      const hits = scanWriteApis(`function probe(){ ${line} }`, 'probe.js')
+      assert.ok(hits.some((h) => h.api === expectedApi), `SEC-P1 必红：${line} 必须被门抓到（期望 api=${expectedApi}，实得 ${JSON.stringify(hits.map((h) => h.api))}）`)
+    }
+    // 阳性对照：只读 API 不得误伤
+    for (const line of ["fs.readFileSync(p, 'utf8')", "fs.realpathSync.native(p)", 're.exec(line)']) {
+      assert.deepEqual(scanWriteApis(`function probe(){ ${line} }`, 'probe.js'), [], `SEC-P1 阴性对照：${line} 不得被误伤`)
+    }
+
+    // ② 豁免锚定：在豁免行**行尾追加写调用** ⇒ 必须变红（旧 includes 匹配下违规数 = 0）
+    const idxSrc = readFileSync(join(ADVISOR_DIR, 'index.js'), 'utf8')
+    const exemptLine = idxSrc.split('\n').find((l) => l.trim() === 'mkdirSync(dataDir, { recursive: true })')
+    assert.equal(typeof exemptLine, 'string', '前置：必须找得到豁免行')
+    const tampered = `${exemptLine}; fs.cpSync('a', 'b')`
+    const tamperedText = idxSrc.replace(exemptLine, tampered)
+    assert.notEqual(tamperedText, idxSrc, '变异体必须真的注入')
+    const gated = scanWriteApiGate([{ rel: 'lib/advisor/index.js', text: tamperedText }])
+    assert.ok(gated.violations.length > 0, 'SEC-P1 必红：豁免行尾追加写调用后必须出现违规（旧实现按「同行含片段」匹配 ⇒ 违规数 0）')
+    assert.ok(gated.violations.some((v) => v.api === 'cpSync'), '必红点必须是那个被追加的写调用')
+    // 复刻旧匹配逻辑（「同行 includes 片段」）⇒ 证明旧实现确实会把这行整体放过
+    const legacyHit = scanWriteApis(tamperedText, 'lib/advisor/index.js').find((h) => h.api === 'cpSync')
+    assert.ok(legacyHit !== undefined, '前置：追加进去的写调用必须被扫描器看见')
+    assert.ok(legacyHit.text.includes('mkdirSync(dataDir, { recursive: true })'),
+      'SEC-P1 必红：tampered 行仍含原豁免片段 ⇒ 旧的「同行含片段」匹配会把整行放过（本次改为整行锚定后才拦住）')
+
+    // ③ 真实工作树仍必须干净（豁免条条活性、零违规）
+    const real = scanWriteApiGate(collectAdvisorModules())
+    assert.deepEqual(real.violations, [], `SEC-P1：真实工作树不得有未豁免写调用（${JSON.stringify(real.violations)}）`)
+    assert.equal(real.exempted, WRITE_API_ALLOWLIST.length, 'SEC-P1：锚定豁免必须条条命中')
+  })
+
+  t('P1（trimToBudget 硬上限）：无论输入多长，返回值必须 ≤ 上限（或显式 over 标记）', () => {
+    const long = 'x'.repeat(10000)
+    const trimmed = trimToBudget(long, 64, '测试段')
+    assert.ok(trimmed.bytes <= 64, `trimToBudget 必须 ≤ 上限（实得 ${trimmed.bytes} > 64）`)
+    assert.equal(trimmed.trimmed, true)
+    assert.equal(trimmed.over, false, '正常裁剪后不得标 over')
+    // 极小上限：宁可丢内容也不越限（over 只可能在连说明都装不下时出现）
+    const tiny = trimToBudget('中文内容'.repeat(50), 5, '极小段')
+    assert.ok(tiny.bytes <= 5 || tiny.over === true, `极小上限也必须不越限或显式 over（bytes=${tiny.bytes}, over=${tiny.over}）`)
+    // 多字节内容（按字节而非字符裁剪）
+    const cjk = trimToBudget('中'.repeat(1000), 100, '中文段')
+    assert.ok(cjk.bytes <= 100, `多字节内容也必须按**字节**收口（实得 ${cjk.bytes}）`)
+    // 阳性对照：未超限时原样返回
+    const untouched = trimToBudget('短', 1024, '短段')
+    assert.equal(untouched.trimmed, false)
+    assert.equal(untouched.text, '短')
   })
 }

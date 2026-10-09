@@ -1340,6 +1340,8 @@ for (const suite of [
   advisorTests.testS2Context,
   // 安全 P0/P1（security-reviewer 2026-10-09 的 PoC：junction / ADS / 大小写 / 8.3 / git env）
   advisorTests.testRetrievalSecurity,
+  // B1 第二批修复（code-reviewer P1-1/2/3 + security-reviewer 高优先 P1）
+  advisorTests.testB1SecondPass,
   // 必须最后：它比对的是「模块加载时的真实用户数据目录快照」与「现在」，
   // 只有排在所有 advisor 用例之后才是真正的收尾断言。
   advisorTests.testRealDataDirIsolation,
