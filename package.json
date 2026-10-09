@@ -11,7 +11,13 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node tests/run.mjs"
+    "test": "node tests/run.mjs && node tests/isolation-gate.mjs && node tests/advisor-llm-replay.mjs && node tests/skill-sync-check.mjs && node tests/boot-schema-check.mjs",
+    "test:unit": "node tests/run.mjs",
+    "gate:isolation": "node tests/isolation-gate.mjs",
+    "gate:isolation:selftest": "node tests/isolation-gate.mjs --selftest",
+    "gate:replay": "node tests/advisor-llm-replay.mjs",
+    "gate:counts": "node tests/skill-sync-check.mjs",
+    "gate:boot": "node tests/boot-schema-check.mjs"
   },
   "license": "MIT",
   "dependencies": {

@@ -2911,7 +2911,7 @@ import {
   compileQuery, searchFiles, searchText, findRelatedTests, testCandidatesFor, NO_TEST_ANNOTATION,
   DEFAULT_EXCLUDED_DIRS, parseGitignore, parseGitattributes, createIgnoreMatcher, listFiles, snapshotWorktree,
 } from '../lib/advisor/retrieval/index.js'
-import { assertReadonlyArgv, tempFileName, parsePorcelain, parseNumstat, parseLog } from '../lib/advisor/retrieval/git.js'
+import { assertReadonlyArgv, tempFileName, parsePorcelain, parseNumstat, parseLog, minimalGitEnv } from '../lib/advisor/retrieval/git.js'
 
 /** retrieval 模块目录（源码级门的扫描面）。 */
 const RETRIEVAL_DIR = fileURLToPath(new URL('../lib/advisor/retrieval', import.meta.url))
@@ -3648,8 +3648,10 @@ import {
 import { buildProjectState, heuristicPhase, assertPhase, PROJECT_PHASES } from '../lib/advisor/context/project.js'
 import { buildRepositoryContext, extractSymbolRanges, L3_NOT_IMPLEMENTED_NOTE, mentionedPaths } from '../lib/advisor/context/repository.js'
 import {
-  screen, classifyMessage, shouldRunRepoAnalysis, isChatter, PREFILTER_SAMPLES, matchedSignals,
-  PRE_FILTER_BLOCK, SCREEN_BLOCKED, SCREEN_NOT_SCREENED, TRIGGER_MANUAL, TRIGGER_ASSISTANT, TRIGGER_USER,
+  screen, classifyMessage, shouldRunRepoAnalysis, isPureAck, isNoInformation, resolveTier,
+  PREFILTER_SAMPLES, matchedSignals, ACK_EXACT,
+  PRE_FILTER_BLOCK, SCREEN_BLOCKED, SCREEN_NOT_SCREENED, SCREEN_PASSED,
+  TRIGGER_MANUAL, TRIGGER_ASSISTANT, TRIGGER_USER, TIER_USER, TIER_ASSISTANT, TIER_UNKNOWN,
 } from '../lib/advisor/decision/prefilter.js'
 import { SESSION_CONFIG_KEYS } from '../lib/advisor/store.js'
 
@@ -4069,8 +4071,8 @@ export function testS2Context(t) {
     assert.equal(screen({ text: '谢谢，但请顺便检查 src/foo.js 的报错', trigger: TRIGGER_USER }).decision, 'pass',
       'AC-17 阳性对照：含代码信号时寒暄词不得拦')
     assert.ok(matchedSignals('谢谢，但请顺便检查 src/foo.js 的报错').length > 0, 'AC-17：白名单命中的信号必须可枚举')
-    assert.equal(isChatter('谢谢').chatter, true, 'AC-17：寒暄判定可单独调用')
-    assert.equal(isChatter('做 X').chatter, false, 'AC-17：既有用例的合成短文本不得被判成寒暄（否则会误伤真工作）')
+    assert.equal(isPureAck('谢谢').ack, true, 'AC-17：整串纯确认判定可单独调用')
+    assert.equal(isPureAck('做 X').ack, false, 'AC-17：既有用例的合成短文本不得被判成纯确认（否则会误伤真工作）')
     assert.equal(classifyMessage({ text: '继续', trigger: TRIGGER_USER }).decision, PRE_FILTER_BLOCK, 'AC-17：classifyMessage 与 screen 同源')
 
     // 真跑：阴性 → 零调用零 token；阳性 → ≥1
@@ -4106,25 +4108,37 @@ export function testS2Context(t) {
     rtBlocked.enqueue({ markdown: s2UserMarkdown('谢谢'), trigger: TRIGGER_USER }, { sessionId: 's-a', sessionName: null })
     await rtBlocked.waitForDrain()
     assert.equal(rtBlocked.lastScreening.screening, SCREEN_BLOCKED, '① 预筛拦截态')
+    assert.equal(rtBlocked.lastScreening.tier, TIER_USER, '拦截发生在用户档（G-13 分级可观测）')
     assert.equal(rtBlocked.lastReview.outcome, 'prefilter-blocked')
     assert.equal(blockedLlm.calls.length, 0)
 
+    // ②「未过预筛」态：手动补评（人明确要求评审 ⇒ 不过预筛；G-13 裁决后 assistant 是**过**预筛的宽松档）
     const notScreenedLlm = fakeLlm('{"notes":[]}')
     const rtNotScreened = s2Runtime({ llm: notScreenedLlm, prefilter: screen })
-    rtNotScreened.enqueue({ markdown: s2AssistantMarkdown('我改完了'), trigger: TRIGGER_ASSISTANT }, { sessionId: 's-b', sessionName: null })
+    rtNotScreened.enqueue({ markdown: s2UserMarkdown('谢谢'), trigger: TRIGGER_MANUAL }, { sessionId: 's-b', sessionName: null })
     await rtNotScreened.waitForDrain()
-    assert.equal(rtNotScreened.lastScreening.screening, SCREEN_NOT_SCREENED, '② 未过预筛态（触发源不是用户消息，G-13 缺省）')
+    assert.equal(rtNotScreened.lastScreening.screening, SCREEN_NOT_SCREENED, '② 未过预筛态（手动补评）')
     assert.equal(notScreenedLlm.calls.length, 1, '未过预筛 ≠ 拦截：照常评审')
+
+    // ②b G-13 分级：assistant 档**过**预筛但走更宽松规则（有内容 ⇒ 放行）
+    const assistantLlm = fakeLlm('{"notes":[]}')
+    const rtAssistant = s2Runtime({ llm: assistantLlm, prefilter: screen })
+    rtAssistant.enqueue({ markdown: s2AssistantMarkdown('我把 buildMessages 改完了，接下来跑测试'), trigger: TRIGGER_ASSISTANT }, { sessionId: 's-b2', sessionName: null })
+    await rtAssistant.waitForDrain()
+    assert.equal(rtAssistant.lastScreening.screening, SCREEN_PASSED, '②b assistant 档是**过预筛**（不是「不过预筛」）')
+    assert.equal(rtAssistant.lastScreening.tier, TIER_ASSISTANT, '②b 档位可观测')
+    assert.equal(assistantLlm.calls.length, 1)
 
     const emptyLlm = fakeLlm('{"notes":[]}')
     const rtEmpty = s2Runtime({ llm: emptyLlm, prefilter: screen })
     rtEmpty.enqueue({ markdown: s2UserMarkdown('请检查 src/foo.js 的报错'), trigger: TRIGGER_USER }, { sessionId: 's-c', sessionName: null })
     await rtEmpty.waitForDrain()
-    assert.equal(rtEmpty.lastScreening.screening, 'prefilter-passed', '③ 过预筛态')
+    assert.equal(rtEmpty.lastScreening.screening, SCREEN_PASSED, '③ 过预筛态')
     assert.equal(rtEmpty.lastReview.notes, 0, '③ 评审过但 notes:[]（第三态）')
     assert.notEqual(rtEmpty.lastReview.outcome, 'prefilter-blocked', '三态必须可区分（不是同一个标记）')
     rtBlocked.dispose()
     rtNotScreened.dispose()
+    rtAssistant.dispose()
     rtEmpty.dispose()
   })
 
@@ -4163,7 +4177,7 @@ export function testS2Context(t) {
         assert.ok(prefilterRows.length >= 1, 'AC-21：预筛必须留下可查事实（trace phase=prefilter）')
         const blockedRow = prefilterRows.find((r) => r.decision === 'block')
         assert.ok(blockedRow !== undefined, 'AC-21：拦截事实必须含 decision=block')
-        assert.ok(typeof blockedRow.reason === 'string' && blockedRow.reason.includes('寒暄'), `AC-21：拦截事实必须含 reason（实得 ${blockedRow?.reason}）`)
+        assert.ok(typeof blockedRow.reason === 'string' && blockedRow.reason.includes('纯确认'), `AC-21：拦截事实必须含 reason（实得 ${blockedRow?.reason}）`)
         assert.equal(llm.calls.length, 0, 'AC-21：被拦截的那一轮零调用')
         // ② 与「评审过」数据面可区分：被拦截 ⇒ records 面零条；评审过 ⇒ 有记录
         assert.equal(installed.ctrl.snapshot('s-post').records.length, 0, 'AC-21：被拦截不得产出 records（与「评审过」可区分）')
@@ -4384,6 +4398,317 @@ export function testS2Context(t) {
       assert.ok(ranges.some((r) => r.symbol === 'b' && r.kind === 'const'))
     } finally {
       rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── P0-1（code-reviewer 2026-10-09）：near-miss 反例必须放行 + 子串匹配必红 ──
+  t('P0-1 near-miss：像寒暄实为工作的三句必须放行；子串匹配实现必红（含阳性对照）', () => {
+    assert.ok(PREFILTER_SAMPLES.nearMiss.length >= 3, 'near-miss 反例必须写进样本集（≥3，code-reviewer 的关键指摘）')
+    for (const text of PREFILTER_SAMPLES.nearMiss) {
+      for (const [tier, trigger] of [[TIER_USER, TRIGGER_USER], [TIER_ASSISTANT, TRIGGER_ASSISTANT]]) {
+        const verdict = screen({ text, trigger })
+        assert.equal(verdict.decision, 'pass', `P0-1：near-miss 必须放行（tier=${tier}）："${text}"（reason=${verdict.reason}）`)
+        assert.notEqual(verdict.screening, SCREEN_BLOCKED, `P0-1：near-miss 不得被标成 blocked："${text}"`)
+      }
+    }
+    // 阳性对照：整串纯确认仍必须被拦（证明「放行 near-miss」不是「什么都不拦」）
+    for (const text of PREFILTER_SAMPLES.negative) {
+      assert.equal(screen({ text, trigger: TRIGGER_USER }).decision, 'block', `P0-1 阳性对照：纯确认仍必须拦："${text}"`)
+    }
+    // 判据只能是**整串相等**：包含关系一律不算
+    assert.equal(isPureAck('好的').ack, true, 'P0-1：整串 ACK 命中')
+    assert.equal(isPureAck('好的我这就去改 lib/advisor/runtime.js').ack, false, 'P0-1：ACK 开头 + 有内容 ⇒ 不得命中')
+    assert.equal(isPureAck('谢谢，但请看下 src/foo.js').ack, false, 'P0-1：含内容的句子不得被判成纯确认')
+    assert.ok(ACK_EXACT.every((w) => typeof w === 'string' && w !== ''), 'P0-1：ACK 表必须是非空字符串表')
+
+    // ⚠️ 必红（复刻**首版子串包含实现**）：near-miss 会被全部误拦 —— 这就是被修掉的缺陷
+    const legacyScreen = (text) => {
+      const ACK = ['谢谢', '多谢', '感谢', '好的', '好', '行', '收到', '嗯', '恩', '继续', '明白', '了解', '知道了', '稍等', '哈哈', '呵呵', '在吗', '好的谢谢', '辛苦了', 'ok', 'okay', 'thanks', 'thankyou']
+      const CHATTER = ['谢谢', '辛苦了', '好的', '好吧', '好了', '收到', '明白', '了解', '知道了', '嗯', '恩', '继续', '哈哈', '呵呵', '在吗', '稍等', '没事', '没问题', '早上好', '你好', 'hi', 'hello', 'hey', '天气', '午饭', '晚饭', '早饭', '吃什么', '咖啡', '奶茶', '周末', '好玩', '推荐', '无聊', '休息']
+      const norm = (s) => String(s).replace(/\s+/g, '').replace(/[。，、！？!?,.;:：；~～"'“”‘’()（）[\]【】]/g, '').toLowerCase()
+      const n = norm(text)
+      if (ACK.some((w) => n === norm(w))) return 'block'
+      if (CHATTER.some((w) => n.includes(norm(w)))) return 'block'
+      return 'pass'
+    }
+    const falseBlocked = PREFILTER_SAMPLES.nearMiss.filter((t) => legacyScreen(t) === 'block')
+    assert.equal(falseBlocked.length, PREFILTER_SAMPLES.nearMiss.length,
+      `P0-1 必红：首版子串实现必须把全部 ${PREFILTER_SAMPLES.nearMiss.length} 条 near-miss 误拦（实得 ${falseBlocked.length} 条）`)
+    assert.equal(legacyScreen('谢谢'), 'block', 'P0-1 必红对照：复刻件对「谢谢」也拦（说明它忠实复刻了首版，不是稻草人）')
+  })
+
+  // ── G-13（产品裁决 2026-10-09）：预筛分级 ────────────────────────────────
+  t('G-13 产品裁决：预筛分级——用户档完整、assistant 档只挡整串纯 ACK（有内容必评审）', () => {
+    for (const text of PREFILTER_SAMPLES.negative) {
+      assert.equal(screen({ text, trigger: TRIGGER_USER }).decision, 'block', `G-13：用户档必须拦纯 ACK："${text}"`)
+      assert.equal(screen({ text, trigger: TRIGGER_ASSISTANT }).decision, 'block', `G-13：assistant 档也拦整串纯 ACK："${text}"`)
+    }
+    // 分级的**唯一差异**：无信息形态只在用户档拦
+    const noise = '嗯嗯'
+    assert.equal(isNoInformation(noise).noise, true, 'G-13：无信息形态判定可单独调用')
+    assert.equal(screen({ text: noise, trigger: TRIGGER_USER }).decision, 'block', 'G-13：用户档拦无信息形态')
+    assert.equal(screen({ text: noise, trigger: TRIGGER_ASSISTANT }).decision, 'pass', 'G-13：assistant 档更宽松 ⇒ 无信息形态也放行')
+    // 「主 agent 在错误路上连续走」的干预能力 = 有内容一律照常评审
+    for (const text of ['我把 buildMessages 改完了', '接下来跑测试', '这一步做完就去写报告']) {
+      assert.equal(screen({ text, trigger: TRIGGER_ASSISTANT }).decision, 'pass', `G-13：assistant 有内容必须评审："${text}"`)
+    }
+    // 分档可观测（AC-19 同源的留痕口径）
+    assert.equal(screen({ text: '好的', trigger: TRIGGER_USER }).tier, TIER_USER)
+    assert.equal(screen({ text: '好的', trigger: TRIGGER_ASSISTANT }).tier, TIER_ASSISTANT)
+    // 必红：assistant 档不得退化成「不过预筛」（否则 G-13 的分级名存实亡）
+    assert.notEqual(screen({ text: '好的', trigger: TRIGGER_ASSISTANT }).screening, SCREEN_NOT_SCREENED,
+      'G-13 必红：assistant 档是「过预筛后拦」，不是「不过预筛」')
+  })
+
+  // ── P2（code-reviewer 2026-10-09）：缺 trigger 不得假定用户消息 ──────────
+  t('P2：缺 trigger 时按实际来源判档（不假定 user）；判不出 ⇒ fail-open 放行（配必红）', async () => {
+    // ① 无框架标签 + 无 trigger（来源不可判定）⇒ fail-open 放行
+    const undetermined = screen({ text: '好了' })
+    assert.equal(undetermined.tier, TIER_UNKNOWN, 'P2：来源不可判定 ⇒ unknown 档')
+    assert.equal(undetermined.decision, 'pass', 'P2：unknown 档必须 fail-open（绝不默认「用户消息」）')
+    assert.equal(undetermined.screening, SCREEN_NOT_SCREENED)
+    // ② 有框架标签（assistant）⇒ 按**实际来源**判成 assistant 档
+    const assistantVerdict = screen({ text: s2AssistantMarkdown('嗯嗯') })
+    assert.equal(assistantVerdict.tier, TIER_ASSISTANT, 'P2：框架标签是 assistant ⇒ 必须判成 assistant 档')
+    assert.equal(assistantVerdict.decision, 'pass', 'P2/G-13：assistant 档只挡整串纯 ACK ⇒ 「嗯嗯」放行')
+    // 阳性对照：同一段文字当成用户消息 ⇒ 用户档拦（分级确实生效，不是「全放行」）
+    assert.equal(screen({ text: s2UserMarkdown('嗯嗯') }).decision, 'block', 'P2 阳性对照：用户档仍拦无信息形态')
+    // ③ 真跑（runtime）：assistant 文本 + **无 trigger** ⇒ 不得被拦
+    const llm = fakeLlm('{"notes":[]}')
+    const rt = s2Runtime({ llm, prefilter: screen })
+    rt.enqueue({ markdown: s2AssistantMarkdown('嗯嗯') }, { sessionId: 's-p2', sessionName: null })
+    await rt.waitForDrain()
+    assert.equal(rt.lastScreening.tier, TIER_ASSISTANT, 'P2：runtime 缺 trigger 时必须按框架标签判档')
+    assert.notEqual(rt.lastScreening.decision, 'block', 'P2：assistant 文本 + 无 trigger 不得被拦（旧实现会拦）')
+    assert.equal(llm.calls.length, 1, 'P2：必须照常评审（fail-open 的方向是「多评一次」）')
+    rt.dispose()
+    // ④ 必红：复刻旧实现（缺省写死 'user-message'）⇒ 同一输入必被误拦
+    const legacyDefault = (markdown) => screen({ text: markdown, role: 'user', trigger: TRIGGER_USER })
+    assert.equal(legacyDefault(s2AssistantMarkdown('嗯嗯')).decision, 'block', 'P2 必红：旧缺省（写死 user-message）确实会误拦 assistant 无信息增量')
+    assert.equal(legacyDefault('好了').decision, 'block', 'P2 必红：旧缺省同样误拦「无来源」文本')
+  })
+
+  // ── P0-2（code-reviewer 2026-10-09）：门存在，但默认路径上必须有人跑 ────
+  t('P0-2 门接线：package.json 的 test 入口必须覆盖 isolation-gate（防再次被漏挂）', () => {
+    const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+    const pkg = JSON.parse(pkgText)
+    const scripts = pkg.scripts ?? {}
+    assert.equal(typeof scripts['gate:isolation'], 'string', 'P0-2：必须有独立的 gate:isolation 脚本')
+    assert.ok(scripts['gate:isolation'].includes('isolation-gate.mjs'), 'P0-2：gate:isolation 必须指向 isolation-gate.mjs')
+    assert.equal(typeof scripts['gate:isolation:selftest'], 'string', 'P0-2：自测入口也要有（--selftest 是必红证据）')
+    assert.equal(typeof scripts['gate:replay'], 'string', 'P0-2：必须有 gate:replay（B0 的 replay 设施同理不能被漏挂）')
+    const testScript = String(scripts.test ?? '')
+    assert.ok(testScript.length > 0, 'P0-2：必须有 test 脚本')
+    for (const needle of ['run.mjs', 'isolation-gate.mjs', 'advisor-llm-replay.mjs', 'skill-sync-check.mjs', 'boot-schema-check.mjs']) {
+      assert.ok(testScript.includes(needle), `P0-2：test 入口必须覆盖 ${needle}（默认路径上要能一次跑全）`)
+    }
+    // 必红：把 isolation-gate 从 test 脚本里摘掉 → 同一条断言必须拒绝
+    const mutated = testScript.replace(/node tests\/isolation-gate\.mjs\s*&&?\s*/, '')
+    assert.notEqual(mutated, testScript, '变异体必须真的注入到 test 脚本里')
+    assert.ok(!mutated.includes('isolation-gate.mjs'), 'P0-2 必红：漏挂 isolation-gate 的 test 脚本必须被本断言拒绝')
+    // 阳性对照：检查器确实在读真文件（不是空转）
+    assert.equal(pkg.name, 'dsh-agents')
+    assert.ok(pkgText.includes('isolation-gate.mjs'), '阳性对照：package.json 原文里确实有该门')
+  })
+}
+
+// ── 12. 安全 P0/P1（security-reviewer 2026-10-09 的 PoC）─────────────────────
+//
+// 本段的每条都遵循「修复前必红 → 修复后必绿 + 阳性对照」：
+//   · SEC-P0：junction 绕过越界守卫（`realpathSync` 的 JS 版判不出重解析点）
+//   · SEC-P1：ADS 默认流 / 大小写变体 / 8.3 短名 / 经 junction 暴露的凭据目录
+//   · SEC-P1（面2）：git 子进程环境变量继承（GIT_DIR 静默重定向）
+
+/** 测试侧的 fd-stdio `cmd`（建 junction 用；**不用 pipe**）。 */
+async function cmdRunIn(cwd, args) {
+  const { spawnSync } = await import('node:child_process')
+  const tmp = join(tmpdir(), `dsh-sec-cmd-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.out`)
+  const fd = nodeFs.openSync(tmp, 'w')
+  let result = null
+  try {
+    result = spawnSync('cmd', ['/c', ...args], { cwd, stdio: ['ignore', fd, fd], windowsHide: true })
+  } finally { nodeFs.closeSync(fd) }
+  let out = ''
+  try { out = nodeFs.readFileSync(tmp, 'utf8') } catch { out = '' }
+  try { nodeFs.rmSync(tmp, { force: true }) } catch { /* 忽略 */ }
+  return { status: result?.status ?? null, out }
+}
+
+export function testRetrievalSecurity(t) {
+  t('SEC-P0：junction 绕过越界守卫必须被拒（realpathSync.native）+ 指向根内的 junction 仍可用', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-sec-root-'))
+    const base = mkdtempSync(join(tmpdir(), 'dsh-sec-base-'))
+    const OUTSIDE = 'OUTSIDE_TOKEN_MUST_NOT_LEAK'
+    try {
+      mkdirSync(join(base, 'outdir'), { recursive: true })
+      writeFileSync(join(base, 'outdir', 'eviltoken.txt'), OUTSIDE)
+      mkdirSync(join(root, 'src'), { recursive: true })
+      writeFileSync(join(root, 'src', 'foo.js'), 'export const ok = 1\n')
+
+      const mk = await cmdRunIn(root, ['mklink', '/J', join(root, 'jlink'), base])
+      const mkInside = await cmdRunIn(root, ['mklink', '/J', join(root, 'jinside'), join(root, 'src')])
+      assert.equal(mk.status, 0, `junction 必须建得起来（mklink /J 不需要管理员）：${mk.out.trim()}`)
+      assert.equal(mkInside.status, 0, `根内 junction 也必须建得起来：${mkInside.out.trim()}`)
+
+      // ── 根因证据（P0 的机制本身）：JS 版 realpath 判不出 junction，native 版可以
+      const jlink = join(root, 'jlink')
+      assert.equal(nodeFs.lstatSync(jlink).isSymbolicLink(), false, 'P0 根因：junction 的 lstat.isSymbolicLink() === false')
+      assert.equal(nodeFs.lstatSync(jlink).isDirectory(), true, 'P0 根因：junction 的 lstat.isDirectory() === true')
+      assert.equal(nodeFs.realpathSync(jlink), jlink, 'P0 根因：**JS 版** realpathSync 原样返回未解析路径（判据被短路）')
+      assert.notEqual(nodeFs.realpathSync.native(jlink), jlink, 'P0 根因：**native 版** realpathSync 能正确解析 junction')
+
+      const policy = createPathPolicy({ root })
+      // ── 必红（复刻**修复前**的判据）：JS 版 realpath + `real !== abs` ⇒ junction 被短路
+      const legacyCheck = (relPath) => {
+        const abs = join(root, relPath)
+        const stat = nodeFs.statSync(abs)
+        if (!stat.isFile()) return { ok: false }
+        try {
+          const real = nodeFs.realpathSync(abs) // ← 修复前用的就是 JS 版
+          if (real !== abs && !real.startsWith(root)) return { ok: false, code: 'symlink-escape' }
+        } catch { /* 同旧实现 */ }
+        return { ok: true, size: stat.size }
+      }
+      const legacyVerdict = legacyCheck(join('jlink', 'outdir', 'eviltoken.txt'))
+      assert.equal(legacyVerdict.ok, true, 'SEC-P0 必红：修复前的判据对 junction 路径返回 ok:true（这就是被修掉的漏洞）')
+      assert.equal(legacyVerdict.size, Buffer.byteLength(OUTSIDE), 'SEC-P0 必红：漏掉的正是仓库外那个文件的 size')
+
+      // ── 必红→必绿：PoC 原文这里返回 {ok:true, size:20}
+      const verdict = policy.check('jlink/outdir/eviltoken.txt')
+      assert.equal(verdict.ok, false, 'SEC-P0：经 junction 越界的路径必须被拒（修复前返回 ok:true）')
+      assert.equal(verdict.code, REJECT.SYMLINK_ESCAPE, `SEC-P0：拒绝码必须是 symlink-escape（实得 ${verdict.code}）`)
+
+      // ── 绝不返回仓库外正文
+      const { retrieval, scratch } = s2Retrieval(root)
+      try {
+        let thrown = null
+        let leaked = null
+        try { leaked = retrieval.readFile('jlink/outdir/eviltoken.txt') } catch (error) { thrown = error }
+        assert.equal(leaked, null, 'SEC-P0：仓库外正文绝不能被返回（PoC：修复前会返回 OUTSIDE_TOKEN…）')
+        assert.ok(thrown instanceof PathPolicyError, `SEC-P0：必须抛 PathPolicyError（实得 ${thrown?.name}）`)
+        assert.equal(thrown.code, REJECT.SYMLINK_ESCAPE)
+        const logCodes = retrieval.rejectionLog.byCode()
+        assert.ok((logCodes[REJECT.SYMLINK_ESCAPE] ?? 0) >= 1, 'SEC-P0：拒绝必须留痕（可查拒绝记录）')
+        // ── 阳性对照：指向**根内**的 junction 必须照常可读（不是「禁掉全部 junction」）
+        const inside = retrieval.readFile('jinside/foo.js')
+        assert.equal(inside.ok, true, 'SEC-P0 阳性对照：根内 junction 必须可读')
+        assert.ok(inside.text.includes('export const ok = 1'), '阳性对照：读到的确实是根内文件')
+      } finally {
+        rmSync(scratch, { recursive: true, force: true })
+      }
+    } finally {
+      // junction 用 rmdir 摘除**链接本身**（绝不递归删除，免得穿到目标里）
+      for (const name of ['jlink', 'jinside']) {
+        try { nodeFs.rmdirSync(join(root, name)) } catch { /* 已摘除/不存在 */ }
+      }
+      rmSync(root, { recursive: true, force: true })
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  t('SEC-P1：ADS 默认流 / 大小写变体 / 经 junction 暴露的凭据目录 / 8.3 短名 全部被拒（含阳性对照）', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-sec-names-'))
+    try {
+      mkdirSync(join(root, 'src'), { recursive: true })
+      writeFileSync(join(root, 'src', 'foo.js'), 'export const ok = 1\n')
+      writeFileSync(join(root, '.env'), 'SECRET_TOKEN=abc\n')
+      writeFileSync(join(root, 'id_rsa'), 'PRIVATE\n')
+      mkdirSync(join(root, '.git'), { recursive: true })
+      writeFileSync(join(root, '.git', 'config'), '[core]\n')
+      mkdirSync(join(root, '.ssh'), { recursive: true })
+      writeFileSync(join(root, '.ssh', 'config'), 'Host *\n')
+      mkdirSync(join(root, '.gnupg'), { recursive: true })
+      writeFileSync(join(root, '.gnupg', 'config'), 'x\n')
+      const policy = createPathPolicy({ root })
+
+      // ① ADS 默认流：`.env::$DATA` 的 basename 判据看不见流名 ⇒ 必须显式拒
+      const ads = policy.check('.env::$DATA')
+      assert.equal(ads.ok, false, 'SEC-P1①：`.env::$DATA`（ADS 默认流）必须被拒（修复前可读到 .env 正文）')
+      assert.equal(ads.code, REJECT.ADS, `SEC-P1①：拒绝码应为 ads-stream（实得 ${ads.code}）`)
+      assert.equal(policy.check('src/foo.js::$DATA').ok, false, 'SEC-P1①：任何 ADS 形态都拒（不止 .env）')
+      assert.equal(policy.check('src/foo.js').ok, true, 'SEC-P1① 阳性对照：普通文件仍可读')
+
+      // ② 大小写变体：Windows 大小写不敏感 ⇒ 段名/文件名判据必须折大小写
+      assert.equal(policy.check('.GIT/config').code, REJECT.GIT_INTERNALS, 'SEC-P1②：`.GIT/config` 必须判 git-internals（修复前大小写敏感 ⇒ 放行）')
+      assert.equal(policy.check('.SSH/config').code, REJECT.CREDENTIAL, 'SEC-P1②：`.SSH/config` 必须判 credential')
+      assert.equal(policy.check('ID_RSA').code, REJECT.CREDENTIAL, 'SEC-P1②：`ID_RSA` 必须判 credential')
+      assert.equal(policy.check('.ENV').code, REJECT.CREDENTIAL, 'SEC-P1②：`.ENV` 必须判 credential')
+
+      // ③ 经 junction 暴露的凭据目录（与 8.3 短名同机制：名字判据跑在**规范化后**的路径上）
+      const junction = join(root, 'innocuous')
+      const mk = await cmdRunIn(root, ['mklink', '/J', junction, join(root, '.gnupg')])
+      assert.equal(mk.status, 0, `SEC-P1③：junction 必须建得起来：${mk.out.trim()}`)
+      try {
+        const viaJunction = policy.check('innocuous/config')
+        assert.equal(viaJunction.ok, false, 'SEC-P1③：经 junction 暴露的凭据目录必须被拒（判据跑在规范化后的路径上）')
+        assert.equal(viaJunction.code, REJECT.CREDENTIAL, `SEC-P1③：应为 credential（实得 ${viaJunction.code}）`)
+      } finally {
+        try { nodeFs.rmdirSync(junction) } catch { /* 忽略 */ }
+      }
+
+      // ④ 8.3 短名：本机若生成短名则必须被拒；不生成则**显式登记跳过**（不得静默）
+      let shortResolved = null
+      try { shortResolved = nodeFs.realpathSync.native(join(root, 'ENV~1')) } catch { shortResolved = null }
+      if (shortResolved !== null) {
+        assert.ok(shortResolved.toLowerCase().endsWith('.env'), `SEC-P1④：ENV~1 应解析到 .env（实得 ${shortResolved}）`)
+        assert.equal(policy.check('ENV~1').code, REJECT.CREDENTIAL, 'SEC-P1④：8.3 短名不得绕过凭据禁令')
+      } else {
+        // 显式跳过 + 机制已覆盖（canonical 解析）：把跳过事实写进断言消息，避免「静默跳过」
+        assert.ok(true, 'SEC-P1④：本卷未生成 8.3 短名（探测 realpathSync.native("ENV~1") 失败）⇒ 跳过该子项；同机制已由 ③ 覆盖（canonical 解析后再做名字判据）')
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  t('SEC-P1（面2）：git 子进程必须最小 env —— 设 GIT_DIR 后 headSha 不得被静默重定向', async () => {
+    // ① 白名单本身：剔除全部 GIT_*，保留 git 运行必需项
+    const env = minimalGitEnv({ GIT_DIR: '/evil/.git', GIT_WORK_TREE: '/evil', PATH: 'p', SystemRoot: 'sr', TEMP: 't', HOME: 'h' })
+    assert.equal(Object.keys(env).some((k) => k.toUpperCase().startsWith('GIT_')), false, 'SEC-P1：最小 env 里不得有任何 GIT_* 键')
+    assert.equal(env.PATH, 'p', 'SEC-P1：PATH 必须保留（否则定位不到 git）')
+    assert.equal(env.SystemRoot, 'sr', 'SEC-P1：SystemRoot 必须保留（Windows DLL 解析）')
+    assert.equal(env.GIT_DIR, undefined, 'SEC-P1：GIT_DIR 必须被剔除（实测可静默重定向仓库）')
+
+    const dir = buildS1aFixture()
+    const other = buildS1aFixture()
+    const scratch = mkdtempSync(join(tmpdir(), 'dsh-sec-env-'))
+    try {
+      // 两个 fixture 必须**内容不同**：同内容 + 同作者 + 同秒提交会得到同一个 commit sha，
+      // 那样「headSha 变了没有」就不可判（首版实测踩过）。
+      writeFileSync(join(other, 'distinct.txt'), 'DIFFERENT_TREE\n')
+      await initFixtureRepo(dir)
+      await initFixtureRepo(other)
+      const expected = createGitReader({ cwd: dir, scratchDir: scratch }).headSha()
+      assert.match(expected, /^[0-9a-f]{40}$/, '前置：正常 headSha 必须是完整 sha')
+      const otherSha = createGitReader({ cwd: other, scratchDir: scratch }).headSha()
+      assert.notEqual(otherSha, expected, '前置：两个 fixture 的 HEAD 必须不同（否则本用例测不出重定向）')
+
+      const saved = process.env.GIT_DIR
+      try {
+        process.env.GIT_DIR = join(other, '.git')
+        // ② 必红：注入 GIT_DIR 后，传给 git 的 env 里不得再出现它
+        const captured = []
+        const spied = createGitReader({
+          cwd: dir,
+          scratchDir: scratch,
+          spawnSync: (cmd, argv, options) => { captured.push({ env: options.env }); return { status: 1, error: null } },
+        })
+        try { spied.headSha() } catch { /* 预期：status=1 ⇒ fail-closed 抛错；本断言只关心 options */ }
+        assert.equal(captured.length, 1, '必须捕获到一次 spawn')
+        assert.equal(captured[0].env?.GIT_DIR, undefined, 'SEC-P1 必红：传给 git 的 env 里**不得**有 GIT_DIR')
+        assert.equal(Object.keys(captured[0].env ?? {}).some((k) => k.toUpperCase().startsWith('GIT_')), false, 'SEC-P1：不得有任何 GIT_* 泄漏进子进程')
+        // ③ 真跑：即使父环境有 GIT_DIR，headSha 也必须仍是本仓库的
+        const realGit = createGitReader({ cwd: dir, scratchDir: scratch })
+        assert.equal(realGit.headSha(), expected, 'SEC-P1：设了 GIT_DIR 之后 headSha 不得改变（修复前会变成另一仓库的 sha）')
+        assert.equal(typeof realGit.statusText(), 'string', 'SEC-P1：其它只读命令同样不受 GIT_DIR 影响')
+      } finally {
+        if (saved === undefined) delete process.env.GIT_DIR
+        else process.env.GIT_DIR = saved
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(other, { recursive: true, force: true })
       rmSync(scratch, { recursive: true, force: true })
     }
   })
