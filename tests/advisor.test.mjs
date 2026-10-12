@@ -2912,6 +2912,10 @@ import {
   DEFAULT_EXCLUDED_DIRS, parseGitignore, parseGitattributes, createIgnoreMatcher, listFiles, snapshotWorktree,
 } from '../lib/advisor/retrieval/index.js'
 import { assertReadonlyArgv, tempFileName, parsePorcelain, parseNumstat, parseLog, minimalGitEnv } from '../lib/advisor/retrieval/git.js'
+// S3：agentic 工具循环 + 只读 ACI 工具面（与既有 suite 同文件追加，隔离门同一次求值）。
+import { createAciTools, assertAciWhitelist, ACI_TOOL_NAMES, FORBIDDEN_TOOL_NAMES } from '../lib/advisor/aci/tools.js'
+import { runToolLoop, BudgetPool } from '../lib/advisor/aci/loop.js'
+import { MAX_TOOL_OUTPUT_LINES, EMPTY_TOOL_OUTPUT, formatToolObservation } from '../lib/advisor/aci/observation.js'
 
 /** retrieval 模块目录（源码级门的扫描面）。 */
 const RETRIEVAL_DIR = fileURLToPath(new URL('../lib/advisor/retrieval', import.meta.url))
@@ -4249,11 +4253,13 @@ export function testS2Context(t) {
     const contract = readFileSync(new URL('../docs/advisor-contract.md', import.meta.url), 'utf8')
     const contractKeys = [...contract.matchAll(/^\s*(advisor[A-Za-z]+):/gm)].map((m) => m[1])
     const allowedKeys = allowedKeysFromSource()
-    assert.equal(allowedKeys.length, 14, `AC-53：ALLOWED_KEYS 应是 13 既有 + 1 新键 = 14（实得 ${allowedKeys.length}）`)
+    assert.equal(allowedKeys.length, 15, `AC-53：ALLOWED_KEYS 应是 13 既有 + advisorContextMaxFiles + advisorMaxToolRounds = 15（实得 ${allowedKeys.length}）`)
     const unknownInContract = [...new Set(contractKeys)].filter((k) => !allowedKeys.includes(k))
     assert.deepEqual(unknownInContract, [], 'AC-53④：契约不得声明代码不认识的 advisor 键')
+    // S3 追加：docs/ 不在 S3 写面 ⇒ advisorMaxToolRounds 的契约 §1 条文与 advisorContextMaxFiles
+    // 一样登记 S5 同步（pending 差集 = 两个已登记待同步键，任务书授权范围内）。
     const pending = allowedKeys.filter((k) => !contractKeys.includes(k))
-    assert.deepEqual(pending, [newKey], 'AC-53④：契约 §1 的待同步差集只允许是本批新键（docs/ 不在本批写面 ⇒ 登记 S5）')
+    assert.deepEqual(pending, [newKey, 'advisorMaxToolRounds'], 'AC-53④：契约 §1 的待同步差集只允许是已登记批次的新键（docs/ 不在本批写面 ⇒ 登记 S5）')
     // 负向：未登记键仍抛错（既有行为不得被新键开放策略带坏）
     assert.throws(() => resolveAdvisorConfig({ advisorDefinitelyNotAKey: 1 }), /未知 advisor 配置键/, 'AC-53：未登记键必须仍抛错')
     // 注释无 H-5 四禁区（既有门）+ 新键注释确实在（阳性对照）
@@ -4974,5 +4980,569 @@ export function testB1SecondPass(t) {
     const untouched = trimToBudget('短', 1024, '短段')
     assert.equal(untouched.trimmed, false)
     assert.equal(untouched.text, '短')
+  })
+}
+
+// ── 13. S3：agentic 工具循环 + 只读 ACI 工具面（advisor V3 节 2 S3，判据 1–13）──────
+//
+// 同文件追加纪律（与 S0/S1a/S2 同一次求值、同一条基线）。判据锚点：S3-1…S3-13，
+// 逐条对应任务书 A–E 五组交付。判据内预算常量一律 import retrieval/budget.js
+// （AC-15 字面量门：测试码不得写死预算数字，含注释——本行就是前车之鉴）。
+
+/** 带分块脚本的 llm 桩（S3 专用：按调用次序下发 chunk 数组；记录每次调用的完整 options）。 */
+function fakeToolLlm(roundScripts) {
+  const calls = []
+  return {
+    calls,
+    stream: (options) => {
+      calls.push(options)
+      const chunks = calls.length <= roundScripts.length ? roundScripts[calls.length - 1] : []
+      return (async function* () { for (const c of chunks) yield c })()
+    },
+  }
+}
+
+/** 首轮 user 消息（与 runtime.buildMessages 的产物同构）。 */
+function s3FirstUser(text) {
+  return [{ role: 'user', id: 'u-s3', content: [{ type: 'text', text }], source: { kind: 'user' } }]
+}
+
+/** 工具调用轮的分片（单工具调用块）。 */
+function s3ToolCallChunks(id, name, args) {
+  return [
+    { type: 'block-start', index: 0, blockType: 'tool-call' },
+    { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } },
+    { type: 'finish', reason: 'tool-calls' },
+  ]
+}
+
+/** 正常终轮的分片（严格 JSON 评审输出）。 */
+function s3FinalChunks(text = '{"notes":[]}', outputTokens = 100) {
+  return [
+    { type: 'text-delta', text },
+    { type: 'usage', usage: { outputTokens } },
+    { type: 'finish', reason: 'stop' },
+  ]
+}
+
+/** runtime + 工具循环的直接驱动方式（镜像 index.js 的装配：工具按 root 现取、循环注入）。 */
+function s3RuntimeWithLoop({ llm, retrieval, records = [], trace = [], maxRounds = 4, callTimeoutMs = 5000, reviewTimeoutMs } = {}) {
+  const tools = retrieval === null ? [] : createAciTools({ retrieval })
+  return new AdvisorRuntime({
+    provider: 'p-s3',
+    model: 'm-s3',
+    systemPrompt: 'S3 系统提示（合成值）',
+    llm,
+    deliver: () => 'recorded',
+    record: (r) => records.push(r),
+    onStatus: () => {},
+    trace: (row) => trace.push(row),
+    logger: { warn: () => {}, error: () => {}, log: () => {} },
+    maxQueued: 8,
+    callTimeoutMs,
+    maxMessages: 60,
+    toolLoop: async (call) => runToolLoop({
+      llm: call.llm,
+      provider: call.provider,
+      model: call.model,
+      systemPrompt: call.systemPrompt,
+      messages: call.messages,
+      tools,
+      maxRounds,
+      maxTokens: call.maxTokens,
+      callTimeoutMs: call.callTimeoutMs,
+      reviewTimeoutMs,
+      signal: call.signal,
+      trace: call.trace,
+      meta: call.meta,
+    }),
+  })
+}
+
+export function testS3ToolLoop(t) {
+  // ── S3-1（AC-8）：工具白名单「精确相等」断言 + 禁止名构造性不存在 + 不注册宿主工具 ──
+  t('S3-1 AC-8：白名单精确相等 {read_file,search,list_files,get_diff,get_git_log}；禁止名只在声明行出现；advisor 零 ctx.tools.register', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      const tools = createAciTools({ retrieval })
+      // ① 集合相等断言（多一个、少一个都抛）
+      assert.doesNotThrow(() => assertAciWhitelist(tools.map((x) => x.name), { label: 'S3-1' }))
+      assert.deepEqual([...new Set(tools.map((x) => x.name))].sort(), [...ACI_TOOL_NAMES].sort())
+      assert.throws(() => assertAciWhitelist([...ACI_TOOL_NAMES, 'write_file'], { label: 'S3-1 负向' }), /白名单不相等/, '多一个工具必须红')
+      assert.throws(() => assertAciWhitelist(ACI_TOOL_NAMES.slice(1), { label: 'S3-1 负向2' }), /缺少/, '少一个工具必须红')
+      // ② 禁止名构造性不存在：源码级——每个禁止名作为**带引号字符串字面量**只在
+      //    FORBIDDEN_TOOL_NAMES 声明行出现（tools/loop/observation 三个 ACI 文件合计）。
+      const aciSources = ['lib/advisor/aci/tools.js', 'lib/advisor/aci/loop.js', 'lib/advisor/aci/observation.js']
+        .map((rel) => readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), 'utf8'))
+        .join('\n')
+      for (const forbidden of FORBIDDEN_TOOL_NAMES) {
+        const count = aciSources.split(`'${forbidden}'`).length - 1
+        assert.equal(count, 1, `禁止名 '${forbidden}' 只允许出现在声明清单（实得 ${count} 次）`)
+      }
+      // 阳性对照：合法工具名在源码里出现 ≥2 次（声明 + 工具定义），检索面有效
+      assert.ok(aciSources.split(`'read_file'`).length - 1 >= 2, '阳性对照：read_file 字面量必须可检出')
+      // ③ advisor 零 ctx.tools.register（宿主工具位不被占用）；阳性对照 = lib/index.js 有 register
+      const advisorTree = ['index.js', 'runtime.js', 'observer.js', 'delivery.js', 'store.js', 'api.js']
+        .map((rel) => readFileSync(fileURLToPath(new URL(`../lib/advisor/${rel}`, import.meta.url)), 'utf8'))
+      for (const src of [...advisorTree, aciSources]) {
+        assert.equal(src.includes('ctx.tools.register'), false, 'advisor 侧不得调用 ctx.tools.register')
+      }
+      const hostIndex = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+      assert.ok(hostIndex.includes('ctx.tools.register'), '阳性对照：宿主装配确实存在 ctx.tools.register（检索面有效）')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── S3-2（AC-9）：逐工具 readOnly 标注 + 注入必红（变异 readOnly:false → 断言红）──
+  t('S3-2 AC-9：每工具 readOnly:true；变异体（readOnly:false）必红（内存原字节 + SHA256 还原）', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      const tools = createAciTools({ retrieval })
+      for (const tool of tools) {
+        assert.equal(tool.readOnly, true, `${tool.name} 必须标注 readOnly:true`)
+        assert.equal(tool.destructive, undefined, `${tool.name} 不得有 destructive 标注`)
+        assert.equal(typeof tool.execute, 'function', `${tool.name} 必须可执行`)
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  t('S3-2b（注入必红实测）：tools.js 的 readOnly:true → false 变异后，AC-9 谓词必须红', async () => {
+    const abs = fileURLToPath(new URL('../lib/advisor/aci/tools.js', import.meta.url))
+    const original = readFileSync(abs)
+    const before = createHash('sha256').update(original).digest('hex')
+    try {
+      const mutated = original.toString('utf8').replace(
+        "parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区相对路径' } }, required: ['path'] },\n      readOnly: true,",
+        "parameters: { type: 'object', properties: { path: { type: 'string', description: '工作区相对路径' } }, required: ['path'] },\n      readOnly: false,",
+      )
+      assert.notEqual(mutated, original.toString('utf8'), '变异必须真的命中（锚点唯一）')
+      writeFileSync(abs, mutated, 'utf8')
+      const fresh = await import(`../lib/advisor/aci/tools.js?mutation=${Date.now()}`)
+      const dir2 = mkdtempSync(join(tmpdir(), 'dsh-s3-mut-'))
+      const facet = createRetrieval({ root: dir2, dataDir: mkdtempSync(join(tmpdir(), 'dsh-s3-mut-s-')) })
+      const mutatedTools = fresh.createAciTools({ retrieval: facet })
+      const readTool = mutatedTools.find((x) => x.name === 'read_file')
+      assert.equal(readTool.readOnly, false, '前置：变异后 readOnly 必须是 false（变异生效）')
+      assert.throws(() => {
+        for (const tool of mutatedTools) assert.equal(tool.readOnly, true, 'readOnly 必须为 true（AC-9 谓词在变异体上红）')
+      }, /readOnly/, 'AC-9 谓词必须抓住 readOnly:false 变异（注入必红）')
+      rmSync(dir2, { recursive: true, force: true })
+    } finally {
+      writeFileSync(abs, original) // 内存原字节还原（不用 git checkout --）
+      const after = createHash('sha256').update(readFileSync(abs)).digest('hex')
+      assert.equal(after, before, 'tools.js 变异还原必须逐字节一致')
+    }
+  })
+
+  // ── S3-3（AC-10）：工具面 argv 直传 + 注入载荷逐元素断言 ──
+  t('S3-3 AC-10：get_git_log 的 grep 载荷（; rm -rf / 等）原样作为一个 argv 元素，不被解释', async () => {
+    const dir = buildS1aFixture()
+    const scratch = mkdtempSync(join(tmpdir(), 'dsh-s3-argv-'))
+    try {
+      await initFixtureRepo(dir)
+      const { spawnSync } = await import('node:child_process')
+      const spawns = []
+      const recordingSpawn = (cmd, args, opts) => {
+        spawns.push({ cmd, args: [...args] })
+        // 真 git 只读命令在 fixture 上安全执行（fd-stdio，不用 pipe——沙箱 pipe 捕获必 EPERM）
+        const tmp = join(tmpdir(), `dsh-s3-git-${process.pid}-${spawns.length}.out`)
+        const fd = nodeFs.openSync(tmp, 'w')
+        let status = null
+        try {
+          status = spawnSync(cmd, args, { cwd: dir, stdio: ['ignore', fd, fd], windowsHide: true }).status
+        } finally { nodeFs.closeSync(fd) }
+        let out = ''
+        try { out = nodeFs.readFileSync(tmp, 'utf8') } catch { out = '' }
+        try { nodeFs.rmSync(tmp, { force: true }) } catch { /* 忽略 */ }
+        return { status, stdout: '', stderr: '', text: out }
+      }
+      const retrieval = createRetrieval({ root: dir, dataDir: scratch, spawnSync: recordingSpawn })
+      const tools = createAciTools({ retrieval })
+      const logTool = tools.find((x) => x.name === 'get_git_log')
+      const result = await logTool.execute({ grep: '; rm -rf /', limit: 5 })
+      assert.equal(result.isError, false)
+      const last = spawns[spawns.length - 1]
+      assert.equal(last.cmd, 'git')
+      assert.deepEqual(last.args, ['log', '--oneline', '--max-count=5', '--grep=; rm -rf /'],
+        '注入载荷必须逐元素等于预期（原样直传，不被解释执行）')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── S3-4：预算 chokepoint 唯一性（源码级 grep + 阳性对照 + 行为断言）──
+  t('S3-4：budget.reserve 写侧只出现在 aci/loop.js（源码级 grep + 阳性对照）；池超限拒绝', async () => {
+    const advisorFiles = ['index.js', 'runtime.js', 'observer.js', 'delivery.js', 'store.js', 'api.js',
+      'aci/tools.js', 'aci/observation.js', 'retrieval/budget.js', 'retrieval/index.js']
+    const offenders = []
+    for (const rel of advisorFiles) {
+      const src = readFileSync(fileURLToPath(new URL(`../lib/advisor/${rel}`, import.meta.url)), 'utf8')
+      if (/\.reserve\(/.test(src)) offenders.push(rel)
+    }
+    assert.deepEqual(offenders, [], '预算写侧调用只允许出现在 aci/loop.js')
+    const loopSrc = readFileSync(fileURLToPath(new URL('../lib/advisor/aci/loop.js', import.meta.url)), 'utf8')
+    assert.ok(/\.reserve\(/.test(loopSrc), '阳性对照：aci/loop.js 确实含 .reserve( 调用（检索面有效）')
+    // 行为：池超限必须拒绝
+    const pool = new BudgetPool({ limitBytes: 100, perCallBytes: 60 })
+    assert.equal(pool.reserve(60, { label: 'a' }).ok, true)
+    assert.equal(pool.reserve(60, { label: 'b' }).ok, false, '超出池上限必须拒绝（唯一放行点不静默放行）')
+    assert.equal(pool.usedBytes, 60)
+    assert.equal(BudgetPool !== undefined, true)
+  })
+
+  // ── S3-5（AC-13 ②③④）：多轮工具检索的逐层预算实测（常量 import，零字面量）──
+  t('S3-5 AC-13：多轮工具检索逐轮记账——逐次 ≤ 单次上限、合计 ≤ 检索段合计上限；共享池（alreadyUsedBytes 挤占工具面）', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      // 三轮：read_file ×2 + 终轮 JSON；逐轮记账全部过池。
+      const llm = fakeToolLlm([
+        s3ToolCallChunks('t1', 'read_file', JSON.stringify({ path: 'src/foo.js' })),
+        s3ToolCallChunks('t2', 'read_file', JSON.stringify({ path: 'test/foo.test.js' })),
+        s3FinalChunks('{"notes":[{"severity":"nit","text":"S3-5 结论"}]}', 120),
+      ])
+      const result = await runToolLoop({
+        llm, provider: 'p', model: 'm', systemPrompt: 'S',
+        messages: s3FirstUser('S3-5 检索'), tools: createAciTools({ retrieval }), maxRounds: 4,
+      })
+      assert.equal(result.kind, 'ok', `多轮检索应正常收口（实得 ${result.kind}）`)
+      assert.equal(result.rounds, 3)
+      assert.equal(result.toolCalls.length, 2)
+      // ② 每次检索 ≤ 单次上限；④ 检索段合计 ≤ 合计上限（常量 import，AC-15）
+      for (const call of result.budget.calls) {
+        assert.ok(call.bytes <= RETRIEVAL_CALL_BYTES, `单轮记账 ${call.bytes} 必须 ≤ ${RETRIEVAL_CALL_BYTES}`)
+      }
+      assert.ok(result.budget.usedBytes <= RETRIEVAL_TOTAL_BYTES, `合计 ${result.budget.usedBytes} 必须 ≤ ${RETRIEVAL_TOTAL_BYTES}`)
+      assert.ok(result.bundle.files.includes('src/foo.js'), '检索集必须可枚举（AC-45 生产者侧）')
+      // 池归属：预取面已记账挤占同一 40KB 池（共享，不各记各的）
+      const tight = new BudgetPool({ alreadyUsedBytes: RETRIEVAL_TOTAL_BYTES - 10 })
+      assert.equal(tight.reserve(11, { label: 'tool' }).ok, false, '预取面占掉 40KB 后工具面必须被挤占（共享同一池）')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  t('S3-5b（AC-14）：预算耗尽 ⇒ 整次评审 dropped + 显式载体（注入必红：绕过 chokepoint 的变异必红）', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      // 已用 40KB-1，工具结果必然超池 ⇒ dropped budget-exhausted。
+      const llm = fakeToolLlm([
+        s3ToolCallChunks('t1', 'read_file', JSON.stringify({ path: 'src/foo.js' })),
+        s3FinalChunks('{"notes":[]}'),
+      ])
+      const result = await runToolLoop({
+        llm, provider: 'p', model: 'm', systemPrompt: 'S',
+        messages: s3FirstUser('S3-5b'), tools: createAciTools({ retrieval }), maxRounds: 4,
+        alreadyUsedBytes: RETRIEVAL_TOTAL_BYTES - 1,
+      })
+      assert.equal(result.kind, 'dropped')
+      assert.equal(result.reason, 'budget-exhausted')
+      assert.ok(result.detail.includes('未投递'), '载体必须显式（不得截断但零痕迹）')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── S3-6（触顶跨轮不变量）：任一往返触顶 ⇒ 整次 dropped；配注入必红变异体 ──
+  t('S3-6：第 1 轮触顶 + 第 2 轮正常 ⇒ 必须不投递（dropped）；变异体（只看最后一轮）必红', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      // 第 1 轮 outputTokens 达上限（finish=stop 的触顶形态），第 2 轮正常——按旧「只看终轮」
+      // 行为会投递被截断的结论；新不变量必须整次 dropped。
+      const llm = fakeToolLlm([
+        s3FinalChunks('{"notes":[{"severity":"blocker","text":"被截断的结论"}]}', 16_384),
+        s3FinalChunks('{"notes":[]}', 10),
+      ])
+      const result = await runToolLoop({
+        llm, provider: 'p', model: 'm', systemPrompt: 'S',
+        messages: s3FirstUser('S3-6'), tools: createAciTools({ retrieval }), maxRounds: 4,
+      })
+      assert.equal(result.kind, 'dropped', '任一往返触顶 ⇒ 整次评审必须 dropped')
+      assert.equal(result.reason, 'output-cap')
+      // finishReason=max-tokens 形态同样必红
+      const llm2 = fakeToolLlm([
+        [{ type: 'text-delta', text: '截断' }, { type: 'finish', reason: 'max-tokens' }],
+        s3FinalChunks('{"notes":[]}', 10),
+      ])
+      const result2 = await runToolLoop({
+        llm: llm2, provider: 'p', model: 'm', systemPrompt: 'S',
+        messages: s3FirstUser('S3-6b'), tools: createAciTools({ retrieval }), maxRounds: 4,
+      })
+      assert.equal(result2.kind, 'dropped')
+      assert.equal(result2.reason, 'output-cap')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  t('S3-6b（注入必红实测）：把「逐轮触顶聚合」变异成恒假后，S3-6 的断言必须红', async () => {
+    const abs = fileURLToPath(new URL('../lib/advisor/aci/loop.js', import.meta.url))
+    const original = readFileSync(abs)
+    const before = createHash('sha256').update(original).digest('hex')
+    try {
+      const src = original.toString('utf8')
+      const anchor = "const hitCap = (round.outputTokens !== null && round.outputTokens >= maxTokens) || round.finishReason === 'max-tokens'"
+      assert.equal(src.split(anchor).length - 1, 1, '锚点必须唯一命中（文本手术纪律）')
+      const mutated = src.replace(anchor, 'const hitCap = false')
+      assert.notEqual(mutated, src)
+      writeFileSync(abs, mutated, 'utf8')
+      const fresh = await import(`../lib/advisor/aci/loop.js?mutation=${Date.now()}`)
+      const llm = fakeToolLlm([
+        s3FinalChunks('{"notes":[{"severity":"blocker","text":"被截断的结论"}]}', 16_384),
+        s3FinalChunks('{"notes":[]}', 10),
+      ])
+      const result = await fresh.runToolLoop({
+        llm, provider: 'p', model: 'm', systemPrompt: 'S',
+        messages: s3FirstUser('S3-6b 变异臂'), tools: [], maxRounds: 4,
+      })
+      // 变异生效的证明：聚合被禁用后，第 1 轮触顶的评审**会被投递**（kind=ok）——
+      // 即 S3-6 的判据断言（kind 必须 = 'dropped'）在这个变异体上**必红**。
+      // 本用例断言「变异真的翻转了可观测行为」，从而证明 S3-6 的判据有牙齿。
+      assert.equal(result.kind, 'ok', '前置：聚合被禁用后触顶评审会被投递（若本臂已 dropped 说明变异未生效）')
+      assert.equal(result.text, '{"notes":[{"severity":"blocker","text":"被截断的结论"}]}', '被截断的第 1 轮正文正是被投递的那条（S3-6 要堵的缺陷形态）')
+    } finally {
+      writeFileSync(abs, original) // 内存原字节还原
+      const after = createHash('sha256').update(readFileSync(abs)).digest('hex')
+      assert.equal(after, before, 'loop.js 变异还原必须逐字节一致')
+    }
+  })
+
+  // ── S3-7（P1-8）：整次评审墙钟上限——按时终止 + 不投递 ──
+  t('S3-7：墙钟超限 ⇒ 整次评审按时终止 + dropped（不投递）；缺省墙钟 = 轮上限 × 单轮超时', async () => {
+    // 永不产出的挂起流（挂的是 async generator 本身，单轮 30s 超时不会先触发）
+    const hangingLlm = { stream: () => (async function* () { await new Promise(() => {}) })() }
+    const started = Date.now()
+    const result = await runToolLoop({
+      llm: hangingLlm, provider: 'p', model: 'm', systemPrompt: 'S',
+      messages: s3FirstUser('S3-7'), tools: [], maxRounds: 4,
+      callTimeoutMs: 30_000, reviewTimeoutMs: 120,
+    })
+    const elapsed = Date.now() - started
+    assert.equal(result.kind, 'dropped', '墙钟到点必须整体 dropped（不投递）')
+    assert.equal(result.reason, 'review-wall-clock')
+    assert.ok(elapsed < 10_000, `墙钟必须按时终止（实耗 ${elapsed}ms，不得等单轮 30s 超时）`)
+    // 缺省墙钟 = maxRounds × callTimeoutMs（语义声明：供契约 §6.5 引用）
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      const tools = createAciTools({ retrieval })
+      const llm = fakeToolLlm([s3FinalChunks()])
+      const okResult = await runToolLoop({
+        llm, provider: 'p', model: 'm', systemPrompt: 'S',
+        messages: s3FirstUser('S3-7b'), tools, maxRounds: 4, callTimeoutMs: 5000,
+      })
+      assert.equal(okResult.kind, 'ok', '阳性对照：正常评审必须在墙钟内完成（kind=ok）')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── S3-8（P1-7）：循环中途失败 = dropped + records 一条（与触顶同形，且可区分）──
+  t('S3-8：环境类工具失败（git 不可用）⇒ dropped 记录 + runtime.error，与成功评审可区分；水位语义不被打破', async () => {
+    const dir = buildS1aFixture()
+    // 刻意不给 dataDir/scratchDir ⇒ git 面不可用（fd-stdio 临时文件无处落）。
+    const retrieval = createRetrieval({ root: dir })
+    const records = []
+    try {
+      const llm = fakeToolLlm([
+        s3ToolCallChunks('t1', 'get_git_log', JSON.stringify({ limit: 3 })),
+        s3FinalChunks('{"notes":[]}'),
+      ])
+      const rt = s3RuntimeWithLoop({ llm, retrieval, records })
+      rt.enqueue({ markdown: 'S3-8 请看 git 历史', trigger: TRIGGER_USER }, { sessionId: 's-s3-8', sessionName: null })
+      await rt.waitForDrain()
+      // ① 记录面可见：一条 outcome='dropped'（与触顶同形）
+      assert.equal(records.length, 1, `循环期失败必须恰好落一条 records（实得 ${records.length}）`)
+      assert.equal(records[0].outcome, 'dropped')
+      // ② runtime.status=error 同时成立（两路证据，不是只留 status）
+      assert.equal(rt.status, 'error')
+      assert.ok(rt.error !== null, 'runtime.error 必须同时可见（判据 12：不得只留 records 或只留 status）')
+      // ③ 与成功评审可区分：lastReview.outcome 是失败原因（非 ok）
+      assert.equal(rt.lastReview.outcome, 'tool-environment')
+      assert.ok(rt.lastReview.reason.includes('git'), '失败原因必须点名（git 不可用）')
+      // ④ 不投递：deliver 未产生记录面 notes（records 无 severity>=nit 的意见）
+      rt.dispose()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  t('S3-8b：轮次用尽仍要工具 ⇒ dropped（tool-rounds-exhausted）+ records 同形；未知工具名 ⇒ isError 结果且循环继续', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      const tools = createAciTools({ retrieval })
+      // ① 轮次用尽：连续 maxRounds 轮都发工具调用
+      const llm = fakeToolLlm([
+        s3ToolCallChunks('t1', 'read_file', JSON.stringify({ path: 'src/foo.js' })),
+        s3ToolCallChunks('t2', 'read_file', JSON.stringify({ path: 'src/bar.js' })),
+        s3ToolCallChunks('t3', 'read_file', JSON.stringify({ path: 'sub/inner.js' })),
+        s3ToolCallChunks('t4', 'read_file', JSON.stringify({ path: 'big.txt' })),
+        s3ToolCallChunks('t5', 'read_file', JSON.stringify({ path: 'src/foo.js' })),
+        s3FinalChunks('{"notes":[]}'),
+      ])
+      const result = await runToolLoop({
+        llm, provider: 'p', model: 'm', systemPrompt: 'S',
+        messages: s3FirstUser('S3-8b'), tools, maxRounds: 4,
+      })
+      assert.equal(result.kind, 'dropped')
+      assert.equal(result.reason, 'tool-rounds-exhausted', '轮次用尽仍要工具必须显式 dropped（不假装看过）')
+      // ② 未知（禁止名单外的）工具名：显式 isError 结果，循环继续到正常终态
+      const llm2 = fakeToolLlm([
+        s3ToolCallChunks('t1', 'write_file', JSON.stringify({ path: 'x', content: 'y' })),
+        s3FinalChunks('{"notes":[{"severity":"nit","text":"S3-8b 结论"}]}'),
+      ])
+      const result2 = await runToolLoop({
+        llm: llm2, provider: 'p', model: 'm', systemPrompt: 'S',
+        messages: s3FirstUser('S3-8b2'), tools, maxRounds: 4,
+      })
+      assert.equal(result2.kind, 'ok', '未知工具名走 isError 结果（模型可纠正），不炸循环')
+      const toolMsg = llm2.calls[1].messages.find((m) => m.role === 'tool')
+      assert.ok(toolMsg.isError === true, '回填的工具结果必须标 isError')
+      assert.ok(toolMsg.content[0].text.includes('unknown-tool'), '拒绝文案必须点名 unknown-tool')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── S3-9（F-3）：工具循环不打破「串行 drain + drop-newest 队列」──
+  t('S3-9 F-3：循环在飞时队列满 ⇒ drop-newest 语义不变；drain 仍串行（无并发评审）', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      let release = null
+      const gate = new Promise((resolve) => { release = resolve })
+      let started = 0
+      const llm = { stream: () => { started += 1; return (async function* () { await gate; yield { type: 'text-delta', text: '{"notes":[]}' } })() } }
+      const rt = s3RuntimeWithLoop({ llm, retrieval, maxRounds: 4 })
+      rt.maxQueued = 2
+      rt.enqueue({ markdown: '第一条（在飞）', trigger: TRIGGER_USER }, { sessionId: 's-s3-9', sessionName: null })
+      await new Promise((r) => setTimeout(r, 30))
+      assert.equal(started, 1, '第一条必须已在飞')
+      assert.equal(rt.enqueue({ markdown: '第二条', trigger: TRIGGER_USER }, { sessionId: 's-s3-9', sessionName: null }), true, '队列未满可入队')
+      assert.equal(rt.enqueue({ markdown: '第三条', trigger: TRIGGER_USER }, { sessionId: 's-s3-9', sessionName: null }), true)
+      assert.equal(rt.enqueue({ markdown: '第四条（应被丢）', trigger: TRIGGER_USER }, { sessionId: 's-s3-9', sessionName: null }), false, '队列满 ⇒ drop-newest（最新被丢）')
+      assert.equal(rt.queue.length, 2)
+      release()
+      await rt.waitForDrain()
+      assert.equal(started, 3, '串行 drain：在飞 1 + 队列 2 = 3 次调用（被丢的那条不评）')
+      rt.dispose()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── S3-10（AC-36/45 接线）：循环暴露检索集，note 引用路径 ⊆ 本轮检索集 ──
+  t('S3-10 AC-36/45：循环 bundle 可枚举；引用闭包（⊆ 检索集）正向过 + 负向必红', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      const llm = fakeToolLlm([
+        s3ToolCallChunks('t1', 'read_file', JSON.stringify({ path: 'src/foo.js' })),
+        s3FinalChunks('{"notes":[{"severity":"nit","text":"请检查 src/foo.js 的实现"}]}'),
+      ])
+      const result = await runToolLoop({
+        llm, provider: 'p', model: 'm', systemPrompt: 'S',
+        messages: s3FirstUser('S3-10'), tools: createAciTools({ retrieval }), maxRounds: 4,
+      })
+      assert.equal(result.kind, 'ok')
+      // 正向：note 引用的路径在检索集内
+      assert.doesNotThrow(() => assertPathsWithinBundle(result.bundle, ['src/foo.js'], 'S3-10 正向'))
+      // 负向（手工塞一条引用未检索文件的 note）⇒ 必红
+      assert.throws(() => assertPathsWithinBundle(result.bundle, ['src/not-retrieved.js'], 'S3-10 负向'), /必须 ⊆ 本轮检索集/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── S3-11：配置键 advisorMaxToolRounds 四处同步（三处本步 + 契约留 S5）──
+  t('S3-11：advisorMaxToolRounds 缺省 4 / 0=关循环 / 负数抛错；cordis.patch.yml 有键且注释无 H-5 禁区字样', async () => {
+    const cfg = resolveAdvisorConfig({})
+    assert.equal(cfg.advisorMaxToolRounds, 4, '缺省 4（【待产品复核 G-15】）')
+    assert.equal(resolveAdvisorConfig({ advisorMaxToolRounds: 0 }).advisorMaxToolRounds, 0, '0 = 关闭循环（装配层不注入 toolLoop）')
+    assert.equal(resolveAdvisorConfig({ advisorMaxToolRounds: 2 }).advisorMaxToolRounds, 2)
+    assert.throws(() => resolveAdvisorConfig({ advisorMaxToolRounds: -1 }), /非负整数/, '负数大声抛错')
+    assert.throws(() => resolveAdvisorConfig({ advisorMaxToolRounds: 1.5 }), /非负整数/, '非整数大声抛错')
+    // 未知键仍抛错（H-6 回归）
+    assert.throws(() => resolveAdvisorConfig({ advisorUnknownKeyS3: 1 }), /未知 advisor 配置键/)
+    // cordis.patch.yml 随包默认带新键
+    const yml = readFileSync(fileURLToPath(new URL('../cordis.patch.yml', import.meta.url)), 'utf8')
+    assert.ok(/advisorMaxToolRounds:\s*4/.test(yml), 'cordis.patch.yml 必须带 advisorMaxToolRounds: 4')
+    // H-5 四禁区字样零命中（advisor 区块内）：tiers.HIGH / 落盘 config.json / 回落链 / 任一为空→回落
+    const advisorBlock = yml.slice(yml.indexOf('advisorEnabled'))
+    for (const banned of ['tiers.HIGH', '落盘 config.json', '回落链', '任一为空→回落']) {
+      assert.equal(advisorBlock.includes(banned), false, `H-5 禁区字样「${banned}」不得出现在 advisor 区块`)
+    }
+    // 阳性对照：区块里确实有 advisor 键（检索面有效）
+    assert.ok(advisorBlock.includes('advisorMaxMessages'), '阳性对照：advisor 区块检索面有效')
+  })
+
+  // ── S3-12：跨轮身份不变（N 次往返 = 同一次评审）+ 上下文段/工具观察不进持续会话历史 ──
+  t('S3-12：多轮工具循环后，增量只入历史一次；上下文档与工具观察文本不进持续会话历史（G-2/AC-13 结构性）', async () => {
+    const dir = buildS1aFixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      const llm = fakeToolLlm([
+        s3ToolCallChunks('t1', 'read_file', JSON.stringify({ path: 'src/foo.js' })),
+        s3FinalChunks('{"notes":[{"severity":"nit","text":"S3-12 观察点"}]}'),
+      ])
+      const records = []
+      const rt = s3RuntimeWithLoop({ llm, retrieval, records })
+      rt.enqueue({ markdown: 'S3-12 的增量输入（UNIQUE_INCREMENT_MARK）', trigger: TRIGGER_USER }, { sessionId: 's-s3-12', sessionName: null })
+      await rt.waitForDrain()
+      // ① 同一次评审：模型被调用 2 次（1 工具轮 + 1 终轮），但记录面只有 1 条意见记录
+      assert.equal(llm.calls.length, 2)
+      const noteRecords = records.filter((r) => r.outcome !== 'dropped')
+      assert.equal(noteRecords.length, 1, 'N 次往返 = 同一次评审（不与 turn 混计）')
+      // ② 增量恰好入持续会话历史一次
+      const history = rt.conversation.snapshot().map((m) => m.text).join('\n')
+      const incrementHits = history.split('UNIQUE_INCREMENT_MARK').length - 1
+      assert.equal(incrementHits, 1, `增量必须恰好入历史一次（实得 ${incrementHits}）`)
+      // ③ 工具观察文本不进持续会话历史（只活在本次调用的局部消息数组）
+      assert.equal(history.includes('# read_file'), false, '工具观察不得进持续会话历史')
+      // ④ 历史里不含上下文档标记（唯一入历史点 = appendUser(增量)）
+      assert.equal(history.includes('advisor 上下文'), false, '上下文档不得进持续会话历史')
+      // ⑤ 第二次调用的 messages 含工具回填（role:'tool'），且助手块被回放
+      const secondCallMessages = llm.calls[1].messages
+      assert.ok(secondCallMessages.some((m) => m.role === 'tool'), '第二轮必须含工具结果消息')
+      assert.ok(secondCallMessages.some((m) => m.role === 'assistant' && (m.content ?? []).some((c) => c.type === 'tool-call')), '第二轮必须回放 assistant 的工具调用块')
+      rt.dispose()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── S3-13：观察格式（专用 viewer 行数上限 / 空输出显式文案）──
+  t('S3-13：观察格式——行数上限 + 显式截断标记；空输出显式文案（不静默）', () => {
+    const many = Array.from({ length: MAX_TOOL_OUTPUT_LINES + 10 }, (_, i) => `line-${i}`).join('\n')
+    const view = formatToolObservation(many)
+    assert.equal(view.truncated, true)
+    assert.ok(view.text.includes('已截断'), '截断必须显式可见')
+    assert.equal(view.text.split('\n').length, MAX_TOOL_OUTPUT_LINES + 1)
+    const empty = formatToolObservation('   \n  ')
+    assert.equal(empty.text, EMPTY_TOOL_OUTPUT, '空输出必须显式文案（不得静默成功）')
+    // 阳性对照：未超限不截断
+    const small = formatToolObservation('a\nb')
+    assert.equal(small.truncated, false)
+    assert.equal(small.text, 'a\nb')
   })
 }

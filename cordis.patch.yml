@@ -79,3 +79,6 @@
         # 单轮「相关文件 · 符号精读」（Repository Context 的 L2 层）最多精读几个源文件
         # （0 = 关闭 L2 精读，只保留 L1 文件树/Git/搜索）。S2 新增，四处同步见契约 §1。
         advisorContextMaxFiles: 4
+        # agentic 工具循环的往返上限（每次评审内模型最多发起几轮只读工具调用；
+        # 0 = 关闭工具循环，退回单次调用）。S3 新增，四处同步见契约 §1（条文留 S5）。
+        advisorMaxToolRounds: 4

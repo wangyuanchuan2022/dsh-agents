@@ -1342,6 +1342,9 @@ for (const suite of [
   advisorTests.testRetrievalSecurity,
   // B1 第二批修复（code-reviewer P1-1/2/3 + security-reviewer 高优先 P1）
   advisorTests.testB1SecondPass,
+  // S3：agentic 工具循环 + 只读 ACI 工具面（advisor V3 节 2 S3，判据 S3-1…S3-13）
+  // 位置约束同上：必须排在 testRealDataDirIsolation **之前**。
+  advisorTests.testS3ToolLoop,
   // 必须最后：它比对的是「模块加载时的真实用户数据目录快照」与「现在」，
   // 只有排在所有 advisor 用例之后才是真正的收尾断言。
   advisorTests.testRealDataDirIsolation,
