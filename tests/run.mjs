@@ -1345,6 +1345,10 @@ for (const suite of [
   // S3：agentic 工具循环 + 只读 ACI 工具面（advisor V3 节 2 S3，判据 S3-1…S3-13）
   // 位置约束同上：必须排在 testRealDataDirIsolation **之前**。
   advisorTests.testS3ToolLoop,
+  // S4：决策判断层——prompt V3 重写（AC-58 五类锚必红 / P0-3 结论前置）+ 冷却分级豁免
+  // （X11/AC-33 两条断言）+ 证据下限（AC-30/31/63）+ 可选字段兼容（AC-43/32）。
+  // 位置约束同上：必须排在 testRealDataDirIsolation **之前**。
+  advisorTests.testS4Decision,
   // 必须最后：它比对的是「模块加载时的真实用户数据目录快照」与「现在」，
   // 只有排在所有 advisor 用例之后才是真正的收尾断言。
   advisorTests.testRealDataDirIsolation,

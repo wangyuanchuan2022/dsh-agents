@@ -29,8 +29,8 @@ import {
   resolveAdvisorDataDir, DEFAULT_ADVISOR_DATA_DIR, ADVISOR_DATA_DIR_ENV, ADVISOR_TRACE_ENV,
 } from '../lib/advisor/index.js'
 import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, renderVisibleSurface, SEEN_WINDOW_SIZE } from '../lib/advisor/observer.js'
-import { AdvisorRuntime, parseReviewOutput, AdvisorConversation, classifyCompletion, ADVISOR_MAX_TOKENS, ADVISOR_FINISH_KINDS, ADVISOR_CONVERSATION_MAX_CHARS } from '../lib/advisor/runtime.js'
-import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage } from '../lib/advisor/delivery.js'
+import { AdvisorRuntime, parseReviewOutput, AdvisorConversation, classifyCompletion, ADVISOR_MAX_TOKENS, ADVISOR_FINISH_KINDS, ADVISOR_CONVERSATION_MAX_CHARS, DEFAULT_ADVISOR_SYSTEM_PROMPT, enforceEvidenceFloor, ADVISOR_MIN_BLOCKER_CONFIDENCE } from '../lib/advisor/runtime.js'
+import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage, ADVISOR_COOLDOWN_EXEMPT } from '../lib/advisor/delivery.js'
 import { AdvisorStore, normalizeRecord, sessionConfigPath, sessionSeenPath, CONFIG_FILE } from '../lib/advisor/store.js'
 import { createAdvisorHandler, normalizeAdvisorPatch, normalizeSessionId, SESSION_ID_MAX } from '../lib/advisor/api.js'
 
@@ -1587,19 +1587,20 @@ export function testDelivery(t) {
     assert.equal(agent.calls.steer.length, 0)
   })
 
-  t('投递：nit 在 steerSeverities 且不在冷却 → steer；冷却窗口内降级 inject', () => {
+  t('投递：nit 在 steerSeverities 且不在冷却 → steer；冷却窗口内 nit 降级 inject（X11 分级豁免后 concern/blocker 免冷却）', () => {
     const agent = fakeAgent('s')
     const d = new AdvisorDelivery({ immuneTurns: 2, steerSeverities: ['nit', 'concern', 'blocker'] })
     d.registerAgent(agent)
     assert.equal(d.route('s', { severity: 'nit', text: 'n' }), 'steer')
     assert.equal(agent.calls.steer.length, 1)
-    // 冷却中（immuneTurns=2）
-    assert.equal(d.route('s', { severity: 'concern', text: 'c' }), 'inject')
-    // 走完 2 个主回合后恢复 steer
-    d.onSteppedTurnEnd('s')
-    assert.equal(d.route('s', { severity: 'concern', text: 'c' }), 'inject')
-    d.onSteppedTurnEnd('s')
+    // X11 冷却分级豁免（产品 2026-10-09 裁决，AC-33）：冷却窗口内 concern 免冷却直投 steer
     assert.equal(d.route('s', { severity: 'concern', text: 'c' }), 'steer')
+    // 反向断言：冷却窗口内 nit 仍降级 inject（豁免面不是「全等级豁免」）
+    assert.equal(d.route('s', { severity: 'nit', text: 'n2' }), 'inject')
+    // 走完 2 个主回合后，nit 恢复 steer
+    d.onSteppedTurnEnd('s')
+    d.onSteppedTurnEnd('s')
+    assert.equal(d.route('s', { severity: 'nit', text: 'n3' }), 'steer')
   })
 
   t('投递：severity 不在 steerSeverities → inject；缺 agent → false(dropped)', () => {
@@ -5544,5 +5545,197 @@ export function testS3ToolLoop(t) {
     const small = formatToolObservation('a\nb')
     assert.equal(small.truncated, false)
     assert.equal(small.text, 'a\nb')
+  })
+}
+
+// ── 14. S4：决策判断层 —— prompt V3 重写 + 冷却分级豁免 + 证据下限（advisor V3 节 2 S4）──
+
+/**
+ * AC-58 五类「停止做什么」的**锚词集 fixture**（措辞锚定义落 fixture，不散在断言里）。
+ * 每类的 prompt 行含独特锚词；变异测试逐类整行移除 → 谓词必红。
+ */
+const S4_STOP_CATEGORIES = [
+  { id: 'stop-direction', anchor: /暂停当前方向|先停下当前路线/ },
+  { id: 'no-new-abstraction', anchor: /不要新增抽象|别再包一层/ },
+  { id: 'no-premature-impl', anchor: /不要提前实现|YAGNI/ },
+  { id: 'verify-assumption', anchor: /先验证.*假设|最小实验\/PoC/ },
+  { id: 'reuse-existing', anchor: /先复用已有能力|先复用已有实现/ },
+]
+
+/** AC-58 谓词：prompt 中五类锚词全部在场。 */
+function promptHasAllStopAnchors(prompt) {
+  return S4_STOP_CATEGORIES.every((category) => category.anchor.test(prompt))
+}
+
+/** 结论前置（P0-3）的措辞锚。 */
+const S4_CONCLUSION_ANCHOR = /先给结论、再给理由/
+
+export function testS4Decision(t) {
+  // ── S4-1（AC-58 双判据 a+b）：五类停止动作落 prompt + 措辞锚逐类移除必红 ──
+  t('S4-1：AC-58 五类停止动作措辞锚全部在默认 prompt（正向）', () => {
+    assert.equal(promptHasAllStopAnchors(DEFAULT_ADVISOR_SYSTEM_PROMPT), true, '五类锚词必须全部在场')
+    // 正向对照的对照之对照：谓词不是恒真——空串必不过
+    assert.equal(promptHasAllStopAnchors(''), false)
+  })
+
+  for (const category of S4_STOP_CATEGORIES) {
+    t(`S4-1 变异（AC-58 注入必红）：移除「${category.id}」措辞锚 → 谓词必红`, () => {
+      const match = category.anchor.exec(DEFAULT_ADVISOR_SYSTEM_PROMPT)
+      assert.ok(match, '前置：锚词必须真的命中（fixture 与 prompt 同源）')
+      // 整行移除（锚词所在的完整逻辑行），而不是只删词——更接近「漏写该类」的真实变异
+      const lineStart = DEFAULT_ADVISOR_SYSTEM_PROMPT.lastIndexOf('\n', match.index) + 1
+      const lineEnd = DEFAULT_ADVISOR_SYSTEM_PROMPT.indexOf('\n', match.index)
+      const mutated = DEFAULT_ADVISOR_SYSTEM_PROMPT.slice(0, lineStart)
+        + DEFAULT_ADVISOR_SYSTEM_PROMPT.slice(lineEnd === -1 ? DEFAULT_ADVISOR_SYSTEM_PROMPT.length : lineEnd + 1)
+      assert.notEqual(mutated, DEFAULT_ADVISOR_SYSTEM_PROMPT, '变异必须真的改变 prompt（防假变异）')
+      assert.equal(promptHasAllStopAnchors(mutated), false, `移除 ${category.id} 后五类谓词必须红`)
+    })
+  }
+
+  t('S4-2（P0-3）：结论前置措辞锚在 prompt；移除 → 判据红', () => {
+    assert.ok(S4_CONCLUSION_ANCHOR.test(DEFAULT_ADVISOR_SYSTEM_PROMPT), '结论前置必须写进 prompt')
+    const mutated = DEFAULT_ADVISOR_SYSTEM_PROMPT.replace(S4_CONCLUSION_ANCHOR, '（结论前置句已移除）')
+    assert.notEqual(mutated, DEFAULT_ADVISOR_SYSTEM_PROMPT)
+    assert.equal(S4_CONCLUSION_ANCHOR.test(mutated), false)
+  })
+
+  t('S4-3（V3 prompt 结构）：首要目标 / 10 级优先级 / 三判断清单 / 证据纪律 / 决策漂移优先 / 职责分界 / 严格 JSON 含可选字段', () => {
+    const p = DEFAULT_ADVISOR_SYSTEM_PROMPT
+    assert.match(p, /降低项目总成本/, '首要目标（产品第 11 条）')
+    assert.match(p, /Staff\/Principal/, '视角定位')
+    for (let i = 1; i <= 10; i++) {
+      assert.ok(p.includes(`${i}. `), `优先级序第 ${i} 级必须在场`)
+    }
+    assert.match(p, /架构判断/, '三判断清单：架构')
+    assert.match(p, /返工判断/, '三判断清单：返工')
+    assert.match(p, /产品判断/, '三判断清单：产品')
+    assert.match(p, /绝不声称读过未提供的文件/, '证据纪律（AC-44）')
+    assert.match(p, /优先检索、不要推测/, '证据纪律（优先检索）')
+    assert.match(p, /不得声称「违反了决策 D-/, '证据纪律（AC-7：无决策不声称决策）')
+    assert.match(p, /决策漂移/, '决策漂移优先（AC-59 判断面）')
+    assert.match(p, /active\/superseded\/rejected/, 'DECISIONS 三态（AC-59）')
+    assert.match(p, /你负责判断/, '职责分界：模型判断（产品第 4 条）')
+    assert.match(p, /规则层负责边界/, '职责分界：规则边界（产品第 4 条）')
+    assert.match(p, /不设数值阈值/, 'AC-29 精简：规模非阈值驱动声明')
+    assert.match(p, /"notes":\[\{"severity"/, '严格 JSON 输出契约（保持可解析）')
+    assert.match(p, /"evidence"/, '可选字段 evidence 进输出契约')
+    assert.match(p, /"confidence"/, '可选字段 confidence 进输出契约')
+    assert.match(p, /"action"/, '可选字段 action 进输出契约')
+    assert.match(p, /绝不回显 secret/, '既有约束保留：不回显密钥')
+    assert.match(p, /用中文输出/, '既有约束保留：中文输出')
+  })
+
+  // ── S4-4（AC-33 两条断言，X11 冷却分级豁免）──
+  t('S4-4：AC-33 ① 冷却窗口内 blocker → steer（免冷却直投）', () => {
+    const agent = fakeAgent('s')
+    const d = new AdvisorDelivery({ immuneTurns: 2, steerSeverities: ['nit', 'concern', 'blocker'] })
+    d.registerAgent(agent)
+    // 制造冷却窗口：一次 nit steer（武装冷却 2）
+    assert.equal(d.route('s', { severity: 'nit', text: 'n' }), 'steer')
+    const steerCount = agent.calls.steer.length
+    assert.equal((d.cooldown.get('s') ?? 0) > 0, true, '前置：冷却窗口已武装')
+    assert.equal(d.route('s', { severity: 'blocker', text: 'b' }), 'steer', 'blocker 免冷却直投 steer')
+    assert.equal(agent.calls.steer.length, steerCount + 1)
+  })
+
+  t('S4-4 反向：AC-33 ② 冷却窗口内 nit → inject（豁免面不是全等级）', () => {
+    const agent = fakeAgent('s')
+    const d = new AdvisorDelivery({ immuneTurns: 2, steerSeverities: ['nit', 'concern', 'blocker'] })
+    d.registerAgent(agent)
+    assert.equal(d.route('s', { severity: 'concern', text: 'c' }), 'steer') // 武装冷却
+    assert.equal(d.route('s', { severity: 'nit', text: 'n' }), 'inject', '冷却窗口内 nit 必须降级 inject')
+    assert.equal(agent.calls.inject.length, 1)
+    assert.equal(agent.calls.steer.length, 1)
+  })
+
+  t('S4-4b：豁免集合 = {concern, blocker}（配置面用常量，不新增配置键）', () => {
+    assert.deepEqual([...ADVISOR_COOLDOWN_EXEMPT].sort(), ['blocker', 'concern'])
+  })
+
+  // ── S4-5（AC-30 双向边界 + AC-31 唯一规则 + AC-63 证据下限）──
+  t('S4-5：AC-30 双向边界——blocker + confidence 0.69 → 降级 concern；0.70 + evidence → 保持 blocker', () => {
+    const low = enforceEvidenceFloor([{ severity: 'blocker', text: 'x', evidence: 'src/a.js:1', confidence: 0.69 }])
+    assert.equal(low[0].severity, 'concern')
+    const high = enforceEvidenceFloor([{ severity: 'blocker', text: 'x', evidence: 'src/a.js:1', confidence: ADVISOR_MIN_BLOCKER_CONFIDENCE }])
+    assert.equal(high[0].severity, 'blocker')
+    // 降级只改 severity，其余字段原样保留（AC-31 唯一确定行为）
+    assert.equal(low[0].text, 'x')
+    assert.equal(low[0].evidence, 'src/a.js:1')
+    assert.equal(low[0].confidence, 0.69)
+    // AC-31：同输入两次结果一致（唯一规则，无「有时降有时丢」）
+    assert.deepEqual(enforceEvidenceFloor(low), enforceEvidenceFloor(low))
+  })
+
+  t('S4-5b：AC-63——blocker 缺 evidence → 降级 concern；缺 confidence → 降级 concern；均不达标不得 blocker', () => {
+    const noEvidence = enforceEvidenceFloor([{ severity: 'blocker', text: 'x', confidence: 0.95 }])
+    assert.equal(noEvidence[0].severity, 'concern')
+    const noConfidence = enforceEvidenceFloor([{ severity: 'blocker', text: 'x', evidence: 'D-012' }])
+    assert.equal(noConfidence[0].severity, 'concern')
+    const neither = enforceEvidenceFloor([{ severity: 'blocker', text: 'x', evidence: '', confidence: 0.5 }])
+    assert.equal(neither[0].severity, 'concern')
+    // 非 blocker 等级不受下限影响
+    const nit = enforceEvidenceFloor([{ severity: 'nit', text: 'x' }])
+    assert.equal(nit[0].severity, 'nit')
+  })
+
+  t('S4-5c：向后兼容——旧两字段输出（无可选字段）原样通过，blocker 不被降级', () => {
+    const legacy = enforceEvidenceFloor([{ severity: 'blocker', text: 'x' }, { severity: 'info', text: 'y' }])
+    assert.equal(legacy[0].severity, 'blocker', '旧输出不参与下限（零回归）')
+    assert.deepEqual(legacy[0], { severity: 'blocker', text: 'x' })
+    // ≥3 元素输入（断言鉴别力条款）：混合新旧形态
+    const mixed = enforceEvidenceFloor([
+      { severity: 'blocker', text: 'legacy' },
+      { severity: 'blocker', text: 'v3-weak', confidence: 0.1 },
+      { severity: 'blocker', text: 'v3-strong', evidence: 'a.js', confidence: 0.9 },
+    ])
+    assert.deepEqual(mixed.map((n) => n.severity), ['blocker', 'concern', 'blocker'])
+  })
+
+  // ── S4-6（AC-43 新字段解析兼容 + AC-32 投递面无 confidence）──
+  t('S4-6：parseReviewOutput 解析可选字段（evidence/confidence/action），未知字段忽略，旧字段语义不变', () => {
+    const parsed = parseReviewOutput('{"notes":[{"severity":"blocker","text":"先停下","evidence":"D-012","confidence":0.8,"action":"stop-direction","unknown_field":123},{"severity":"nit","text":"旧形态"},{"severity":"concern","text":"弱证据","confidence":"高"}]}')
+    assert.equal(parsed.error, undefined)
+    assert.equal(parsed.notes.length, 3)
+    // ≥3 元素输入：三类形态逐一断言
+    assert.deepEqual(
+      { severity: parsed.notes[0].severity, text: parsed.notes[0].text, evidence: parsed.notes[0].evidence, confidence: parsed.notes[0].confidence, action: parsed.notes[0].action },
+      { severity: 'blocker', text: '先停下', evidence: 'D-012', confidence: 0.8, action: 'stop-direction' },
+    )
+    assert.deepEqual(parsed.notes[1], { severity: 'nit', text: '旧形态' }, '旧形态 note 不带新键')
+    assert.equal(parsed.notes[2].confidence, undefined, '类型不符的 confidence 不产出该键（fail-soft 字段级）')
+    // 未知字段被忽略（显式定义：不报错）
+    assert.equal('unknown_field' in parsed.notes[0], false)
+  })
+
+  t('S4-6b：AC-32——投递消息体不含 confidence 字段名或数值', () => {
+    const m = buildAdvisorMessage({ severity: 'blocker', text: '请停下', evidence: 'D-012', confidence: 0.8 })
+    const body = JSON.stringify(m)
+    assert.equal(body.includes('confidence'), false, 'steer/inject 消息体不得含 confidence 字段名')
+    assert.equal(body.includes('0.8'), false, '消息体不得含 confidence 数值')
+  })
+
+  // ── S4-7（端到端：V3 形态 blocker 无证据 → 记录与投递按 concern 走）──
+  t('S4-7：runtime 端到端——V3 blocker（confidence 低）→ 投递/记录 severity 为 concern', async () => {
+    const delivered = []
+    const recorded = []
+    const payload = JSON.stringify({ notes: [{ severity: 'blocker', text: '方向错了', confidence: 0.4 }] })
+    const llm = {
+      // ≥3 chunk 模拟真实流（text / finish / usage）
+      async * stream() {
+        yield { type: 'text-delta', text: payload }
+        yield { type: 'finish', reason: 'stop' }
+        yield { type: 'usage', usage: { outputTokens: 100 } }
+      },
+    }
+    const rt = new AdvisorRuntime({
+      provider: 'p', model: 'm', systemPrompt: 'sys', llm,
+      deliver: (note) => { delivered.push(note); return 'inject' },
+      record: (record) => { recorded.push(record) },
+    })
+    await rt.process({ markdown: '我要重写整个模块', trigger: 'user-message' }, { sessionId: 's', sessionName: 'n' }, rt.generation)
+    assert.equal(delivered.length, 1)
+    assert.equal(delivered[0].severity, 'concern', '低置信 blocker 必须降级为 concern 投递')
+    assert.equal(recorded[0].severity, 'concern', '记录面同形（AC-31 唯一行为）')
+    assert.equal(rt.lastReview.notes, 1)
   })
 }
