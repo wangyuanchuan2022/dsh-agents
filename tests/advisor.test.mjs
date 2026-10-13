@@ -6466,4 +6466,191 @@ export function testS5Closeout(t) {
       }
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
+
+  // ── S5 行为验收（AC-36~42 / AC-64 / S-7，确定性轨；接缝声明与任务书判据 1-7、计划 §3.0）──
+  //
+  // 双轨边界（P1-5，契约 7.7/计划判据 5）：stub 是「模型替身」——它验证的是
+  // 「解析 → 决策层（证据下限/冷却分级）→ 终态 → 投递链」这条**规则管辖区**，
+  // 不验证「模型会不会真的先说结论/会不会真的发现重复实现」（那属语义轨，
+  // 须真实 provider 录制回放，标「录制件非实时」；本批未录制——成本核算书纪律，
+  // 见 agent-out/v3-prevention-rate.md 的口径声明与复跑命令）。
+  // 场景台账：agent-out/v3-s5-fixtures/scenarios.json（分母与负样本的唯一事实源）。
+
+  const SCENARIOS = JSON.parse(readFileSync(fileURLToPath(new URL('../agent-out/v3-s5-fixtures/scenarios.json', import.meta.url)), 'utf8'))
+  /** AC-40 关键词门判定对象 = note 文本前 200 字（P0-3 结论前置）。 */
+  const conclusionInFirst200 = (text) => String(text).slice(0, 200).includes('先不要重写（整个模块）')
+
+  /**
+   * 端到端行为夹具：fixture 工作区（含既有实现/可选 DECISIONS.md）+ advisor 装配
+   * + 一轮 stepped 评审。**llm 输入断言用**：返回值里的 `llm.calls[0]` 即送模型的
+   * 完整输入（AC-45 证据闭包的输入端可得性在此核）。
+   */
+  async function behaviorRun({ messages, llmScript, decisions }) {
+    const root = tempDir('s5baroot')
+    const dataDir = tempDir('s5badata')
+    const created = []
+    try {
+      mkdirSync(join(root, 'src'), { recursive: true })
+      writeFileSync(join(root, 'src', 'ratelimit.js'), 'export function tokenBucket(cap) { return cap > 0 ? cap : 1 }\n')
+      writeFileSync(join(root, 'src', 'dateutil.js'), 'export function fmtDay(d) { return d.toISOString().slice(0, 10) }\n')
+      created.push('src/ratelimit.js', 'src/dateutil.js')
+      if (decisions !== undefined) {
+        mkdirSync(join(root, 'docs'), { recursive: true })
+        writeFileSync(join(root, 'docs', 'DECISIONS.md'), decisions)
+        created.push('docs/DECISIONS.md')
+      }
+      const agent = fakeAgent('s5ba')
+      agent.session = { id: 's5ba', cwd: root, deriveMessages: () => messages, ownEvents: () => [] }
+      const { ctx, emit } = fakeCtx()
+      ctx.agents.get = (id) => (id === 's5ba' ? agent : undefined)
+      const llm = fakeLlm(llmScript)
+      const installed = installAdvisor(ctx, {}, { dataDir, resolveLlm: () => llm })
+      installed.ctrl.patchConfig('s5ba', { enabled: true, provider: 'p', model: 'm' })
+      emit('agent/created', { agent })
+      emit('session/event', agent.session, { type: 'step/start', data: { turn: 't1' } })
+      emit('session/event', agent.session, { type: 'turn/end', seq: 10, data: { turn: 't1', reason: { kind: 'completed' } } })
+      await installed.ctrl.runtimeOf('s5ba')?.waitForDrain()
+      return {
+        llm, agent, installed,
+        snapshot: () => installed.ctrl.snapshot('s5ba'),
+        fixtureHas: (rel) => created.includes(rel),
+        // 清理必须由调用方在断言之后执行（首版把 rmSync 放进本函数的 finally，
+        // records.jsonl 在断言前就被删掉 ⇒ records 全空的假红）
+        cleanup: () => {
+          installed.dispose()
+          rmSync(root, { recursive: true, force: true })
+          rmSync(dataDir, { recursive: true, force: true })
+        },
+      }
+    } finally { /* 清理移交 run.cleanup()（见上） */ }
+  }
+
+  const D_FRAMEWORK_BAN = [
+    '# DECISIONS', '',
+    '## D-001 · active · 已确认决策',
+    '- 决策或约束正文：[约束] 服务层禁止引入新 Web 框架，扩展现有自研路由',
+    '- 理由：框架迁移成本高，现有路由满足性能目标',
+    '- 否决记录：—',
+    '- 所属阶段：V3',
+    '',
+  ].join('\n')
+
+  t('S5-BA Case A（AC-36 重复实现）：既有实现真实存在且进模型输入 → concern 意见引用真实路径并 steer', async () => {
+    const run = await behaviorRun({
+      messages: [msg('user', '我来写一个 token bucket 限流函数，直接加在服务层里'), msg('assistant', '好的，我开始实现 token bucket')],
+      llmScript: '{"notes":[{"severity":"concern","text":"src/ratelimit.js 已有 tokenBucket 实现，先复用再决定是否扩展","evidence":"src/ratelimit.js","confidence":0.8,"action":"no-premature-impl"}]}',
+    })
+    try {
+      // 输入端可得性（不验证替身的判断力，只验证「被引路径确实在检索面里」）
+      assert.ok(run.fixtureHas('src/ratelimit.js'), '前置：引用路径在 fixture 中真实存在')
+      assert.ok(
+        JSON.stringify(run.llm.calls[0]).includes('src/ratelimit.js'),
+        '★AC-36：advisor 输入必须已含既有实现路径（检索面把它交给了模型——否则「引用实际存在的路径」是无源之水）',
+      )
+      assert.equal(run.agent.calls.steer.length, 1, 'AC-36：concern 必须走 steer（X11 免冷却）')
+      assert.equal(run.snapshot().records[0]?.severity, 'concern', 'AC-36：终态 severity = concern')
+    } finally { run.cleanup() }
+  })
+
+  t('S5-BA Case B（AC-37 违反决策）：决策条目进输入 + 带 evidence 的 blocker 保持 blocker；无 evidence 同文必降 concern（AC-63 必红）', async () => {
+    const noteBase = (extra) => `{"notes":[{"severity":"blocker","text":"D-001 禁止引入新 Web 框架，此方向先停","action":"stop-direction"${extra}}]}`
+    // 臂①：带 evidence + confidence 0.9 → 证据下限放行，保持 blocker
+    const withEv = await behaviorRun({
+      messages: [msg('user', '我们引入 Express 重写服务层吧'), msg('assistant', '好的，我来接 Express')],
+      llmScript: noteBase(',"evidence":"docs/DECISIONS.md D-001","confidence":0.9'),
+      decisions: D_FRAMEWORK_BAN,
+    })
+    try {
+      assert.ok(JSON.stringify(withEv.llm.calls[0]).includes('D-001'), 'AC-6/59：决策文本必须进了模型输入')
+      assert.equal(withEv.snapshot().records[0]?.severity, 'blocker', '★AC-37：带证据 blocker 必须保持 blocker（证据下限只做降级不做升级）')
+      assert.equal(withEv.agent.calls.steer.length, 1, 'AC-37：blocker 免冷却直投 steer')
+    } finally { withEv.cleanup() }
+    // 臂②（必红）：同文去掉 evidence → 降 concern
+    const noEv = await behaviorRun({
+      messages: [msg('user', '我们引入 Express 重写服务层吧'), msg('assistant', '好的，我来接 Express')],
+      llmScript: noteBase(',"confidence":0.9'),
+      decisions: D_FRAMEWORK_BAN,
+    })
+    try {
+      assert.equal(noEv.snapshot().records[0]?.severity, 'concern', '★AC-63：无 evidence 的 blocker 必须被降为 concern（误导性 blocker 比没有更危险）')
+    } finally { noEv.cleanup() }
+    // 臂③（场景台账 E2）：带 evidence 但 confidence 0.5 < 0.7 → 同样降 concern
+    const lowConf = await behaviorRun({
+      messages: [msg('user', '我们引入 Express 重写服务层吧'), msg('assistant', '好的，我来接 Express')],
+      llmScript: noteBase(',"evidence":"docs/DECISIONS.md D-001","confidence":0.5'),
+      decisions: D_FRAMEWORK_BAN,
+    })
+    try {
+      assert.equal(lowConf.snapshot().records[0]?.severity, 'concern', '★AC-63/E2：低置信（<0.7）blocker 必须降为 concern（AC-30 双向边界 0.69/0.70）')
+    } finally { lowConf.cleanup() }
+  })
+
+  t('S5-BA Case C（AC-38 过度工程）：no-new-abstraction 意见 → concern 且语义指向不必要抽象', async () => {
+    const run = await behaviorRun({
+      messages: [msg('user', '给 add(a, b) 这个工具函数加上依赖注入框架，方便以后换实现'), msg('assistant', '好的，我来搭注入容器')],
+      llmScript: '{"notes":[{"severity":"concern","text":"为单一函数引入注入容器是不必要抽象/过度工程，直接实现即可","evidence":"src/dateutil.js","confidence":0.8,"action":"no-new-abstraction"}]}',
+    })
+    try {
+      assert.equal(run.snapshot().records[0]?.severity, 'concern', 'AC-38：过度工程 → concern')
+      assert.match(run.snapshot().records[0]?.text ?? '', /不必要抽象|过度工程/, 'AC-38：note 语义必须指向「不必要抽象/过度工程」之一')
+    } finally { run.cleanup() }
+  })
+
+  t('S5-BA Case D（AC-39 合理修改）：模型无意见 → notes 严格空、零 steer、零意见记录（三态之「评过但闭嘴」）', async () => {
+    const run = await behaviorRun({
+      messages: [msg('user', '修复 parseInterval 的 off-by-one 并补上端点相等的测试'), msg('assistant', '已修复并补测试，全部通过')],
+      llmScript: '{"notes":[]}',
+    })
+    try {
+      assert.equal(run.llm.calls.length, 1, '前置：评审确实发生了（不是预筛拦掉的假空）')
+      assert.equal(run.agent.calls.steer.length, 0, '★AC-39：合理修改不得产出任何意见（含风格类 nit）')
+      const notesRecords = run.snapshot().records.filter((r) => r.severity !== 'info' || r.outcome !== 'dropped')
+      assert.equal(notesRecords.length, 0, 'AC-39：records 里不得有意见记录（严格空，不是「无 notes 键」）')
+    } finally { run.cleanup() }
+  })
+
+  t('S5-BA Golden（AC-40 确定性轨）：「先不要重写（整个模块）」结论句前 200 字在位 → 解析/终态/投递链全通；关键词门判别器配必红对照', async () => {
+    // 判别器自身的阴性对照（判别器不是恒真空门）
+    assert.equal(conclusionInFirst200(`${'背景'.repeat(150)}先不要重写（整个模块）`), false, '判别器必红对照：结论句落在 200 字之外必须判负')
+    const run = await behaviorRun({
+      messages: [msg('user', '这个 auth 模块我想现在整个推倒重写一遍'), msg('assistant', '好的，我从入口开始重写 auth 模块')],
+      llmScript: '{"notes":[{"severity":"blocker","text":"先不要重写（整个模块）：模块稳定且测试充分，仅一个边界 bug，按最小修复处理","evidence":"src/ratelimit.js","confidence":0.9,"action":"stop-direction"}]}',
+    })
+    try {
+      assert.equal(run.snapshot().records[0]?.severity, 'blocker', 'AC-40：severity ∈ {blocker, concern}')
+      assert.ok(run.agent.calls.steer.length === 1, 'AC-40 确定性轨：解析 → 终态 → 投递链全通（steer 到达）')
+      const delivered = run.agent.calls.steer[0]
+      assert.ok(
+        conclusionInFirst200(JSON.stringify(delivered)),
+        '★AC-40：投递内容前 200 字内必须含结论句（P0-3 结论前置的链路承载）',
+      )
+    } finally { run.cleanup() }
+  })
+
+  t('S5-BA 普通聊天（AC-62）：寒暄零评审零调用（不触发昂贵分析）', async () => {
+    const run = await behaviorRun({
+      // 触发源由尾消息推导（G-13）：尾说话者 = user ⇒ 走用户档完整预筛；
+      // 消息 = ACK_EXACT 整串命中（'好的'）⇒ 拦截，零 token
+      messages: [msg('assistant', '已完成重构，测试全部通过'), msg('user', '好的')],
+      llmScript: '{"notes":[]}',
+    })
+    try {
+      assert.equal(run.llm.calls.length, 0, '★AC-62：普通聊天必须零模型调用（预筛拦截，零 token）')
+    } finally { run.cleanup() }
+  })
+
+  t('S5-BA AC-42/64：场景台账机检——分母 ≥12、负样本 K ≥10；负样本确定性臂零意见（语义轨待录制如实申报）', async () => {
+    assert.ok(SCENARIOS.errorScenarios.length >= SCENARIOS.thresholds.denominatorMin, `AC-64：分母（预标注会走错）必须 ≥12（实得 ${SCENARIOS.errorScenarios.length}）`)
+    assert.ok(SCENARIOS.negativeSamples.length >= 10, `AC-42：负样本 K 必须 ≥10（实得 ${SCENARIOS.negativeSamples.length}）`)
+    // 确定性臂：抽 3 条合理动作，模型闭嘴时管线不得自己长出意见
+    for (const sample of SCENARIOS.negativeSamples.slice(0, 3)) {
+      const run = await behaviorRun({
+        messages: [msg('user', sample.message), msg('assistant', '已完成，测试通过')],
+        llmScript: '{"notes":[]}',
+      })
+      try {
+        assert.equal(run.agent.calls.steer.length, 0, `AC-42/${sample.id}：合理动作 + 模型闭嘴 ⇒ 零 steer（管线不得加戏）`)
+      } finally { run.cleanup() }
+    }
+  })
 }
