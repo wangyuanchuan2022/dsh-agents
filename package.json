@@ -21,7 +21,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "web-tree-sitter": "0.27.0"
   },
   "dsh": {
     "bundle": {

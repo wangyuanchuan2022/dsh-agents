@@ -1352,6 +1352,10 @@ for (const suite of [
   // B2/B3 修复批（code-P1-1/P1-2 + security-P1-1/P1-2 + P2 择要，判据 FX-1…FX-5）。
   // 位置约束同上：必须排在 testRealDataDirIsolation **之前**。
   advisorTests.testS3FixBatch,
+  // B4（S1b）：tree-sitter 符号级（方案 A1）——依赖闸门 / sha256 硬闸门 / 降级路径 / AC-36 符号级闭包。
+  // 位置约束：必须排在 testRealDataDirIsolation **之前**；且因本套件会 warm 符号引擎（AST 就绪），
+  // 必须排在所有依赖「引擎未就绪 ⇒ 正则降级」文本的既有用例（S2-16 等）之后。
+  advisorTests.testB4Symbols,
   // 必须最后：它比对的是「模块加载时的真实用户数据目录快照」与「现在」，
   // 只有排在所有 advisor 用例之后才是真正的收尾断言。
   advisorTests.testRealDataDirIsolation,

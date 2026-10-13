@@ -119,6 +119,83 @@ SOFTWARE.
 
 ---
 
+## web-tree-sitter@0.27.0（B4 = S1b 新增运行时依赖）
+
+- 来源：https://github.com/tree-sitter/tree-sitter（子目录 `lib/binding_web`）
+- 包：npm `web-tree-sitter`，版本 **0.27.0**（`package.json` 中**精确锁定**，不用 `^`）
+- 许可：MIT License
+- 引入方式：作为本仓库唯一新增的运行时依赖（0 运行时依赖、0 装载期生命周期脚本）；
+  `Parser.init()` 在 Node 下按包自身 `import.meta.url` 自定位 `web-tree-sitter.wasm`
+  （无需 `locateFile`）。安全审查记录见 `agent-out/treesitter-deps-research.md`；
+  其 emscripten 胶水含 `EM_ASM`/`EM_JS` 的 `eval`，**输入源是所加载的 wasm 模块**，
+  故本仓库对下节 vendor 的 grammar wasm 施加 **SHA256 硬闸门**（加载前断言，不匹配即拒载）。
+
+```
+MIT License
+
+Copyright (c) 2018 Max Brunsfeld
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## tree-sitter-javascript@0.25.0 的 grammar wasm（**vendor 进本仓**）
+
+- 来源：https://github.com/tree-sitter/tree-sitter-javascript
+- 取件渠道：npm 官方 tarball `tree-sitter-javascript@0.25.0`（**只下载打包物、不安装该包**）
+- 落盘路径：`lib/advisor/grammars/tree-sitter-javascript.wasm`
+- 字节数：**411770**
+- SHA256：**5FB488D0CABB4775A594BAB85682DE5AD6CE83C0D6AC997A9F82DD084D571240**
+  （与微软 `@vscode/tree-sitter-wasm@0.3.1` 内的同名文件**逐字节相同**，互为溯源交叉验证）
+- 重取流程：`node scripts/fetch-grammar-wasm.mjs`（下载 → sha256/字节数断言 → 落盘；不匹配 exit 1 且不写盘）
+- 许可：MIT License
+- **登记理由（不适用 node_modules 豁免）**：该文件是 **vendor 进本仓库源码树**的二进制产物，
+  脱离了 `node_modules/`，故必须在此显式登记（下文「其他」一节的 node_modules 豁免不覆盖它）。
+  使用侧硬闸门：加载前做 SHA256 断言，不匹配即**拒载**并降级为正则启发式（显式标注，不静默）。
+
+```
+MIT License
+
+Copyright (c) 2014 Max Brunsfeld
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
 ## 其他
 
 `node_modules/` 下的第三方依赖各自携带其许可文件，不在此逐一列举；本仓库自身代码以

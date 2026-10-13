@@ -2915,6 +2915,9 @@ import {
   createGitReader, GitError,
   compileQuery, searchFiles, searchText, findRelatedTests, testCandidatesFor, NO_TEST_ANNOTATION,
   DEFAULT_EXCLUDED_DIRS, parseGitignore, parseGitattributes, createIgnoreMatcher, listFiles, snapshotWorktree,
+  // B4（S1b）：tree-sitter 符号级 + sha256 硬闸门 + 降级路径
+  createSymbolEngine, ensureSymbolEngine, peekSymbolEngine, checkSymbolRefs,
+  extractSymbolsRegex, EXPECTED_WASM_SHA256, WASM_EXPECTED_BYTES, SUPPORTED_EXTENSIONS, isSupportedExtension,
 } from '../lib/advisor/retrieval/index.js'
 import { assertReadonlyArgv, tempFileName, parsePorcelain, parseNumstat, parseLog, minimalGitEnv } from '../lib/advisor/retrieval/git.js'
 // S3：agentic 工具循环 + 只读 ACI 工具面（与既有 suite 同文件追加，隔离门同一次求值）。
@@ -3592,21 +3595,53 @@ export function testS1aRetrieval(t) {
     }
   })
 
-  t('S1a-12 符号面口径：正则启发式（无 AST / 零新依赖）+ AC-36 的路径闭包粒度', () => {
-    // ① 零新依赖：retrieval 面不得 import tree-sitter / 任何三方包
+  t('S1a-12 符号面口径：正则启发式降级面 + B4 依赖闸门（唯一允许三方导入 = symbols.js 的 web-tree-sitter）+ AC-36 的路径闭包粒度', () => {
+    // ① 依赖闸门（B4 修订）：retrieval 面**唯一**允许的三方导入 = `retrieval/symbols.js` 的 `web-tree-sitter`
+    //    （B4 获批引入，精确锁定 0.27.0；其余文件仍必须 0 三方依赖）。静态 `from '…'` 与动态 `import('…')` 都扫。
     const files = collectAdvisorModules().filter((f) => f.rel.startsWith('lib/advisor/retrieval/'))
+    const thirdPartyByFile = new Map()
     for (const f of files) {
       const text = readFileSync(f.abs, 'utf8')
-      const imports = [...text.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1])
-      for (const spec of imports) {
-        assert.ok(spec.startsWith('node:') || spec.startsWith('./'), `${f.rel}：不得引入非标准库依赖（实得 ${spec}）—— 零依赖是本批的硬约束`)
+      const specs = [
+        ...[...text.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]),
+        ...[...text.matchAll(/import\(\s*'([^']+)'\s*\)/g)].map((m) => m[1]),
+      ]
+      for (const spec of specs) {
+        assert.ok(spec.startsWith('node:') || spec.startsWith('./') || spec === 'web-tree-sitter', `${f.rel}：不得引入非标准库依赖（实得 ${spec}）—— 零依赖是 B4 之外所有 retrieval 文件的硬约束`)
+        if (!spec.startsWith('node:') && !spec.startsWith('./')) {
+          thirdPartyByFile.set(f.rel, [...(thirdPartyByFile.get(f.rel) ?? []), spec])
+        }
       }
-      assert.ok(!/tree-sitter|web-tree-sitter/.test(text.replace(/^\s*\*.*$/gm, '')), `${f.rel}：不得出现 tree-sitter（B4 未批准，L3 已移出 V3 射程）`)
+      const codeOnly = text.replace(/^\s*(\*|\/\/).*$/gm, '')
+      if (/retrieval[\\/]symbols\.js$/.test(f.rel)) {
+        assert.ok(/web-tree-sitter/.test(codeOnly), 'B4：symbols.js 必须真的用 web-tree-sitter（否则树解析名存实亡）')
+      }
     }
+    // 依赖面判据按**模块说明符**判（不按裸文本）：除 symbols.js 外任何文件都不得把 tree-sitter 作为依赖导入
+    for (const f of files) {
+      const specs = [
+        ...[...readFileSync(f.abs, 'utf8').matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]),
+        ...[...readFileSync(f.abs, 'utf8').matchAll(/import\(\s*'([^']+)'\s*\)/g)].map((m) => m[1]),
+      ].filter((s) => /tree-sitter/.test(s))
+      if (/retrieval[\\/]symbols\.js$/.test(f.rel)) {
+        assert.deepEqual(specs, ['web-tree-sitter'], 'B4：symbols.js 的树解析依赖恰为 web-tree-sitter')
+      } else {
+        assert.deepEqual(specs, [], `${f.rel}：B4 只批了 symbols.js 引 tree-sitter 依赖，其余文件不得导入`)
+      }
+    }
+    assert.deepEqual([...thirdPartyByFile.keys()].sort(), ['lib/advisor/retrieval/symbols.js'],
+      `B4 依赖闸门：三方导入面必须恰为 symbols.js 一个文件（实得 ${JSON.stringify([...thirdPartyByFile.keys()])}）`)
+    assert.deepEqual(thirdPartyByFile.get('lib/advisor/retrieval/symbols.js'), ['web-tree-sitter'], 'B4：symbols.js 的三方导入恰为 web-tree-sitter')
     // ② 粒度声明必须在源码里（审定面纪律：不得只写在文档里）
     const searchText = readFileSync(join(RETRIEVAL_DIR, 'search.js'), 'utf8')
     assert.match(searchText, /正则启发式/, 'S1a-12：必须声明符号面 = 正则启发式')
     assert.match(searchText, /无 AST 精度|无语义作用域/, 'S1a-12：必须声明粒度上限（无 AST 精度）')
+    // ②b B4：降级路径与硬闸门必须在源码里可见（不静默）
+    const symbolsText = readFileSync(join(RETRIEVAL_DIR, 'symbols.js'), 'utf8')
+    assert.match(symbolsText, /EXPECTED_WASM_SHA256/, 'B4：必须固化 vendor wasm 的 sha256 常量')
+    assert.match(symbolsText, /拒载/, 'B4：sha256 不匹配必须拒载（硬闸门）')
+    assert.match(symbolsText, /Language\.load 失败/, 'B4：上游空错误必须自造诊断')
+    assert.match(symbolsText, /降级正则/, 'B4：降级路径必须在源码里声明')
     // ③ AC-36 的判据口径载体：只断「引用 ⊆ 本轮检索集」
     const bundle = createBundle().addFile('src/foo.js')
     assert.doesNotThrow(() => assertPathsWithinBundle(bundle, ['src/foo.js'], 'S1a-12'))
@@ -4424,8 +4459,9 @@ export function testS2Context(t) {
       assert.ok(result.symbolRanges.every((r) => r.file === 'src/foo.js' && r.start >= 1 && r.end >= r.start), '符号区间形状必须合法')
       assert.ok(result.text.includes('#### L2 · 相关文件 · 符号精读'), 'AC-60-L2：输入里必须有 L2 小节')
       assert.ok(result.text.includes('配对测试 test/foo.test.js'), 'AC-60-L2：必须精读配对测试（与 AC-3 的 source↔test 配对同源）')
-      // 符号面口径（无 AST 精度）必须在文本里可见
-      assert.ok(/正则启发式，无 AST 精度/.test(result.text), 'AC-60-L2：粒度上限必须在输入里如实声明')
+      // 符号面口径（粒度上限）必须在文本里可见——B4 起两种合法形态：
+      // ① 正则启发式（引擎未就绪/降级）；② AST（tree-sitter 引擎就绪）。判据仍为「必须如实声明，不静默」。
+      assert.ok(/正则启发式，无 AST 精度|符号面 = AST/.test(result.text), 'AC-60-L2：符号面必须在输入里如实声明（正则启发式 / AST 二选一）')
       // L3：显式「未实现」+ 审定面措辞
       assert.equal(result.l3.implemented, false, 'AC-60：L3 不得声称已实现')
       assert.equal(result.l3.note, L3_NOT_IMPLEMENTED_NOTE)
@@ -6050,5 +6086,247 @@ export function testS3FixBatch(t) {
       rmSync(dir, { recursive: true, force: true })
       rmSync(scratch, { recursive: true, force: true })
     }
+  })
+}
+
+// ── B4（S1b）：tree-sitter 符号级（方案 A1）────────────────────────────────────
+//
+// 判据锚点：B4-1 AC-55 依赖面/许可登记 · B4-2 AST 探针 · B4-3 sha256 拒载必红 ·
+// B4-4 Language.load 空错误自造诊断必红 · B4-5 阳性对照 · B4-6 L2 接线 ·
+// B4-7 collect 符号面 + AC-56 未支持扩展名 · B4-8 AC-36 符号级闭包 · B4-9 零额外依赖。
+//
+// ⚠️ 本段会 warm 进程级符号引擎（AST 就绪）——必须排在所有依赖「未就绪 ⇒ 正则降级」文本的
+// 既有用例之后（S2-16 等），故本套件注册在 advisor 用例链的末尾（testRealDataDirIsolation 之前）。
+
+/** B4 fixture：含 ≥3 个可鉴别符号的 JS 源 + 一个未支持扩展名（.py）源。 */
+function buildB4Fixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-b4-fixture-'))
+  mkdirSync(join(dir, 'src'), { recursive: true })
+  mkdirSync(join(dir, 'test'), { recursive: true })
+  writeFileSync(join(dir, 'src', 'alpha.js'), [
+    '// B4_ALPHA_MARK',
+    'export function alpha(x) {',
+    '  return beta(x)',
+    '}',
+    'export class Gamma {',
+    '  delta() {',
+    '    return epsilon(1)',
+    '  }',
+    '}',
+    '',
+  ].join('\n'))
+  writeFileSync(join(dir, 'test', 'alpha.test.js'), '// B4_TEST_MARK\nimport { alpha } from "../src/alpha.js"\nalpha(1)\n')
+  writeFileSync(join(dir, 'src', 'legacy.py'), 'def legacy_py_fn():\n    return 1\n')
+  return dir
+}
+
+/** 纯内存变异字节（绝不触碰真文件）。 */
+function mutateBytes(bytes, at = 64) {
+  const copy = Uint8Array.from(bytes)
+  copy[at] = copy[at] ^ 0xff
+  return copy
+}
+
+export function testB4Symbols(t) {
+  const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
+  const WASM_PATH = join(REPO_ROOT, 'lib', 'advisor', 'grammars', 'tree-sitter-javascript.wasm')
+
+  // ── B4-1（AC-55）：依赖面恰为 A1 声明集合 + vendor wasm 落盘字节/hash + NOTICES 登记 ──
+  t('B4-1 AC-55：package.json 依赖集合 == A1 声明集合；vendor wasm 字节数/sha256 实测；NOTICES 登记含 sha256', () => {
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'))
+    const deps = pkg.dependencies ?? {}
+    assert.deepEqual(Object.keys(deps).sort(), ['@deepseek-ai/schemastery', 'web-tree-sitter'], `新增依赖集合必须恰为 {web-tree-sitter}（实得 ${JSON.stringify(Object.keys(deps))}）`)
+    assert.equal(deps['web-tree-sitter'], '0.27.0', '必须精确锁定 0.27.0（不用 ^）')
+    assert.equal(deps['node-addon-api'], undefined, 'A1 方案不得引入 node-addon-api')
+    assert.equal(deps['node-gyp-build'], undefined, 'A1 方案不得引入 node-gyp-build（其 install 脚本是唯一真实 blocker）')
+    // vendor wasm：字节数 + sha256 复算（硬闸门常量与落盘字节一致）
+    assert.ok(existsSync(WASM_PATH), `vendor wasm 必须落盘：${WASM_PATH}`)
+    const bytes = readFileSync(WASM_PATH)
+    assert.equal(bytes.length, WASM_EXPECTED_BYTES, `vendor wasm 字节数必须 == ${WASM_EXPECTED_BYTES}`)
+    assert.equal(createHash('sha256').update(bytes).digest('hex').toUpperCase(), EXPECTED_WASM_SHA256, 'vendor wasm sha256 必须等于硬闸门常量')
+    // NOTICES：vendor 脱离 node_modules，不得沿用豁免 ⇒ 必须有显式登记（含 sha256 + 字节数 + two 包名）
+    const notices = readFileSync(join(REPO_ROOT, 'THIRD-PARTY-NOTICES.md'), 'utf8')
+    assert.ok(notices.includes('web-tree-sitter@0.27.0'), 'NOTICES 必须登记 web-tree-sitter@0.27.0')
+    assert.ok(notices.includes('tree-sitter-javascript@0.25.0'), 'NOTICES 必须登记 vendor 的 grammar 来源包')
+    assert.ok(notices.includes(EXPECTED_WASM_SHA256), 'NOTICES 必须登记 vendor wasm 的 sha256')
+    assert.ok(notices.includes('411770'), 'NOTICES 必须登记 vendor wasm 的字节数')
+  })
+
+  // ── B4-2：AST 引擎探针（四类 capture + ≥3 元素输入 + 行列）──
+  t('B4-2 AST 符号抽取：function/class/method/call 四类 capture；≥3 元素输入（5 符号）行号正确；ABI 在 13–15', async () => {
+    const engine = await createSymbolEngine()
+    assert.equal(engine.degraded, false, `真 wasm 必须走 AST 路径（实得 degraded=${engine.degraded} reason=${engine.reason}）`)
+    assert.equal(engine.mode, 'ast')
+    const dir = buildB4Fixture()
+    try {
+      const text = readFileSync(join(dir, 'src', 'alpha.js'), 'utf8')
+      const syms = engine.extract(text, 'src/alpha.js')
+      // 断言鉴别力：≥3 元素输入；四类 kind 齐备（单元素断言分不出「取首个」还是「全抽」）
+      assert.ok(syms.length >= 5, `必须抽出 ≥5 个符号（实得 ${syms.length}：${syms.map((s) => s.kind + ':' + s.name).join(',')}）`)
+      const byKind = (k) => syms.filter((s) => s.kind === k).map((s) => s.name)
+      assert.deepEqual(byKind('function'), ['alpha'], 'function 声明必须抽到 alpha')
+      assert.deepEqual(byKind('class'), ['Gamma'], 'class 声明必须抽到 Gamma')
+      assert.deepEqual(byKind('method'), ['delta'], '方法定义必须抽到 delta')
+      assert.deepEqual(byKind('call').sort(), ['beta', 'epsilon'], '调用表达式必须抽到 beta/epsilon（不是只取首个）')
+      // 行列：alpha 在第 2 行；文件级区间必须落在 1..10 内
+      const alpha = syms.find((s) => s.name === 'alpha' && s.kind === 'function')
+      assert.equal(alpha.start, 2, 'alpha 的起始行必须 == 2（AST 行列精确）')
+      assert.ok(alpha.end >= alpha.start, '区间必须闭合')
+      for (const s of syms) {
+        assert.equal(s.file, 'src/alpha.js')
+        assert.ok(Number.isInteger(s.start) && Number.isInteger(s.end) && s.start >= 1 && s.end >= s.start, `符号区间形状非法：${JSON.stringify(s)}`)
+      }
+      // 注入 .py（未支持扩展名）：AST 不产符号（由调用方显式标注，见 B4-7）
+      assert.equal(isSupportedExtension('src/legacy.py'), false)
+      assert.equal(isSupportedExtension('src/alpha.js'), true)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // ── B4-3（必红①）：sha256 不匹配 ⇒ 拒载 + 降级可见 ──
+  t('B4-3 必红①：wasm 字节变异 ⇒ sha256 拒载（degraded:true + reason 点名 sha256），且降级结果仍是正则面', async () => {
+    const real = readFileSync(WASM_PATH)
+    const corrupted = mutateBytes(real)
+    assert.notEqual(createHash('sha256').update(corrupted).digest('hex').toUpperCase(), EXPECTED_WASM_SHA256, '前置：变异字节必须真的改变 sha256')
+    const engine = await createSymbolEngine({ wasmBytes: corrupted })
+    assert.equal(engine.degraded, true, 'sha256 不匹配必须拒载（degraded）')
+    assert.equal(engine.mode, 'regex')
+    assert.ok(/sha256/.test(engine.reason) && /拒载/.test(engine.reason), `reason 必须点名 sha256 拒载（实得：${engine.reason}）`)
+    // 拒载后仍能给出正则符号（不静默空）
+    const syms = engine.extract('export function zeta() {}\nexport const eta = 1\n', 'x.js')
+    assert.ok(syms.some((s) => s.symbol === 'zeta' && s.kind === 'function'), '降级面必须仍产出正则符号')
+  })
+
+  // ── B4-4（必红②）：sha 过门但 wasm 损坏 ⇒ Language.load 失败 + 自造诊断（上游抛空消息 Error）──
+  t('B4-4 必红②：损坏 wasm（sha 声明自洽）⇒ Language.load 失败，诊断为自造（含字节数/sha 前缀/期望 ABI），非空消息', async () => {
+    const garbage = Uint8Array.from(Buffer.from('not a wasm module at all', 'utf8'))
+    const garbageSha = createHash('sha256').update(garbage).digest('hex').toUpperCase()
+    const engine = await createSymbolEngine({ wasmBytes: garbage, expectedSha256: garbageSha })
+    assert.equal(engine.degraded, true, '损坏 wasm 必须降级（不得崩、不得静默当 AST）')
+    assert.ok(/Language\.load 失败/.test(engine.reason), `诊断必须点名 Language.load 失败（实得：${engine.reason}）`)
+    assert.ok(engine.reason.includes(String(garbage.length)), '诊断必须含实际字节数')
+    assert.ok(engine.reason.includes(garbageSha.slice(0, 16)), '诊断必须含实得 sha 前缀')
+    assert.ok(/ABI/.test(engine.reason), '诊断必须含期望 ABI（上游空错误 ⇒ 诊断自造）')
+  })
+
+  // ── B4-5（阳性对照）：合法 wasm ⇒ AST 就绪（与 B4-3/B4-4 负向配对，证明闸门有牙齿也放行正品）──
+  t('B4-5 阳性对照：合法 vendor wasm ⇒ AST 就绪（degraded:false）；ensureSymbolEngine 缺省路径同源', async () => {
+    const engine = await createSymbolEngine()
+    assert.equal(engine.degraded, false, '正品必须放行（与必红①/② 构成阳性对照）')
+    await ensureSymbolEngine()
+    assert.equal(peekSymbolEngine()?.mode, 'ast', 'warm 之后 peek 必须看到 AST 引擎（L2/collect 的接线依据）')
+  })
+
+  // ── B4-6：L2 接线（symbolRanges 升级为 AST 符号 + 降级态显式标注）──
+  t('B4-6 L2 接线：AST 就绪时 symbolRanges = AST 符号（含 call）且注入文本标「符号面 = AST」；注入降级引擎 ⇒ 标注降级原因', async () => {
+    const dir = buildB4Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await ensureSymbolEngine()
+      const result = buildRepositoryContext({
+        retrieval,
+        messageText: '请检查 src/alpha.js 的实现',
+        focusSource: ['src/alpha.js'],
+        includeGit: false,
+        maxFiles: 1,
+      })
+      assert.equal(result.symbolSource, 'ast', `引擎就绪时符号面必须是 ast（实得 ${result.symbolSource}）`)
+      assert.equal(result.l2.symbolSource, 'ast')
+      assert.equal(result.l2.degraded, false)
+      assert.ok(result.symbolRanges.length >= 5, `L2 必须给出 ≥5 个 AST 符号（实得 ${result.symbolRanges.length}）`)
+      assert.ok(result.symbolRanges.some((r) => r.kind === 'call'), 'AST 符号面必须包含调用表达式（正则启发式给不出）')
+      assert.ok(result.symbolRanges.every((r) => typeof r.name === 'string' && r.name === r.symbol), '符号必须同时给 name 与 symbol（形状兼容 + {name} 约定）')
+      assert.ok(result.text.includes('符号面 = AST'), '注入文本必须如实声明 AST 符号面')
+      // 降级引擎注入 ⇒ 标注必须显式可见（不静默当 AST）
+      const degradedEngine = await createSymbolEngine({ wasmBytes: mutateBytes(readFileSync(WASM_PATH)) })
+      const degraded = buildRepositoryContext({
+        retrieval, messageText: '请检查 src/alpha.js', focusSource: ['src/alpha.js'], includeGit: false, maxFiles: 1,
+        symbolEngine: degradedEngine,
+      })
+      assert.equal(degraded.symbolSource, 'regex')
+      assert.ok(/正则启发式（降级：.*sha256/.test(degraded.text), `降级态必须在注入文本里点名原因（实得含降级标注=${/降级/.test(degraded.text)}）`)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── B4-7：collect 面 symbols 字段（四键不变）+ AC-56 未支持扩展名显式标注 ──
+  t('B4-7 collect 符号面：bundle.symbols ≥5（{file,start,end,name}）；toJSON 仍恰为四键（AC-45 兼容）；.py 显式标注', async () => {
+    const dir = buildB4Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await ensureSymbolEngine()
+      const round = retrieval.collect({ focusSource: ['src/alpha.js'], includeGit: false })
+      assert.equal(round.symbolsSource, 'ast', 'collect 符号面必须标 AST')
+      assert.equal(round.bundle.symbolsSource, 'ast')
+      assert.ok(round.bundle.symbols.length >= 5, `bundle.symbols 必须 ≥5 条（实得 ${round.bundle.symbols.length}）`)
+      for (const s of round.bundle.symbols) {
+        assert.deepEqual(Object.keys(s).sort(), ['end', 'file', 'kind', 'name', 'start'], `符号形状必须含 {file,start,end,name,kind}（实得 ${JSON.stringify(s)}）`)
+      }
+      assert.ok(round.bundle.symbols.some((s) => s.name === 'alpha') && round.bundle.symbols.some((s) => s.name === 'epsilon'), '符号表必须覆盖声明与调用')
+      // AC-45：四键**恰好**不变（symbols/symbolsSource 是活属性，不进 toJSON）
+      assert.deepEqual(Object.keys(round.bundle.toJSON()).sort(), ['bytes', 'files', 'queries', 'ranges'], 'AC-45：toJSON 必须仍恰为四键')
+      assert.ok(round.inputText.includes('## 符号表（AST（tree-sitter）'), '注入文本必须有小节「符号表」并标 AST')
+      // AC-56：未支持扩展名 ⇒ 显式标注（不静默）
+      const py = retrieval.collect({ focusSource: ['src/legacy.py'], includeGit: false })
+      assert.ok(py.inputText.includes('非 JS 源') && py.inputText.includes('AC-56'), `未支持扩展名必须显式标注（实得含「非 JS 源」=${py.inputText.includes('非 JS 源')}）`)
+      assert.equal(py.bundle.symbols.filter((s) => s.file === 'src/legacy.py').length, 0, '未支持扩展名不得给符号（且不得静默——上面已断标注）')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── B4-8：AC-36 升级（note 引用符号 ∈ 本轮符号表；降级态不断言符号级）──
+  t('B4-8 AC-36 升级：AST 态符号级闭包（存在符号通过 / 未知符号必红）；降级态 asserted:false（不断言符号级）', async () => {
+    const dir = buildB4Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await ensureSymbolEngine()
+      const round = retrieval.collect({ focusSource: ['src/alpha.js'], includeGit: false })
+      const bundle = round.bundle
+      // ① AST 态：note 引用的符号必须 ∈ 本轮符号表（≥3 元素输入，防「只取首个」）
+      const ok = checkSymbolRefs(bundle, ['alpha', 'Gamma', 'epsilon'])
+      assert.equal(ok.asserted, true, 'AST 态必须真的做符号级断言')
+      assert.deepEqual(ok.missing, [], `正向：本轮符号表内的符号必须通过（缺：${ok.missing.join(',')}）`)
+      // ② 必红：未知符号必须被点出（不是恒绿空门）
+      const bad = checkSymbolRefs(bundle, ['alpha', 'no_such_symbol_xyz'])
+      assert.deepEqual(bad.missing, ['no_such_symbol_xyz'], '负向：未在符号表中的符号引用必须被点名')
+      // ③ 降级态：不断言符号级（asserted:false）
+      const degraded = await createSymbolEngine({ wasmBytes: mutateBytes(readFileSync(WASM_PATH)) })
+      const degradedRound = retrieval.collect({ focusSource: ['src/alpha.js'], includeGit: false, symbolEngine: degraded })
+      const skipped = checkSymbolRefs(degradedRound.bundle, ['no_such_symbol_xyz'])
+      assert.equal(skipped.asserted, false, '降级态不得断言符号级（避免拿正则面冒充 AST 判据）')
+      assert.deepEqual(skipped.missing, [], '降级态不产出 missing（判据口径：未断言）')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  // ── B4-9：零额外依赖（不装 grammar 包 / 无 install 脚本）+ 重取脚本静态固化 ──
+  t('B4-9 零额外依赖：node_modules 无 tree-sitter-javascript/node-gyp-build；lockfile 无 hasInstallScript；fetch 脚本固化 sha256 + 断言', () => {
+    assert.equal(existsSync(join(REPO_ROOT, 'node_modules', 'tree-sitter-javascript')), false, 'grammar 包不得安装（wasm 走 vendor）')
+    assert.equal(existsSync(join(REPO_ROOT, 'node_modules', 'node-gyp-build')), false, 'node-gyp-build 不得入树（唯一真实 blocker）')
+    const lock = JSON.parse(readFileSync(join(REPO_ROOT, 'package-lock.json'), 'utf8'))
+    const entry = lock.packages?.['node_modules/web-tree-sitter']
+    assert.ok(entry !== undefined, 'lockfile 必须有 web-tree-sitter 条目')
+    assert.equal(entry.version, '0.27.0')
+    assert.equal(entry.hasInstallScript, undefined, 'web-tree-sitter 不得有 install 脚本（装载期零执行）')
+    const script = readFileSync(join(REPO_ROOT, 'scripts', 'fetch-grammar-wasm.mjs'), 'utf8')
+    assert.ok(script.includes(EXPECTED_WASM_SHA256), 'fetch 脚本必须固化 sha256 常量')
+    assert.ok(/EXPECTED_BYTES\s*=\s*411770/.test(script), 'fetch 脚本必须固化字节数常量')
+    assert.ok(/process\.exit\(1\)/.test(script), 'fetch 脚本的 sha256/字节数不匹配必须非零退出（拒写）')
+    assert.ok(/Refusing to write/.test(script), 'fetch 脚本必须显式声明拒写（不静默落盘）')
+    assert.ok(SUPPORTED_EXTENSIONS.includes('.js'), '支持面必须含 .js')
+  })
+
+  // ── B4-10：抽取纯函数面（降级路径独立可测，不依赖 wasm）──
+  t('B4-10 降级正则面独立可测：extractSymbolsRegex 保持 S1a 口径（声明头级、无 AST 精度）', () => {
+    const ranges = extractSymbolsRegex('export function a() {}\nexport const b = 1\nclass C {}\n  m() {}\n', 'x.js')
+    assert.ok(ranges.some((r) => r.symbol === 'a' && r.kind === 'function'))
+    assert.ok(ranges.some((r) => r.symbol === 'b' && r.kind === 'const'))
+    assert.ok(ranges.some((r) => r.kind === 'method'), '正则面仍覆盖方法定义行（降级不等于空）')
+    assert.ok(!ranges.some((r) => r.kind === 'call'), '正则面给不出调用关系（这正是 B4 升级的动机）')
   })
 }
