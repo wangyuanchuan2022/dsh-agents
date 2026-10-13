@@ -1349,6 +1349,9 @@ for (const suite of [
   // （X11/AC-33 两条断言）+ 证据下限（AC-30/31/63）+ 可选字段兼容（AC-43/32）。
   // 位置约束同上：必须排在 testRealDataDirIsolation **之前**。
   advisorTests.testS4Decision,
+  // B2/B3 修复批（code-P1-1/P1-2 + security-P1-1/P1-2 + P2 择要，判据 FX-1…FX-5）。
+  // 位置约束同上：必须排在 testRealDataDirIsolation **之前**。
+  advisorTests.testS3FixBatch,
   // 必须最后：它比对的是「模块加载时的真实用户数据目录快照」与「现在」，
   // 只有排在所有 advisor 用例之后才是真正的收尾断言。
   advisorTests.testRealDataDirIsolation,
