@@ -4298,10 +4298,10 @@ export function testS2Context(t) {
     assert.equal(allowedKeys.length, 15, `AC-53：ALLOWED_KEYS 应是 13 既有 + advisorContextMaxFiles + advisorMaxToolRounds = 15（实得 ${allowedKeys.length}）`)
     const unknownInContract = [...new Set(contractKeys)].filter((k) => !allowedKeys.includes(k))
     assert.deepEqual(unknownInContract, [], 'AC-53④：契约不得声明代码不认识的 advisor 键')
-    // S3 追加：docs/ 不在 S3 写面 ⇒ advisorMaxToolRounds 的契约 §1 条文与 advisorContextMaxFiles
-    // 一样登记 S5 同步（pending 差集 = 两个已登记待同步键，任务书授权范围内）。
+    // S5 收口：docs/ 写面已在 B5 解禁，两新键的契约 §1 条文已落（advisor-contract.md §1）⇒
+    // 待同步差集归零；差集语义不变——仍只允许「已登记批次的新键」（现为空集 = 四处齐）。
     const pending = allowedKeys.filter((k) => !contractKeys.includes(k))
-    assert.deepEqual(pending, [newKey, 'advisorMaxToolRounds'], 'AC-53④：契约 §1 的待同步差集只允许是已登记批次的新键（docs/ 不在本批写面 ⇒ 登记 S5）')
+    assert.deepEqual(pending, [], 'AC-53④：S5 契约同步后待同步差集必须为空（两新键四处齐；再现差集 = 回退或新键未走四处同步）')
     // 负向：未登记键仍抛错（既有行为不得被新键开放策略带坏）
     assert.throws(() => resolveAdvisorConfig({ advisorDefinitelyNotAKey: 1 }), /未知 advisor 配置键/, 'AC-53：未登记键必须仍抛错')
     // 注释无 H-5 四禁区（既有门）+ 新键注释确实在（阳性对照）
@@ -6328,5 +6328,142 @@ export function testB4Symbols(t) {
     assert.ok(ranges.some((r) => r.symbol === 'b' && r.kind === 'const'))
     assert.ok(ranges.some((r) => r.kind === 'method'), '正则面仍覆盖方法定义行（降级不等于空）')
     assert.ok(!ranges.some((r) => r.kind === 'call'), '正则面给不出调用关系（这正是 B4 升级的动机）')
+  })
+}
+
+// ── 22. S5：patchConfig 三段行为等价锁定用例（接缝声明 §4；先于重构落盘跑绿 = 行为基线） ──
+
+/**
+ * 三段（实测行号 @ e6d6809，见 agent-out/v3-s5-seams.md）：
+ *   wasEnabled 判定 :666 / 多会话 runtime 重建循环 :669-678 / seed 条件 :679-682。
+ * 这三段是「搬错一处即静默漂移」的高危面；本组三条用例在**未重构代码上先绿**，
+ * 重构后必须仍然全绿（= 行为等价的机检证据）。
+ */
+export function testS5Closeout(t) {
+  /** 造一个 stepped 会话事件组（step/start + turn/end completed）。 */
+  const turnEvents = (turn, seq) => [
+    { type: 'step/start', data: { turn } },
+    { type: 'turn/end', seq, data: { turn, reason: { kind: 'completed' } } },
+  ]
+
+  t('S5-PC1 wasEnabled 判定：对在跑会话改 provider/model（无 false→true 跳变）绝不 seed 游标（未消费增量必须保留）', async () => {
+    const dir = tempDir('s5pc1')
+    try {
+      const messages = [msg('user', 'PC1 首轮需求'), msg('assistant', 'PC1 首轮完成')]
+      const agent = fakeAgent('s5pc1')
+      agent.session = { id: 's5pc1', deriveMessages: () => messages, ownEvents: () => [] }
+      const { ctx, emit } = fakeCtx()
+      ctx.agents.get = (id) => (id === 's5pc1' ? agent : undefined)
+      const llm = fakeLlm('{"notes":[]}')
+      const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => llm })
+      installed.ctrl.patchConfig('s5pc1', { enabled: true, provider: 'p', model: 'm' })
+      emit('agent/created', { agent })
+      for (const ev of turnEvents('t1', 10)) emit('session/event', agent.session, ev)
+      await installed.ctrl.runtimeOf('s5pc1')?.waitForDrain()
+      assert.equal(llm.calls.length, 1, '阳性对照：开启后首轮恰好评审 1 次（游标推进到 2）')
+
+      // 制造 1 条未消费增量（游标在 2，消息变 3 条），随后改 provider（签名变、enabled 无跳变）
+      messages.push(msg('assistant', 'PC1 重启前的未消费增量'))
+      const before = installed.ctrl.runtimeOf('s5pc1')
+      installed.ctrl.patchConfig('s5pc1', { enabled: true, provider: 'p2', model: 'm' })
+      assert.notEqual(installed.ctrl.runtimeOf('s5pc1'), before, '前置真实性：签名变化确实触发了 runtime 重建（否则本用例测的是空门）')
+
+      for (const ev of turnEvents('t2', 20)) emit('session/event', agent.session, ev)
+      await installed.ctrl.runtimeOf('s5pc1')?.waitForDrain()
+      assert.equal(
+        llm.calls.length, 2,
+        '★wasEnabled 段：无 false→true 跳变的 patch 绝不得 seed 游标——重建后那条未消费增量必须被评审到（搬错成「每次 patch 都 seed」= 增量静默丢失）',
+      )
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('S5-PC2 重建循环：patch A 只重建 A（签名变）且关停即 dispose；B 的 runtime 引用必须原样保持', async () => {
+    const dir = tempDir('s5pc2')
+    try {
+      const { ctx, emit } = fakeCtx()
+      const mk = (id) => {
+        const a = fakeAgent(id)
+        a.session = { id, deriveMessages: () => [msg('user', `${id} 的消息`), msg('assistant', '好')], ownEvents: () => [] }
+        ctx.agents.get = (q) => (q === 's5a' || q === 's5b' ? (q === 's5a' ? agents.a : agents.b) : undefined)
+        return a
+      }
+      const agents = { a: mk('s5a'), b: mk('s5b') }
+      const llm = fakeLlm('{"notes":[]}')
+      const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => llm })
+      installed.ctrl.patchConfig('s5a', { enabled: true, provider: 'p', model: 'm' })
+      installed.ctrl.patchConfig('s5b', { enabled: true, provider: 'q', model: 'n' })
+      emit('agent/created', { agent: agents.a })
+      emit('agent/created', { agent: agents.b })
+      const ra1 = installed.ctrl.runtimeOf('s5a')
+      const rb1 = installed.ctrl.runtimeOf('s5b')
+      assert.ok(ra1 !== undefined && rb1 !== undefined, '前置：两会话 runtime 都已创建')
+
+      // patch A（签名变）：A 重建、B 原样
+      installed.ctrl.patchConfig('s5a', { enabled: true, provider: 'p2', model: 'm' })
+      const ra2 = installed.ctrl.runtimeOf('s5a')
+      assert.notEqual(ra2, ra1, '★重建循环段：A 签名变必须 dispose 旧实例并新建（引用不同）')
+      assert.equal(installed.ctrl.runtimeOf('s5b'), rb1, '★重建循环段：B 签名未变，runtime 引用必须保持同一实例（搬错成「全量重建」在此红）')
+
+      // patch A 关停：dispose 且不重建；B 仍在
+      installed.ctrl.patchConfig('s5a', { enabled: false })
+      assert.equal(installed.ctrl.runtimeOf('s5a'), undefined, '★重建循环段：enabled:false 必须 dispose 且不得重建')
+      assert.equal(installed.ctrl.runtimeOf('s5b'), rb1, '★重建循环段：A 关停不得波及 B（逐会话比较，continue 分支）')
+      installed.dispose()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  t('S5-PC3 seed 条件：全新会话（观察器无状态）开启后首轮必须评审既有消息；对照臂——关停再开启（有状态）才 seed 且跳过积压', async () => {
+    const dir = tempDir('s5pc3')
+    try {
+      // 两臂各自独立桩件：calls 计数是本用例的判别器，共用桩会跨臂累计（首版实测踩中）
+
+      // 臂①：全新会话——patch 时刻观察器从未见过它（hasSessionState=false）⇒ 不得 seed
+      {
+        const llm = fakeLlm('{"notes":[]}')
+        const messages = [msg('user', 'PC3 开启前就存在的消息'), msg('assistant', 'PC3 既有产出')]
+        const agent = fakeAgent('s5fresh')
+        agent.session = { id: 's5fresh', deriveMessages: () => messages, ownEvents: () => [] }
+        const { ctx, emit } = fakeCtx()
+        ctx.agents.get = (id) => (id === 's5fresh' ? agent : undefined)
+        const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => llm })
+        installed.ctrl.patchConfig('s5fresh', { enabled: true, provider: 'p', model: 'm' })
+        emit('agent/created', { agent })
+        for (const ev of turnEvents('t1', 10)) emit('session/event', agent.session, ev)
+        await installed.ctrl.runtimeOf('s5fresh')?.waitForDrain()
+        assert.equal(
+          llm.calls.length, 1,
+          '★seed 条件段：全新会话开启后首轮必须评审既有消息（搬错成「无条件 seed」= 首评被清空，这是 5 条既有用例的语义前提）',
+        )
+        installed.dispose()
+      }
+
+      // 臂②（阳性对照）：关停再开启——观察器已持有状态 ⇒ seed 生效，积压被跳过
+      {
+        const llm = fakeLlm('{"notes":[]}')
+        const messages = [msg('user', 'PC3 臂② 首轮'), msg('assistant', 'PC3 臂② 首轮产出')]
+        const agent = fakeAgent('s5re')
+        agent.session = { id: 's5re', deriveMessages: () => messages, ownEvents: () => [] }
+        const { ctx, emit } = fakeCtx()
+        ctx.agents.get = (id) => (id === 's5re' ? agent : undefined)
+        const installed = installAdvisor(ctx, {}, { dataDir: dir, resolveLlm: () => llm })
+        installed.ctrl.patchConfig('s5re', { enabled: true, provider: 'p', model: 'm' })
+        emit('agent/created', { agent })
+        for (const ev of turnEvents('t1', 10)) emit('session/event', agent.session, ev)
+        await installed.ctrl.runtimeOf('s5re')?.waitForDrain()
+        assert.equal(llm.calls.length, 1, '臂② 前置：首轮评审 1 次，观察器已持有状态（游标=2）')
+
+        installed.ctrl.patchConfig('s5re', { enabled: false })
+        messages.push(msg('assistant', 'PC3 关停期间落盘的积压消息')) // 3 条，未启用期间不进观察器
+        installed.ctrl.patchConfig('s5re', { enabled: true, provider: 'p', model: 'm' }) // false→true + 有状态 ⇒ seed 到 3
+        for (const ev of turnEvents('t2', 20)) emit('session/event', agent.session, ev)
+        await new Promise((r) => setTimeout(r, 10))
+        assert.equal(
+          llm.calls.length, 1,
+          '★seed 条件段对照臂：false→true 跳变 + 观察器有状态 ⇒ 恰好 seed 一次，关停期间积压被跳过（证明 seed 机制真实在位，臂① 的「不 seed」不是「seed 坏了」的假绿）',
+        )
+        installed.dispose()
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 }
