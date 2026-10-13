@@ -2,7 +2,7 @@
 
 > 本文面向**外部评审者**：逐部件说明本仓 125 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 125 文件，本文自身计入；2026-10-09 advisor V3 B1 批次后更新）。
+> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 136 文件，本文自身计入；2026-10-13 advisor V3 B5 收官批次后更新）。
 > 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
 
 ---
@@ -18,7 +18,7 @@
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
 | 确定性工具 | 宿主注册 3 + `tools/` 共 11（机检脚本 8 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 223 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
+| 测试断言 | 主套件 287 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
 | 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -30,12 +30,12 @@
 dsh-agents/
 ├── package.json / package-lock.json   插件清单（dsh.bundle.patch + dsh.client 双半声明）
 ├── cordis.patch.yml                   宿主插件行 + 全部可配项（档位路由基底）
-├── lib/            (28)               插件运行时（三个宿主工具 + 支撑模块 + advisor 子目录 17 件）
+├── lib/            (37)               插件运行时（三个宿主工具 + 支撑模块 + advisor 子目录 26 件）
 ├── personas/       (34)               23 份角色人格 + checklists/ 11 份评审清单
 ├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
 ├── tools/          (11)               独立 CLI 工具与机检脚本（不进宿主运行时）
 ├── tests/          (12)               主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针 + 隔离门/回放设施
-├── docs/           (2)                任务书模板正本 + advisor 契约正本
+├── docs/           (3)                任务书模板正本 + advisor 契约正本 + 开源复用账本
 ├── README.md                          使用向导（安装 / 快速开始 / 配置 / 已知限制）
 ├── ARCHITECTURE.md                    本文
 ├── LICENSE                            MIT（本仓自身代码）
@@ -55,7 +55,7 @@ dsh-agents/
 
 ---
 
-## 2. lib/ — 插件运行时（28 文件 = 顶层 11 + `advisor/` 17）
+## 2. lib/ — 插件运行时（37 文件 = 顶层 11 + `advisor/` 26）
 
 宿主加载入口是 `lib/index.js`；其余模块按职责单一划分。
 
@@ -77,8 +77,9 @@ dsh-agents/
 | `advisor/observer.js` | 每 turn 触发一次的幂等门（宿主真实身份 `(sessionId, turn, seq)`） | 只评审主会话汇总，子会话 step 不可见 |
 | `advisor/runtime.js` | 评审调用、输出预算 16384、终态显式优先级链 | 触顶不投递、记 `runtime.error`，**不降级** info/recorded |
 | `advisor/delivery.js` | 分级意见投递（nit 及以上默认 `agent.steer()` 实时打断） | 绝不回退投递等级 |
-| `advisor/index.js` | 接线：读配置 → 建 store → 挂端点 → 接 observer；旧全局配置文件只停用不迁移 | 未知配置键 fail-loud；空 `advisorDataDir` 抛错 |
-| `advisor/retrieval/`（6） | V3 只读检索地基：`budget.js` 预算唯一源（Base 8KB 与检索段 40KB **并列独立**）· `path-policy.js` 越界/凭据/二进制/超大等 10 类拒绝（junction 用 `realpathSync.native` 防绕过）· `git.js` fd-stdio + 参数白名单 + 最小 env（剔除全部 `GIT_*`）· `walk`/`search`/`index` 遍历检索 | **只读边界源码级门**：写 API 禁令 + 9 条豁免条条活性；预算数字唯一源，测试码写死即红 |
+| `advisor/index.js` | **装配层**（S5 分层重构后）：配置解析 → 启动告警 → store+delivery 所有权 → 组装 assemble/ 四模块 → ctrl（snapshot/patchConfig/triggerReview）→ 端点 → 幂等 dispose；旧全局配置文件只停用不迁移 | 未知配置键 fail-loud；空 `advisorDataDir` 抛错；`runtimeSignature` 三态形态有源码级锁 |
+| `advisor/assemble/`（4） | S5 分层重构（F-4，只移动不改语义）：`session-views.js`（currentModel/isActiveSession/visibleMessageCount 三共享读取闭包 + resolveAdvisorModel 本体）/ `context-hooks.js`（检索面+三层上下文+预筛+工具循环钩子）/ `runtime-pool.js`（runtimes/signatures/runtimeStates 三 Map 独占）/ `wiring.js`（observer + 五段事件接线） | 注入严格单向 `index → 四模块`、四模块互不 import、不 import store.js/api.js、构造期零 IO；闭包环由「delivery/store 所有权上收 + 构造序 pool 先于 wiring」消解（接缝声明 `agent-out/v3-s5-seams.md`） |
+| `advisor/retrieval/`（7） | V3 只读检索地基：`budget.js` 预算唯一源（Base 8KB 与检索段 40KB **并列独立**）· `path-policy.js` 越界/凭据/二进制/超大等 10 类拒绝（junction 用 `realpathSync.native` 防绕过）· `git.js` fd-stdio + 参数白名单 + 最小 env（剔除全部 `GIT_*`）· `symbols.js` 符号抽取（B4：web-tree-sitter AST，降级=正则启发式显式标注）· `walk`/`search`/`index` 遍历检索 | **只读边界源码级门**：写 API 禁令 + 9 条豁免条条活性；预算数字唯一源，测试码写死即红 |
 | `advisor/context/`（4） | V3 三层上下文装配：Conversation / Project（`docs/DECISIONS.md` 决策保护，advisor 只读）/ Repository（L1 文件树+Git+搜索，L2 精读由 `advisorContextMaxFiles` 控制可关） | Base 与 Repository 并列独立互不占用（总注入 ≤48KB）；缺层显式「不可用」不静默 |
 | `advisor/decision/prefilter.js` | V3 规则预筛（分级）：user 消息完整规则 / assistant 只挡整轮纯 ACK / unknown fail-open 放行 | 拦截 = 漏评（代价高于多评一次），故判据收敛为整串 ACK 精确匹配；near-miss 反例入样本集 |
 
@@ -102,11 +103,11 @@ dsh-agents/
 
 4. **与三个工具的关系。** advisor **不是工具、不派活**，也**不会被 `agent_spawn` 触发**——它由 observer 在会话 turn 结束时自行触发；派活侧的三件套（`agent_roles` / `agent_taskbook` / `agent_spawn`）与 advisor 完全正交，会话启用 advisor 与派活互不影响。
 
-### 2.1.1 V3 增量（2026-10-09 B0+B1 关账；修复批 `1fa7317` / `74c2e07`）
+### 2.1.1 V3 增量（B0–B5 全部关账；B1 `1fa7317`/`74c2e07`、B2/B3 修复 `971644e`、B4 `e6d6809`、B5/S5 收官 2026-10-13）
 
 产品定位升级：从「只看聊天挑问题」到「**只读、repository-aware 的独立工程顾问**」——同时读仓库，目标是「更早阻止错误方向，并且自己足够轻」。
 
-**已实现（B0+B1 关账，主套件 223/0 全门绿）：**
+**已实现（B0–B5 关账，主套件 287/0 全门绿）：**
 
 | 增量 | 落点 | 边界与取舍 |
 |---|---|---|
@@ -115,10 +116,14 @@ dsh-agents/
 | 规则预筛 | `decision/prefilter.js` | 按消息来源分级；判据收敛为**整串 ACK 精确匹配**（子串包含会误拦真实工作消息——评审实锤后修正） |
 | 测试基建 | `tests/isolation-gate.mjs` + `tests/advisor-llm-replay.mjs` | 进程边界双快照（防加载期写盘假绿）+ LLM 录制/回放；均已挂进 `npm test` 默认路径 |
 | 安全修复 | `path-policy.js` / `git.js` | junction 绕过 realpath（改 `realpathSync.native`）/ NTFS ADS / 大小写变体 / 8.3 短名 / `GIT_DIR` 环境劫持（最小 env）——均有注入必红 |
+| agentic 循环 + 模型工具面（B2/B3，`8efdfb8`/`971644e`） | `aci/`（3 文件：tools/loop/observation） | 模型自调**只读**检索工具（白名单集合相等断言 + `readOnly:true` 标注）；往返上限 `advisorMaxToolRounds`（缺省 4，0=关）；与预取面共享同一 40KB 检索段池（`BudgetPool.reserve` 唯一放行点）；观察 100 行上限 + 空输出显式文案 |
+| 决策判断层（S4，`887daf6`） | `runtime.js` 提示词 V3 + `delivery.js` 冷却分级 | 职责分界（规则管边界、模型管判断）/ 数据隔离（`<repository-data>`）/ 停止五类（action 字段）/ 结论前置（前 200 字）/ blocker 证据下限（无 evidence 降 concern）；blocker/concern 免冷却直投 steer（X11） |
+| 符号级解析（B4 = S1b，`e6d6809`） | `retrieval/symbols.js` + `grammars/`（vendor wasm） | web-tree-sitter@0.27.0（唯一运行时新依赖，MIT）；vendor `tree-sitter-javascript.wasm` sha256 硬闸门（411770B，拒写不匹配字节）；降级态=正则启发式，经 NOTICES 显式上报 |
+| 分层重构 + 收官（B5/S5，2026-10-13） | `assemble/`（4 文件）+ 契约转现在时 + 复用账本 + 行为验收 | `installAdvisor` 483 行按接缝声明拆为装配层 + 4 模块（只移动不改语义，patchConfig 三段锁定用例先行）；`docs/advisor-contract.md` 转现在时（§1 新键/X11/§6.5/7.2/7.7/§10）；`docs/third-party-references.md`（AC-61）；行为验收 7 例（Case A–D + 黄金 + AC-62 + 台账机检，确定性轨） |
 
 **安全边界（如实声明）**：advisor 的「只读」是**源码纪律层（写 API 禁令门 + 豁免条条活性）+ git 参数白名单 + 最小 env**，**不是运行时权限层**——不覆盖 `process.binding` / native addon / 网络外发。独立安全评审实证的绕过均已修复并配注入必红。
 
-**宿主侧工具面保持为零**：advisor 仍不注册任何 `advisor*` 工具、不占三工具位。「模型工具面」（agentic 循环内模型自调只读检索）为 **B2 批次实施中**内容，完成后本节同步；同轮 tool-call 实时拦截与 L3 AST 精析为 V4/增强批次射程，**未实现**。
+**宿主侧工具面保持为零**：advisor 仍不注册任何 `advisor*` 工具、不占三工具位。「模型工具面」（agentic 循环内模型自调只读检索）**已实现（B2，`aci/`）**；同轮 tool-call 实时拦截与 L3 依赖图/AST 精析为 V4/增强批次射程，**未实现（设计意向，登记 V4/增强批次）**。
 
 ---
 
@@ -207,8 +212,8 @@ dsh-agents/
 
 | 文件 | 职责 | 当前账 |
 |---|---|---|
-| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 | **223 passed / 0 failed** |
-| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛（主套件内的 advisor 分组来源） | 含于 223 |
+| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 | **287 passed / 0 failed** |
+| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 287 |
 | `isolation-gate.mjs` | **进程边界双快照隔离门**：before 快照 → 动态 import 主套件 → after 快照 → 断言相等（防「加载期写盘被烘焙进基线」的假绿）；看门狗强制收口；`--selftest` 必红→必绿 | exit 0；selftest **5/5** |
 | `advisor-llm-replay.mjs` | **LLM 录制/回放设施**：录制端透明 passthrough → 落盘 fixture（不存请求正文）→ 回放逐块深比较；`ADVISOR_REPLAY_MISS`/`UNCONSUMED` 双侧 fail-closed | **9/9** |
 | `skill-sync-check.mjs` | **计数漂移门 + `.gitattributes` 门 + eol 一致性门**：README/ARCHITECTURE 里每处技能计数表述必须等于 `skills/**/SKILL.md` 实测件数；全跟踪文件 worktree==index 行尾一致；零命中 fail-closed + 阳性对照 + `--selftest` | PASS（变异体 **16/16** 达到期望） |
@@ -223,7 +228,7 @@ dsh-agents/
 
 ```bash
 npm install                        # 公开 registry 可装（1 个运行时依赖）
-node tests/run.mjs                 # 223/0
+node tests/run.mjs                 # 287/0
 node tests/isolation-gate.mjs      # 隔离门（进程边界双快照）exit 0
 node tests/advisor-llm-replay.mjs  # 录制/回放闭环 9/9
 node tools/crgate.test.mjs         # 65/0
@@ -250,7 +255,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 | 门 | 账面 |
 |---|---|
-| 主套件 | 223/0 |
+| 主套件 | 287/0 |
 | 隔离门（isolation-gate） | exit 0（selftest 必红→必绿 5/5） |
 | LLM 回放（advisor-llm-replay） | 9/9 |
 | 计数漂移门（skill-sync-check） | PASS（阳性对照 PASS + 变异体 16/16 变红 + eol 一致） |

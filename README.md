@@ -48,7 +48,7 @@ complete task brief — plus 25 workflow skills that orchestrate them end to end
 - **任务书八节结构** + **派活前置三问**（副作用关键词 fail-closed 告警）。
 - **评审/验证席的上下文隔离（两层机制）**——**会话层**：每席都是全新会话，不继承派活方对话历史；**材料层**：`blind` 席（code-reviewer / security-reviewer）不得获得作者自评**与其他席位产出**，`isolated` 席（critic / code-simplifier / verifier）不得获得作者自评；任务书自动写入「上下文隔离契约」，并对下发的材料做**泄漏机检**（命中「我已经实现并验证过」「另一席说没问题」这类文本时 fail-closed 告警并回传 `isolationLeaks`）。
 - **25 件工作流技能**（口径：`skills/` 下 25 个 SKILL.md = 25 个技能目录）：入口 2 + 流水线 4 + 协作 5 + 方法论 13 + 顾问 1。
-- **内置 advisor 顾问是被动机制、无工具面**——每个 turn 后自动评审主会话可见消息，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**，不派活也不会被 `agent_spawn` 触发；模型完全手动指定、无任何兜底。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。
+- **内置 advisor 顾问是被动机制、宿主侧工具面为零**——每个 turn 后自动评审主会话可见消息，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**，不派活也不会被 `agent_spawn` 触发；模型完全手动指定、无任何兜底。V3 已实现 repository-aware 评审：只读检索（文件树/git/搜索 + 符号精读）、agentic 工具循环（模型自调只读检索工具，不占宿主工具位）、决策保护（`docs/DECISIONS.md`）、规则预筛（普通聊天零 token）、停止五类与 blocker 证据下限。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。
 - **11 份评审清单**按扩展名/专项路由（go / ts / python / kotlin / rust / csharp / cpp / sql / pytorch / a11y / performance）。
 - **两个确定性机检工具**：`crgate`（评审证据链 freeze/anchor/finalize）与 `publish-scan`（发布前脱敏六类扫描 + 三值裁定）。
 - **配置错就报错**——未知档位、未知角色、半个路由、非法 `clarifyMode` 一律抛错，不静默兜底。
@@ -179,7 +179,7 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 
 | 技能 | 作用 |
 |---|---|
-| `advisor` | 用「该会话手动指定的模型」只读主会话可见消息、独立上下文，给主 agent 分级建议（info / nit / concern / blocker）；nit 及以上默认走 steer 实时打断指导。**被动机制、无工具面**，不派活。启用与配置经会话头部动作区的 Advisor 面板与 `/plugins/dsh-agents/advisor` 端点，**不是**经 `agent_spawn` 派活。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。 |
+| `advisor` | 用「该会话手动指定的模型」只读主会话可见消息、独立上下文，给主 agent 分级建议（info / nit / concern / blocker）；nit 及以上默认走 steer 实时打断指导（blocker/concern 免冷却直投）。**被动机制、宿主侧工具面为零**，不派活。V3 起带 repository-aware 评审（只读检索 + agentic 循环 + 决策保护，普通聊天零 token）。启用与配置经会话头部动作区的 Advisor 面板与 `/plugins/dsh-agents/advisor` 端点，**不是**经 `agent_spawn` 派活。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。 |
 
 安装：把需要的技能目录复制到 DSH 技能库（`~/.agents/skills` 或 `~/.dsh/skills`）即可被会话按 description 触发。
 
@@ -239,7 +239,7 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 ## 测试
 
 ```bash
-node tests/run.mjs                    # 主测试（170 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor + 浏览器半/manifest 门
+node tests/run.mjs                    # 主测试（287 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门
 node tools/crgate.test.mjs            # 65 断言
 node tools/publish-scan.test.mjs      # 47 断言
 node tests/skill-sync-check.mjs       # 计数漂移门 + .gitattributes 门（文档里的技能件数必须等于磁盘实测）
@@ -272,12 +272,13 @@ dsh-agents/
     settings-compat.js     宿主 settings 服务版本差异的兼容层
     http-config.js         设置卡数据端点
     client.js              浏览器半：设置卡
-    advisor/               (6) advisor 顾问：store/api/observer/runtime/delivery/index
+    advisor/               (26) advisor 顾问：顶层 6（store/api/observer/runtime/delivery/index）+ assemble/ 4（S5 分层：session-views/context-hooks/runtime-pool/wiring）+ retrieval/ 7（只读检索+git+符号）+ context/ 4（三层装配）+ aci/ 3（agentic 工具循环）+ decision/ 1（规则预筛）+ grammars/ 1（vendor wasm）
   personas/                23 份人格正文（19 OMC + 4 ECC 系）
   personas/checklists/     11 份评审清单（语言 7 + 专项 4，按扩展名/专项路由）
   skills/                  25 件工作流技能（源副本；25 个 SKILL.md = 25 个技能目录）
   docs/task-brief-v3.md    任务书模板正本
   docs/advisor-contract.md advisor 契约正本（详设）
+  docs/third-party-references.md 开源复用账本（AC-61：Aider / SWE-agent / OpenHands 三源六字段）
   tools/                   crgate / publish-scan / install-personas / assemble-review
   tests/                   run.mjs + 宿主校验、烟测与探针
   .gitattributes           `* -text`：禁用换行转换，保住「git 干净 = 字节还原」

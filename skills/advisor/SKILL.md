@@ -21,8 +21,8 @@ advisor = **每个 turn 结束后自动调一个模型，给主会话「把控�
 | 维度 | advisor（本技能） | 三个派活工具（`agent_roles` / `agent_taskbook` / `agent_spawn`） |
 |---|---|---|
 | 出现方式 | **自己按节拍出现**：turn 结束即评审 | **被叫来干活**：先查角色、审任务书、再派 |
-| 是不是工具 | **不是工具**。全仓 `tools.register` 只有三处，正是上面那三个（`lib/index.js:805-807`） | 就是工具 |
-| 有无工具面 | **无**——不占这三个工具位，也**不设任何 `advisor*` 工具** | 工具面本体 |
+| 是不是工具 | **不是工具**。全仓 `tools.register` 只有三处，正是上面那三个（`lib/index.js` 工具注册段的 `agent_roles` / `agent_taskbook` / `agent_spawn`） | 就是工具 |
+| 有无工具面 | **宿主侧工具面为零**——不占这三个工具位，也**不设任何 `advisor*` 工具**（advisor 内部的评审模型可持有**只读检索工具**做仓库分析——S3 agentic 循环；不占宿主工具位） | 工具面本体 |
 | 上下文 | 自己的持续会话，**继承主会话零上下文** | 靠任务书注入上下文 |
 | 产出落点 | 分级建议，以**用户指令口吻**进入主会话（nit 及以上默认 `steer` 实时打断） | sub agent 的产物按任务书交付 |
 
@@ -30,7 +30,7 @@ advisor = **每个 turn 结束后自动调一个模型，给主会话「把控�
 
 ## 2. 怎么用（走面板，不设工具）
 
-**没有 `advisor*` 工具**，唯一入口是 Advisor 面板（挂 `conversation.session.header.actions` 槽位，`lib/client.js:727-734`）：
+**没有 `advisor*` 工具**，唯一入口是 Advisor 面板（挂 `conversation.session.header.actions` 槽位，`lib/client.js` 的 advisor slot 注册——id `dsh-agents-advisor`）：
 
 1. **开面板**：目标会话的**会话头部动作区**有个 Advisor 胶囊（可拖动、位置持久化），点它打开右侧停靠面板。
 2. **选模型**（先做这步）：面板「评审模型」区选 `provider` 与 `model` → 点「保存模型」。
@@ -38,7 +38,7 @@ advisor = **每个 turn 结束后自动调一个模型，给主会话「把控�
 3. **启用**：勾选「**为本会话启用**」。
 4. （可选）「**立即评审一次**」不等下一轮，直接补一次评审。
 
-顺序不能反：**「为本会话启用」复选框在未选模型时是禁用的**（tooltip：「请先在下方为本会话选择评审模型（开启必须同时指定模型）」，`lib/client.js:450`）。先勾启用再补模型，第一发会被服务端 400 挡回。
+顺序不能反：**「为本会话启用」复选框在未选模型时是禁用的**（tooltip：「请先在下方为本会话选择评审模型（开启必须同时指定模型）」，`lib/client.js` 的启用复选框禁用逻辑，tooltip 文案即锚）。先勾启用再补模型，第一发会被服务端 400 挡回。
 
 面板上还能看到：运行状态（`disabled/idle/reviewing/error`）、队列长度、上次评审时间、按严重度排的评审记录。
 
@@ -46,14 +46,14 @@ advisor = **每个 turn 结束后自动调一个模型，给主会话「把控�
 
 ### 3.1 模型完全手动指定、无任何兜底
 
-- 只认**该会话自己**配置文件里的 `provider` / `model`（`lib/advisor/index.js:193-206`）。
+- 只认**该会话自己**配置文件里的 `provider` / `model`（`resolveAdvisorModel`，`lib/advisor/assemble/session-views.js`——S5 起 `index.js` 只 re-export）。
 - **不回落 HIGH 档、不读全局配置、不继承主会话模型**。`resolveAdvisorModel` 历史上第二个入参就是 HIGH 档路由提供者，**现已彻底移除**。
 - **不指定 = 该会话不评审**：端点以 `modelSource:'unset'` 如实说明，`runtime.status='error'`。
 - 硬门禁在运行时也成立：未指定模型时 `ensureRuntime` 直接返回 `undefined`，**绝不调模型**。
 
 ### 3.2 `advisorEnabled` / `advisorProvider` / `advisorModel` 是废弃兼容键
 
-三者的准确措辞是 **deprecated / compatibility-only / does not affect runtime behavior**（`lib/advisor/index.js:83`）。
+三者的准确措辞是 **deprecated / compatibility-only / does not affect runtime behavior**（`lib/advisor/index.js` 的 `DEPRECATED_ADVISOR_KEYS` 常量注释）。
 
 - **不要去改 `cordis.patch.yml` 里这三个键**——它们**必须继续留在 `ALLOWED_KEYS`**：`cordis.patch.yml` 随包默认带着它们，删掉成员会让「老配置里还在的键」触发「未知 advisor 配置键」而**整个插件 boot 失败**。
 - 现在只被**解析**（保兼容，且绝不抛错）与**一次性告警**（条件：键存在且值与随包默认 `false`/`null`/`null` 不同），**不参与任何生效判定**。
@@ -61,10 +61,10 @@ advisor = **每个 turn 结束后自动调一个模型，给主会话「把控�
 
 ### 3.3 每会话独立配置，落在自己的文件里
 
-- 落盘路径：`<dataDir>/sessions/<base64url(sessionId)>.json`，只落 `enabled` / `provider` / `model` 三键（`lib/advisor/store.js:64-67`）。
+- 落盘路径：`<dataDir>/sessions/<base64url(sessionId)>.json`，只落 `SESSION_CONFIG_KEYS` 声明的键（`lib/advisor/store.js`；现含 `enabled` / `provider` / `model` / `projectPhase`）。
 - 分文件而不是共用一个 `config.json`：多个会话可同时改配置，共用单文件要做「读-改-写」，A 读 B 写 A 写就会丢更新。
 - **不扩展宿主 settings schema**，不进 `cordis.patch.yml`，也不进宿主 settings；重启后仍生效。
-- 写入走「读—判—写全程同步」的临界区（Node 单线程天然串行）；`enabled:true` 必须同时具备 `provider` 与 `model`，否则 **400、零写盘**（U2 成对规则，`lib/advisor/store.js:142-149`）。
+- 写入走「读—判—写全程同步」的临界区（Node 单线程天然串行）；`enabled:true` 必须同时具备 `provider` 与 `model`，否则 **400、零写盘**（U2 成对规则，`lib/advisor/store.js` 的 `writeSessionConfig`）。
 - 幂等 seen 集合另存 `sessions/<b64>.seen.json`，**独立文件**，不与配置争同一 inode。
 - `dataDir` 默认锚在 `~/.dsh/plugins-data/dsh-agents/advisor`（**不随宿主 cwd 漂移**）。
 - 旧版全局 `<dataDir>/config.json`：**存在即忽略**（不读、不迁移、不删除），但每次启动打一次告警——「我明明开了却没生效」多半就是它。
@@ -73,9 +73,9 @@ advisor = **每个 turn 结束后自动调一个模型，给主会话「把控�
 
 | # | 边界 | 事实与依据 | 后果 |
 |---|---|---|---|
-| 1 | **`sessionId` 校验是 liveness check, not authorization** | 宿主 `WebRoute` 只有 `kind`/`path`/`handler`，**没有鉴权钩子**，handler 拿的是裸 `IncomingMessage`；宿主自述原文「Ambient presence is neither liveness proof nor authorization」（`lib/advisor/index.js:343-350`） | 能关闭：不存在/已 dispose 的 sessionId → `404`，PATCH 零写盘、GET 响应体零泄露。**关闭不了（同根因 liveness≠authz 的三件暴露面）**：**写**——同机另一页面修改他人活跃会话的 advisor 配置（PATCH）；**读**——GET 他人活跃会话的全部评审记录正文与 runtime 状态（records 按会话过滤只是展示口径、过滤≠鉴权，`runtime.error` 还携带模型原文片段）；**触发**——POST `review` 烧他人会话的评审额度（`busy` 门只防同一时刻堆叠、不防持续触发，等空闲后再 POST 即可连环消耗）——该残余风险（三面）用户已知情接受，靠当前宿主能力无法关闭 |
-| 2 | **「恰好一次」实为「至多一次」** | 幂等键与水位的消耗发生在**渲染之前**；无可渲染增量的 turn（典型：模型只发工具调用、结果 role=`tool` 被 user/assistant 白名单滤掉）被键 + 水位**双杀**（`lib/advisor/observer.js:385`、`:393` 直接 return） | 该 turn **永久不评**——事后补上可见内容再重放同一 turn，实测仍 0 次。需要补评走面板「立即评审一次」 |
-| 3 | **agentic 分支跨重启会对整段历史补评一次（重复计费）** | agentic 路径（从不发 `turn/end` 的会话）**不碰 seen**（它没有 turn 边界可依，`lib/advisor/observer.js:263-277` 无持久化调用），幂等**只**靠内存游标；重启后游标归零 | **每重启一次，下一次人类输入就对整段历史补评一次** |
+| 1 | **`sessionId` 校验是 liveness check, not authorization** | 宿主 `WebRoute` 只有 `kind`/`path`/`handler`，**没有鉴权钩子**，handler 拿的是裸 `IncomingMessage`；宿主自述原文「Ambient presence is neither liveness proof nor authorization」（`lib/advisor/assemble/session-views.js` 的 `isActiveSession` 注释，宿主原文在 dsh-agent 的 `lib/types/index.d.ts`） | 能关闭：不存在/已 dispose 的 sessionId → `404`，PATCH 零写盘、GET 响应体零泄露。**关闭不了（同根因 liveness≠authz 的三件暴露面）**：**写**——同机另一页面修改他人活跃会话的 advisor 配置（PATCH）；**读**——GET 他人活跃会话的全部评审记录正文与 runtime 状态（records 按会话过滤只是展示口径、过滤≠鉴权，`runtime.error` 还携带模型原文片段）；**触发**——POST `review` 烧他人会话的评审额度（`busy` 门只防同一时刻堆叠、不防持续触发，等空闲后再 POST 即可连环消耗）——该残余风险（三面）用户已知情接受，靠当前宿主能力无法关闭 |
+| 2 | **「恰好一次」实为「至多一次」** | 幂等键与水位的消耗发生在**渲染之前**；无可渲染增量的 turn（典型：模型只发工具调用、结果 role=`tool` 被 user/assistant 白名单滤掉）被键 + 水位**双杀**（`lib/advisor/observer.js` 的 `renderAndEmit` 游标比较处直接 return） | 该 turn **永久不评**——事后补上可见内容再重放同一 turn，实测仍 0 次。需要补评走面板「立即评审一次」 |
+| 3 | **agentic 分支跨重启会对整段历史补评一次（重复计费）** | agentic 路径（从不发 `turn/end` 的会话）**不碰 seen**（它没有 turn 边界可依，`lib/advisor/observer.js` 的 `handleEvent` agentic 分支无持久化调用），幂等**只**靠内存游标；重启后游标归零 | **每重启一次，下一次人类输入就对整段历史补评一次** |
 | 4 | **只评审主会话汇总，子会话内部 step 不可见** | 数据源封闭：只调当前会话 `deriveMessages()`，无子会话展开路径；子会话产出回父会话是 `tool/result`（role=`tool`），被 user/assistant 白名单直接滤掉（契约 6.2） | 父会话评审看到的是**父会话 assistant 自己的汇总文本**；子会话要评审得单独给子会话开 advisor |
 | 5 | **窗口淘汰后的二次评审边界** | 键出 M 窗口（M=`SEEN_WINDOW_SIZE`=256）后，宿主若把旧 turn **整组**重投且 seq 已抬高水位，会作为新键再评审一次 | M 窗口 + 水位设计的**固有边界**，非实现缺陷；对侧取舍是宁可漏评不重复计费 |
 | 6 | **多实例共享同一 `advisorDataDir` 不在支持范围** | 存储侧的「临界区全同步」是**进程内**串行，跨进程不成立 | 多实例部署需各自指定独立 `advisorDataDir` |
@@ -85,9 +85,16 @@ advisor = **每个 turn 结束后自动调一个模型，给主会话「把控�
 - **与 memory-evolve 的 advisor 语义重叠**（它也是只读快照自动评审）。**两套不同时开**——同回合会被评两次、token 翻倍、右侧两个面板撞车。
 - **触发上限不投递、不降级**：触顶（`max-tokens`）或终态不可信时一律不投递，记 `runtime.status='error'` 并落一条记录，**绝不降级成 info/recorded**——被截断的评审意见基于不完整判断，危险的 blocker 比没有更危险。
 
+### 4.1 V3 能力面（B1–B5 已实现，2026-10）
+
+- **agentic 检索（S1a/S3）**：普通聊天**零检索零子进程**（AC-62 把门）——只有代码相关输入才做仓库分析：L1 文件树 + git 事实 + 搜索；L2「相关文件 · 符号精读」按 `advisorContextMaxFiles`（缺省 4，**0=关闭**）精读源文件（符号面 = web-tree-sitter AST，降级态为正则启发式且显式标注）。agentic 工具循环受 `advisorMaxToolRounds`（缺省 4，**0=关闭**）约束，与预取面共享同一 40KB 检索段池。只读边界 = 工具白名单 + git 参数白名单 + 最小 env，**不是运行时权限层**（契约 §10.1）。
+- **决策漂移（AC-24/37）**：评审输入含仓库 `docs/DECISIONS.md` 的决策条目（来源唯一声明，只有 `context/decisions.js` 读它）；动作违反既有决策可报 `blocker`（须带证据，见下条）。
+- **停止五类 + 证据下限（AC-58/63）**：note 可带 `action`（`stop-direction` / `no-new-abstraction` / `no-premature-impl` / `verify-assumption` / `reuse-existing`）；**无 `evidence` 的 blocker 一律被规则层降为 `concern`**（要报 blocker 必须给出证据文件/决策 ID 与 `confidence ≥ 0.7`）。
+- **冷却分级（X11）**：`blocker`/`concern` **免冷却直投 steer**；nit 冷却窗口内降级 inject；info 只记录。
+
 ## 5. 成本口径与何时不该开
 
-- **单轮输入 ≈8.5K tokens 起步**（口径：`lib/advisor/runtime.js:33` 记录的量级估算「单轮 input≈8.5K + output 封顶 ≈16K ≈ 25K tokens」；随对话变长与配置 `advisorMaxMessages` 变化，**这是量级不是精确值**）。
+- **单轮输入 ≈8.5K tokens 起步**（口径：`lib/advisor/runtime.js` 的 `ADVISOR_MAX_TOKENS` 常量附近成本量级注释「单轮 input≈8.5K + output 封顶 ≈16K ≈ 25K tokens」；随对话变长与配置 `advisorMaxMessages` 变化，**这是量级不是精确值**）。
 - 输出预算 `ADVISOR_MAX_TOKENS = 16384`，**抬高预算不对冲输入窗口**（`advisorMaxMessages` 保持 60），首轮最坏 ≈25K tokens——用户知情接受。
 - **成本随 turn 数先线性涨、到预算后封顶**：评审员是持续会话，跨回合累积，每次评审重放**有界**历史（字符预算 `ADVISOR_CONVERSATION_MAX_CHARS`，超预算丢最旧——2026-10-06 P1-3 修复；此前无截断累积会让长会话撞模型上下文上限后**永久 error 停摆**）+ 本轮增量。
 - **据此的开关判据**：不需要「每轮都要有人把关」的轻量任务**不要开**——每轮一次模型调用就是一份起步成本，而这类任务主会话自己就做得完。需要把关的场合（大改造、多轮长跑、方向容易跑偏的活）才值得。
