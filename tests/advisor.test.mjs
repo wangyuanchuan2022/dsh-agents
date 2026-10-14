@@ -1297,6 +1297,23 @@ export function testRuntime(t) {
     }
   })
 
+  t('S4-D11b/[upstream-error]：对象型错误 finish（429 配额）→ failed + 真因上浮（不再伪装「正文为空」）', async () => {
+    // 2026-10-13 zai 路由实测：429 配额耗尽时 dsh-llm 产出对象型 finish reason
+    // {kind:'error',failure:{code,message}}，旧字符串判据把它吞掉 ⇒ 误分类「正文为空」，
+    // 真实原因（含配额重置时间）被掩埋。修复后真因必须直达 runtime.error。
+    const r = await driveReview([
+      { type: 'usage', usage: { outputTokens: 0 } },
+      { type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMIT', message: '429: 您已达到每周/每月使用上限，您的限额将在 2026-10-14 16:28:02 重置。' } } },
+    ])
+    assert.equal(r.delivered.length, 0, '错误 finish 不得投递')
+    assert.equal(r.runtime.status, 'error')
+    assert.match(r.runtime.error, /finishReason=error/, '对象型归一化后走 failed 分类')
+    assert.match(r.runtime.error, /429/, '★真因（429）必须上浮——此前被吞成「正文为空」')
+    assert.match(r.runtime.error, /RATE_LIMIT/, '★错误码可达用户（诊断时一眼定位配额类）')
+    assert.match(r.runtime.error, /重置/, '★重置时间等操作信息可达用户')
+    assert.doesNotMatch(r.runtime.error, /正文为空/, '★不得再被 empty 判定掩盖真因')
+  })
+
   t('S4-D2/D3/N14：stop + 恰好触顶 → inconsistent 不投递；stop + 差一个 token → 正常投递', async () => {
     const capped = await driveReview([
       { type: 'text-delta', text: NOTE },
