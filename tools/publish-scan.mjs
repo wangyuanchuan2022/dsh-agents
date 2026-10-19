@@ -202,7 +202,7 @@ export function resolveLocalUser() {
 }
 
 /** 掩码：报告自身不落明文（sanitizer:191 永不全量显示）。短匹配只留前 3 字符——
- *  防止掩码文本本身（如 ycwan...）在后续重扫时再次命中规则（v1.0.3）。 */
+ *  防止掩码文本本身（如 <user>...）在后续重扫时再次命中规则（v1.0.3）。 */
 function maskMatch(m) {
   if (m.length <= 6) return m.slice(0, 3) + '...';
   return m.slice(0, 6) + '...';

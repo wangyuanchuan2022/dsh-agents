@@ -283,7 +283,7 @@ export function testConfig(t) {
 
 // ── 1b. 数据目录锚定 + 冒烟隔离（2026-10-03 防复发回归门）─────────────────
 // 事故：早先用 join(process.cwd(), '.dsh-agents', 'advisor')，DSH 进程 cwd 是
-// C:\Users\ycwan → 数据落到用户主目录；且冒烟测试直写真实目录，遗留 config.json
+// C:\Users\<user> → 数据落到用户主目录；且冒烟测试直写真实目录，遗留 config.json
 // 把评审默认打开、把模型指到 MEDIUM 档，制造了「默认值偏离」的假象。
 // 回归锁三条：路径锚定、源码级禁 cwd、构造期物理隔离。
 
