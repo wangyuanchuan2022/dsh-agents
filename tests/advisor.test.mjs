@@ -3729,7 +3729,7 @@ export function testS1aRetrieval(t) {
 import {
   buildContext, renderContextSection, renderUnavailableContext, describeBudgetRelation,
   BUDGET_RELATION, BUDGET_RELATION_STATEMENT, trimToBudget, BASE_TITLE, REPOSITORY_TITLE,
-  UNAVAILABLE_MARK as CTX_UNAVAILABLE,
+  UNAVAILABLE_MARK as CTX_UNAVAILABLE, buildBaseContext, BASE_ANCHORS,
 } from '../lib/advisor/context/build.js'
 import {
   loadDecisions, parseDecisions, renderDecisions, DECISIONS_REL_PATH, DECISION_FIELDS,
@@ -5774,12 +5774,13 @@ export function testS4Decision(t) {
         { severity: 'nit', text: userMsg }, // 整体回显
         { severity: 'info', text: '评审意见：加载链路已核，建议补一条端到端证据' }, // 真意见
       ],
-      [userMsg],
+      [{ label: '本轮增量', text: userMsg }],
     )
     assert.equal(res.notes.length, 1, '★E-1：回显意见必须被丢弃')
     assert.equal(res.notes[0].text, '评审意见：加载链路已核，建议补一条端到端证据', '真意见必须原样保留')
     assert.equal(res.warnings.length, 1, '丢弃必须留痕（warning，落 records 可审计）')
     assert.match(res.warnings[0], /回显/)
+    assert.match(res.warnings[0], /匹配源=本轮增量/, '★E-1：留痕必须带匹配源标签（误杀可核查口径）')
     assert.match(res.warnings[0], /severity=nit/, 'warning 必须点名被丢意见的 severity')
   })
 
@@ -5820,6 +5821,51 @@ export function testS4Decision(t) {
     const res2 = filterEchoNotes([], ['x'])
     assert.equal(res2.notes.length, 0)
     assert.equal(res2.warnings.length, 0)
+  })
+
+  // ── E-2（a+b 组合，2026-10-19）：Base 8KB 优先级裁剪 + fail-loud ──
+  const e2Entry = { id: 'D-E2', state: 'active', klass: '不可违反约束', text: 'E2决策保护标记文本：服务层禁止引入新框架', reason: 'r', rejected: '-', phase: 'V3' }
+  const E2_DECISIONS = {
+    available: true,
+    relPath: 'docs/DECISIONS.md',
+    entries: [e2Entry],
+    byClass: { '不可违反约束': [e2Entry] },
+    errors: [],
+  }
+
+  t('E-2a（定向负向自测）：prompt 撑过 8KB ⇒ 被裁的是 prompt 尾部/项目段，决策保护段必须完好', () => {
+    const bigPrompt = '你是顾问。' + '填充内容用于撑爆基础上下文预算的正文。'.repeat(300) + 'E2PROMPT尾部哨兵'
+    const bigProject = { available: true, text: '### 项目状态\n' + 'E2项目段哨兵填充。'.repeat(300) }
+    const base = buildBaseContext({ systemPrompt: bigPrompt, decisions: E2_DECISIONS, project: bigProject })
+    assert.ok(base.bytes <= BASE_CONTEXT_BYTES, `★E-2a：硬上限不得突破（实得 ${base.bytes}）`)
+    assert.ok(base.text.includes('E2决策保护标记文本'), '★E-2a：决策保护段必须完好（最后才可动）')
+    assert.ok(!base.text.includes('E2PROMPT尾部哨兵'), '★E-2a：prompt 尾部必须最先被裁')
+    assert.ok(base.trimmed, 'E-2a：trimmed 必须为真')
+    assert.ok(
+      base.unresolved.some((u) => /系统提示/.test(u)) || base.unresolved.some((u) => /项目状态/.test(u)),
+      `★E-2a：被裁块必须落 unresolved 留痕（实得 ${JSON.stringify(base.unresolved)}）`,
+    )
+  })
+
+  t('E-2b（fail-loud）：裁剪必须两处可见——文本尾部 HTML 注释（进模型输入）+ unresolved 数组', () => {
+    const bigPrompt = '提示词正文。'.repeat(2000)
+    const base = buildBaseContext({ systemPrompt: bigPrompt, decisions: E2_DECISIONS, project: { available: true, text: '### 项目状态\n分支：master' } })
+    assert.match(base.text, /<!-- advisor 基础上下文超预算裁剪（E-2）：.+ -->/, '★E-2b：文本内注释留痕（capture 可见）')
+    assert.ok(base.unresolved.some((u) => /基础上下文裁剪（E-2）/.test(u)), '★E-2b：unresolved 数组留痕（runtime/面板可读）')
+    assert.ok(base.droppedBytes > 0, 'E-2b：droppedBytes 必须如实计量')
+  })
+
+  t('E-2c：预算充裕时零裁剪——行为与旧实现一致（防优先级逻辑误伤常态路径）', () => {
+    const base = buildBaseContext({
+      systemPrompt: '短提示词',
+      decisions: E2_DECISIONS,
+      project: { available: true, text: '### 项目状态\n分支：master' },
+    })
+    assert.equal(base.trimmed, false, '常态路径不得触发裁剪')
+    assert.equal(base.unresolved.filter((u) => /E-2/.test(u)).length, 0)
+    assert.ok(base.text.includes('E2决策保护标记文本'))
+    assert.ok(base.text.includes('分支：master'))
+    assert.ok(base.text.includes('短提示词'))
   })
 
   // ── S4-6（AC-43 新字段解析兼容 + AC-32 投递面无 confidence）──
