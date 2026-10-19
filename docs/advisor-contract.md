@@ -311,7 +311,12 @@ agent 注册表：`agent/created` 时 `agents.set(agent.id, agent)`（`agent.id 
 
 - **不剥围栏、不做括号配对提取**——解析失败就大声报错（记 `runtime.status='error'` + 落一条 error 记录 + 写日志）。
   半吊子容错会把「模型没按契约输出」伪装成「评审没有意见」。
-- 空 `text` 的意见**丢弃**（非解析失败）；未知 `severity` 归一为 `nit`。
+- 空 `text` 的意见**丢弃**（非解析失败）；未知 `severity` **丢弃该条 + warning 留痕**（P2-2 fail-loud，
+  `runtime.js` `parseReviewOutput`；本行 2026-10-19 订正——原文「归一为 nit」与实现不符）。
+- **回显闸（E-1，2026-10-19 新增）**：意见与**用户可见消息**（本轮增量 + 持续会话 user 侧历史）在空白归一化后
+  **整体相等**、或意见 ≥40 字且被某条消息**连续包含** ⇒ **丢弃该条 + warning 留痕**（落 `outcome='dropped'`
+  记录，与「评审过」在数据面可区分）。改写转述不是回显，不拦。实证背景：评审模型偶发把用户消息原文当
+  意见复述，与真实意见同批并存，污染「评审产出有效」判据（`runtime.js` `filterEchoNotes`）。
 - 单轮最多 `advisorMaxMessages` 条可见消息入窗；评审员持续会话按消息粒度追加，但**字符预算有界**
   （`ADVISOR_CONVERSATION_MAX_CHARS`，超预算丢最旧——2026-10-06 P1-3：无界累积会让长会话在
   模型上下文上限处**永久 error 停摆**），上下文**只属于 advisor**。

@@ -29,7 +29,7 @@ import {
   resolveAdvisorDataDir, DEFAULT_ADVISOR_DATA_DIR, ADVISOR_DATA_DIR_ENV, ADVISOR_TRACE_ENV,
 } from '../lib/advisor/index.js'
 import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, renderVisibleSurface, SEEN_WINDOW_SIZE } from '../lib/advisor/observer.js'
-import { AdvisorRuntime, parseReviewOutput, AdvisorConversation, classifyCompletion, ADVISOR_MAX_TOKENS, ADVISOR_FINISH_KINDS, ADVISOR_CONVERSATION_MAX_CHARS, DEFAULT_ADVISOR_SYSTEM_PROMPT, enforceEvidenceFloor, ADVISOR_MIN_BLOCKER_CONFIDENCE } from '../lib/advisor/runtime.js'
+import { AdvisorRuntime, parseReviewOutput, AdvisorConversation, classifyCompletion, ADVISOR_MAX_TOKENS, ADVISOR_FINISH_KINDS, ADVISOR_CONVERSATION_MAX_CHARS, DEFAULT_ADVISOR_SYSTEM_PROMPT, enforceEvidenceFloor, ADVISOR_MIN_BLOCKER_CONFIDENCE, filterEchoNotes, ADVISOR_ECHO_MIN_CONTAIN_CHARS } from '../lib/advisor/runtime.js'
 import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage, ADVISOR_COOLDOWN_EXEMPT } from '../lib/advisor/delivery.js'
 import { AdvisorStore, normalizeRecord, sessionConfigPath, sessionSeenPath, CONFIG_FILE } from '../lib/advisor/store.js'
 import { createAdvisorHandler, normalizeAdvisorPatch, normalizeSessionId, SESSION_ID_MAX } from '../lib/advisor/api.js'
@@ -5765,6 +5765,63 @@ export function testS4Decision(t) {
     assert.deepEqual(mixed.map((n) => n.severity), ['concern', 'concern', 'blocker'])
   })
 
+  // ── E-1 回显闸（2026-10-19 实弹验收实证：评审模型偶发把用户消息原文当意见复述，
+  //    与真实意见同批并存，污染「评审产出有效」判据）──
+  t('E-1a：filterEchoNotes——意见与用户消息整体相等 ⇒ 丢弃 + warning 留痕（fail-loud 同 P2-2）', () => {
+    const userMsg = '重启后请顺手验证 advisor 在宿主真实启动路径上被加载生效'
+    const res = filterEchoNotes(
+      [
+        { severity: 'nit', text: userMsg }, // 整体回显
+        { severity: 'info', text: '评审意见：加载链路已核，建议补一条端到端证据' }, // 真意见
+      ],
+      [userMsg],
+    )
+    assert.equal(res.notes.length, 1, '★E-1：回显意见必须被丢弃')
+    assert.equal(res.notes[0].text, '评审意见：加载链路已核，建议补一条端到端证据', '真意见必须原样保留')
+    assert.equal(res.warnings.length, 1, '丢弃必须留痕（warning，落 records 可审计）')
+    assert.match(res.warnings[0], /回显/)
+    assert.match(res.warnings[0], /severity=nit/, 'warning 必须点名被丢意见的 severity')
+  })
+
+  t('E-1b：filterEchoNotes——≥40 字意见被用户消息连续包含 ⇒ 丢弃；<40 字包含不拦（防误伤短语）', () => {
+    const longEcho = '评审模型偶发会把这句足够长的用户可见消息原文当作一条意见逐字复述输出构成回显形态'
+    const userMsg = `这是一段足够长的用户可见消息，正文里${longEcho}，作为回显来源`
+    assert.ok(longEcho.length >= ADVISOR_ECHO_MIN_CONTAIN_CHARS, `前置：测试样本必须达到包含比对的下限（实得 ${longEcho.length}）`)
+    const res = filterEchoNotes(
+      [
+        { severity: 'concern', text: longEcho }, // 长回显（被包含）
+        { severity: 'nit', text: '长句子' }, // 短文本包含关系——不得误伤
+      ],
+      [userMsg],
+    )
+    assert.equal(res.notes.length, 1, '★E-1：长回显丢弃、短语放行')
+    assert.equal(res.notes[0].text, '长句子', '短意见（<40 字）不得因包含关系被误杀')
+    assert.equal(res.warnings.length, 1)
+  })
+
+  t('E-1c：filterEchoNotes——空白归一化（CRLF/多空白）后仍命中；改写转述不拦', () => {
+    const userMsg = '第一行消息内容\n\n  第二行带缩进内容'
+    const res = filterEchoNotes(
+      [
+        { severity: 'info', text: '第一行消息内容\r\n  第二行带缩进内容' }, // 归一化后相等
+        { severity: 'nit', text: '消息里第二行的缩进写法建议统一（改写转述，非回显）' }, // 引用改写——放行
+      ],
+      [userMsg],
+    )
+    assert.equal(res.notes.length, 1, '★E-1：归一化后逐字相同 ⇒ 丢弃；改写转述 ≠ 回显')
+    assert.match(res.notes[0].text, /改写转述/)
+    assert.equal(res.warnings.length, 1)
+  })
+
+  t('E-1d：filterEchoNotes——空输入与零命中路径：无用户文本时全部放行（不误伤）', () => {
+    const res = filterEchoNotes([{ severity: 'nit', text: '普通意见' }], [])
+    assert.equal(res.notes.length, 1)
+    assert.equal(res.warnings.length, 0)
+    const res2 = filterEchoNotes([], ['x'])
+    assert.equal(res2.notes.length, 0)
+    assert.equal(res2.warnings.length, 0)
+  })
+
   // ── S4-6（AC-43 新字段解析兼容 + AC-32 投递面无 confidence）──
   t('S4-6：parseReviewOutput 解析可选字段（evidence/confidence/action），未知字段忽略，旧字段语义不变', () => {
     const parsed = parseReviewOutput('{"notes":[{"severity":"blocker","text":"先停下","evidence":"D-012","confidence":0.8,"action":"stop-direction","unknown_field":123},{"severity":"nit","text":"旧形态"},{"severity":"concern","text":"弱证据","confidence":"高"}]}')
@@ -6669,5 +6726,33 @@ export function testS5Closeout(t) {
         assert.equal(run.agent.calls.steer.length, 0, `AC-42/${sample.id}：合理动作 + 模型闭嘴 ⇒ 零 steer（管线不得加戏）`)
       } finally { run.cleanup() }
     }
+  })
+
+  // ── E-1 端到端：评审输出里回显意见与真意见同批 ⇒ 回显被闸、真意见照常投递 ──
+  t('E-1e（端到端）：同批 notes 混回显与真意见——回显落 dropped 留痕，真意见照常 steer，互不牵连', async () => {
+    const userMsg = '我来写一个 token bucket 限流函数，直接加在服务层里，请评审这个方向'
+    const run = await behaviorRun({
+      messages: [msg('user', userMsg), msg('assistant', '好的，我开始实现 token bucket')],
+      llmScript: JSON.stringify({
+        notes: [
+          { severity: 'nit', text: userMsg }, // 回显（= 本轮增量的用户消息原文）
+          { severity: 'concern', text: 'src/ratelimit.js 已有 tokenBucket 实现，先复用再决定是否扩展', evidence: 'src/ratelimit.js', confidence: 0.8 },
+        ],
+      }),
+    })
+    try {
+      const records = run.snapshot().records
+      assert.equal(records.length, 2, `★E-1e：回显+真意见共 2 条记录（实得 ${records.length}）`)
+      const dropped = records.find((r) => r.outcome === 'dropped')
+      const delivered = records.find((r) => r.outcome !== 'dropped')
+      assert.ok(dropped, '★E-1e：回显意见必须落 dropped 记录（fail-loud 留痕，非静默）')
+      assert.match(dropped.text, /回显/, 'dropped 记录必须点名回显原因')
+      assert.ok(delivered, '★E-1e：真意见不得被回显牵连')
+      assert.equal(delivered.severity, 'concern')
+      assert.equal(run.agent.calls.steer.length, 1, 'E-1e：真意见照常 steer（concern 免冷却）')
+      const steerRaw = JSON.stringify(run.agent.calls.steer[0])
+      assert.ok(steerRaw.includes('src/ratelimit.js'), 'E-1e：steer 内容 = 真意见')
+      assert.ok(!steerRaw.includes('请评审这个方向'), 'E-1e：steer 内容不得含回显原文')
+    } finally { run.cleanup() }
   })
 }
