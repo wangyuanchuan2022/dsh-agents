@@ -220,6 +220,10 @@ nit（风格类）保持冷却降级。实现为两条钉死断言（S4-4）：�
 ② 同窗口内 nit → inject（豁免面**不是**全等级）；info 恒 recorded/inject，永不 steer。
 
 消息形态：`user-role` 消息 + `source.kind='advisor'` + `notice` form + summary（summary ≤120 字）。
+**注入标记（2026-10-19 用户指令，`ADVISOR_MARKER`）**：正文首部固定为
+`【advisor 建议·非用户指令】 [severity] <意见正文>`——投递层统一添加，steer / inject 两条通道一致。
+成因：旧设计让投递伪装成用户指令，实证导致「advisor 建议被误当用户指令」与「建议回灌被误判回显」
+两类归因事故；标记使来源在会话可见面自证（`source.kind` 仍作结构化依据，二者并行）。
 agent 注册表：`agent/created` 时 `agents.set(agent.id, agent)`（`agent.id === session.id`），`agent/disposed`/`session/disposed` 时注销；兜底 `ctx.agents?.get(sessionId)`。
 `source.kind==='advisor'` 也是**自评审排除**的唯一依据（advisor 自己注入的消息不进下一轮评审输入，防递归自评）。
 

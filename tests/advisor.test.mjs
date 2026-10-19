@@ -30,7 +30,7 @@ import {
 } from '../lib/advisor/index.js'
 import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, renderVisibleSurface, SEEN_WINDOW_SIZE } from '../lib/advisor/observer.js'
 import { AdvisorRuntime, parseReviewOutput, AdvisorConversation, classifyCompletion, ADVISOR_MAX_TOKENS, ADVISOR_FINISH_KINDS, ADVISOR_CONVERSATION_MAX_CHARS, DEFAULT_ADVISOR_SYSTEM_PROMPT, enforceEvidenceFloor, ADVISOR_MIN_BLOCKER_CONFIDENCE, filterEchoNotes, ADVISOR_ECHO_MIN_CONTAIN_CHARS } from '../lib/advisor/runtime.js'
-import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage, ADVISOR_COOLDOWN_EXEMPT } from '../lib/advisor/delivery.js'
+import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage, ADVISOR_COOLDOWN_EXEMPT, ADVISOR_MARKER } from '../lib/advisor/delivery.js'
 import { AdvisorStore, normalizeRecord, sessionConfigPath, sessionSeenPath, CONFIG_FILE } from '../lib/advisor/store.js'
 import { createAdvisorHandler, normalizeAdvisorPatch, normalizeSessionId, SESSION_ID_MAX } from '../lib/advisor/api.js'
 
@@ -1647,13 +1647,28 @@ export function testDelivery(t) {
     assert.equal(d.route('s', { severity: 'nit', text: 'n2' }), 'steer', '重写后冷却应清零')
   })
 
-  t('消息形态：user-role + source.kind=advisor + notice form + summary', () => {
+  t('消息形态：user-role + source.kind=advisor + notice form + summary + 注入标记（2026-10-19 用户指令）', () => {
     const m = buildAdvisorMessage({ severity: 'concern', text: '请修 X' })
     assert.equal(m.role, 'user')
     assert.equal(m.source.kind, 'advisor')
     assert.equal(m.source.form, 'notice')
     assert.ok(m.source.summary.startsWith('[concern]'))
     assert.equal(m.content[0].type, 'text')
+    // 注入标记：advisor 消息必须在可见面自证来源（防被当用户指令/防回灌误归因）
+    assert.ok(m.content[0].text.startsWith(ADVISOR_MARKER), `★注入标记：正文必须带「${ADVISOR_MARKER}」前缀`)
+    assert.ok(m.content[0].text.includes('[concern] 请修 X'), '标记之后保留 severity + 原意见正文')
+  })
+
+  t('注入标记覆盖 steer / inject 两条投递通道（端到端）', () => {
+    const agent = fakeAgent('s-marker')
+    const d = new AdvisorDelivery({ lookupAgent: () => undefined, immuneTurns: 0 })
+    d.registerAgent(agent)
+    assert.equal(d.route('s-marker', { severity: 'concern', text: '走 steer 的意见' }), 'steer')
+    assert.equal(d.route('s-marker', { severity: 'info', text: '走 inject 的意见' }), 'recorded')
+    d.configure({ infoInject: true })
+    assert.equal(d.route('s-marker', { severity: 'info', text: '走 inject 的意见' }), 'inject')
+    assert.ok(agent.calls.steer[0].content[0].text.startsWith(ADVISOR_MARKER), 'steer 通道必须带标记')
+    assert.ok(agent.calls.inject[0].content[0].text.startsWith(ADVISOR_MARKER), 'inject 通道必须带标记')
   })
 }
 
