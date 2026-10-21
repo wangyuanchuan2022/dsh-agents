@@ -126,7 +126,7 @@ SOFTWARE.
 - 许可：MIT License
 - 引入方式：作为本仓库唯一新增的运行时依赖（0 运行时依赖、0 装载期生命周期脚本）；
   `Parser.init()` 在 Node 下按包自身 `import.meta.url` 自定位 `web-tree-sitter.wasm`
-  （无需 `locateFile`）。安全审查记录见 `agent-out/treesitter-deps-research.md`；
+  （无需 `locateFile`）。安全审查已随引入完成（记录为维护侧过程物，未随仓分发）；
   其 emscripten 胶水含 `EM_ASM`/`EM_JS` 的 `eval`，**输入源是所加载的 wasm 模块**，
   故本仓库对下节 vendor 的 grammar wasm 施加 **SHA256 硬闸门**（加载前断言，不匹配即拒载）。
 
