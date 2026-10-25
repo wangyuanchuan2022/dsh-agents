@@ -1,6 +1,6 @@
 ---
 name: agent-workflow-router
-description: "触发：不知道用哪个流程、有哪些工作流、怎么派活、组队做、一键跑完、多角色协作、agent 工作流怎么起、帮我选个流程、这活该谁干、从哪开始｜English: which workflow, workflow router, route to agent pipeline, how to start, pick a skill｜route to agent pipeline, workflow router, pick a skill, how to start. 本技能是 23 件 Agent 工作流技能的路由入口层：按用户意图把请求接到对应技能（全自动实现→agent-autopilot／加功能→agent-feature／修 bug→agent-bugfix／评审→agent-review-squad／需求模糊→requirement-interview／重大方案→consensus-plan／清理→ai-slop-cleaner／长任务循环→agent-loop／收尾核验→verification-loop／交接→session-handoff 等），并固化派活前置三问、档位现场确认、消息纪律、工作区纪律与收尾沉淀五条硬协议。用户没点技能名而描述了任务时，先加载本技能选路，再加载目标技能执行。意图表逐条对不上（活太杂/跨域/无对应流水线）→ 走兜底的 agent-general-route。"
+description: "触发：不知道用哪个流程、有哪些工作流、怎么派活、组队做、一键跑完、多角色协作、agent 工作流怎么起、帮我选个流程、这活该谁干、从哪开始｜English: which workflow, workflow router, route to agent pipeline, how to start, pick a skill｜23 件 Agent 工作流技能的路由入口层：按意图把请求接到对应技能，固化派活前置三问、档位现场确认、消息纪律、工作区纪律、收尾沉淀五条硬协议；没点技能名先加载本技能选路再加载目标技能；对不上走 agent-general-route。"
 ---
 
 # Agent 工作流总入口（agent-workflow-router）

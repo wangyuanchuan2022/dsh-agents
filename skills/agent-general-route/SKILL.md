@@ -1,6 +1,6 @@
 ---
 name: agent-general-route
-description: "触发：没匹配到流水线、通用路由、走通用流程、没有对应技能、其他技能都不适用、直接干就行、不确定该用哪个 agent、兜底派活、随便处理一下｜English: general route, fallback route, no matching pipeline, just do it, default dispatch, generic dispatch｜通用路由（agent-general-route，agent-workflow-router 路由表选不出技能时的兜底入口）：先按「体量 × 并行 × 上下文 × 风险」四轴判据裁决「派席 or 主会话单干」，再按双通道分配人格——要成体系方法论走 agent_spawn 复用角色库（explore/planner/code-reviewer/verifier/security-reviewer/debugger…），纯执行与创作走 de_session 临时 persona（模型继承发起会话）；派席继承任务书四条硬条款与「送达不证开工」的回收双查纪律；同时带「何时该退回流水线」的自限条款，防止通用路由膨胀成什么都干的黑洞。"
+description: "触发：没匹配到流水线、通用路由、走通用流程、没有对应技能、其他技能都不适用、直接干就行、不确定该用哪个 agent、兜底派活、随便处理一下｜English: general route, fallback route, no matching pipeline, just do it, default dispatch, generic dispatch｜路由表选不出技能时的兜底入口：按体量×并行×上下文×风险四轴裁「派席 or 主会话单干」，双通道分配人格（方法论走 agent_spawn 角色库；执行创作走 de_session 临时 persona）。"
 ---
 
 # 通用路由（agent-general-route）

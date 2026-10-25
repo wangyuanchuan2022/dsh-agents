@@ -1,6 +1,6 @@
 ---
 name: advisor
-description: "触发：advisor、顾问、每轮评审、每回合把关、把控全局走向、自动评审、帮我盯着、旁听评审、开个顾问、每轮有人把关｜English: advisor, review each turn, per-turn review, automatic review, oversight, second opinion, keep an eye on it｜advisor 顾问（dsh-agents 内置）：每个 turn 结束后自动用「该会话手动指定的模型」只读主会话可见消息、独立上下文，给主 agent 分级建议（info/nit/concern/blocker），nit 及以上默认走 steer 实时打断指导。**被动机制、无工具面**（不占 agent_roles / agent_taskbook / agent_spawn 三个工具位），经会话头部动作区的 Advisor 面板启用，**不设任何 advisor* 工具**；模型完全手动指定、无任何兜底，未指定即该会话不评审。含三条不可跳过的前提与六条已知边界（liveness check 非授权、至多一次、agentic 跨重启补评、只评审主会话汇总、窗口淘汰边界、多实例不共享数据目录）。"
+description: "触发：advisor、顾问、每轮评审、每回合把关、把控全局走向、自动评审、帮我盯着、旁听评审、开个顾问、每轮有人把关｜English: advisor, review each turn, per-turn review, automatic review, oversight, second opinion, keep an eye on it｜advisor 顾问：每 turn 结束自动用会话手动指定的模型评审主会话（独立上下文只读），分级建议 info/nit/concern/blocker，nit 及以上默认 steer 打断；被动机制无工具面（不设 advisor* 工具），经 Advisor 面板启用；模型未指定即不评审（无兜底）。"
 ---
 
 # Advisor 顾问（advisor）

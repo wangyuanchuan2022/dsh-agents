@@ -1,6 +1,6 @@
 ---
 name: verification-loop
-description: "触发：收尾核验、完工检查、六相验证、验证报告、交付前验证｜English: verification loop, six-phase verification, verify before done, verification report｜验证环路（verifier 检查表，引用不并入角色）：完工自报前的六相验证——build/type/lint/test/security/diff 六相命令矩阵逐相过门，输出固定 VERIFICATION REPORT；Build 失败即 STOP；跳过项单列 skipped 不计入通过。中文触发：验证、收尾核验、完工检查、六相验证、VERIFICATION REPORT、验证报告。English triggers: verification loop, verify before done, six-phase verification, verification report."
+description: "触发：收尾核验、完工检查、六相验证、验证报告、交付前验证、VERIFICATION REPORT｜English: verification loop, six-phase verification, verify before done, verification report｜验证环路（verifier 检查表）：完工自报前六相 build/type/lint/test/security/diff 逐相过门，输出固定 VERIFICATION REPORT；Build 失败即 STOP；跳过项单列不计通过。"
 ---
 
 # 验证环路（verification-loop · DSH 版）

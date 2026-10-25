@@ -1,6 +1,6 @@
 ---
 name: skill-stocktake
-description: "触发：盘点技能、技能审查、技能质量、该退休哪些技能、技能库存｜English: skill stocktake, audit skills, skill quality review｜技能质量盘点（auditing Claude skills for quality 的 DSH 版）：对 DSH 技能库（四根扫描）做 Quick Scan（仅变更技能）与 Full Stocktake 全盘两模式，批评席子会话按检查表+整体判断给五态裁决（Keep/Improve/Update/Retire/Merge into [X]），判定理由必须自含证据可决策；results.json 缓存+断点续跑。中文触发：盘点技能、技能审查、技能质量、skill 盘点、库存盘点、retire 技能。English triggers: skill stocktake, audit skills, skill quality review, quick scan."
+description: "触发：盘点技能、技能审查、技能质量、该退休哪些技能、技能库存、retire 技能｜English: skill stocktake, audit skills, skill quality review, quick scan｜技能质量盘点：Quick Scan 与 Full Stocktake 两模式，批评席按检查表给五态裁决（Keep/Improve/Update/Retire/Merge）；results.json 缓存+断点续跑。"
 ---
 
 # skill-stocktake（技能质量盘点 · DSH 版）

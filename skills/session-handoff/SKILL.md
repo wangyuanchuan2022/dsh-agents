@@ -1,6 +1,6 @@
 ---
 name: session-handoff
-description: "触发：会话交接、换会话继续、跨天收工、上下文要满了、写交接文档、接手别人的活｜English: session handoff, continue in a new session, context running out, write a handoff｜DSH 会话交接：把一个会话的工作状态提炼成八节交接文档（What We Are Building / What WORKED·带证据 / What Did NOT Work+确切原因 / What Has NOT Been Tried Yet / Current State of Files / Decisions Made / Blockers & Open Questions / Exact Next Step），供接手会话或新会话全量吸收后继续；含同一目录多份交接文档时的候选排序判据（只对自动发现排序、显式路径直读不替换）。不自建会话存储——DSH 已有 session.jsonl.zstd 全量转录，交接文档只承担「意图与判断层」。Use when 会话上下文快耗尽、跨天续做、把工作移交另一会话或子会话、或接手别人的交接文档。中文触发：交接、会话接续、换会话继续、跨天收工、handoff、接手别人的活、写交接文档。English triggers: session handoff, hand off work to another session, resume from a handoff, context is running out, continue tomorrow, absorb a handoff."
+description: "触发：会话交接、换会话继续、跨天收工、上下文要满了、写交接文档、接手别人的活｜English: session handoff, continue in a new session, context running out, write a handoff, resume from a handoff, absorb a handoff｜DSH 会话交接：把工作状态提炼成八节交接文档供接手会话全量吸收（八节格式见正文）；含多份交接文档候选排序判据；不自建存储，只承担意图与判断层。"
 ---
 
 # Session Handoff（会话交接八节格式）

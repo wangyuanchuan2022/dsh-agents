@@ -1,11 +1,11 @@
 ---
 name: tdd-workflow
-description: "触发：测试先行、TDD、红绿循环、先写测试、RED 门、覆盖率核验｜English: TDD, test-first, red-green, RED gate, coverage｜TDD 工作流方法论手册（供 test-engineer / verifier 引用，不并入角色）：写新特性、修缺陷、重构时强制测试先行——RED 门为不可让渡纪律（只写了但未编译执行的测试不算 RED），GREEN 与覆盖率核验后写 TDD 证据报告（五列保证表，跨会话/跨 squash 保留证明）。中文触发：TDD、测试先行、红绿循环、RED 门、写测试、覆盖率、证据报告。English triggers: TDD, test-first, red-green, RED gate, coverage, evidence report."
+description: "触发：测试先行、TDD、红绿循环、先写测试、RED 门、覆盖率核验、写测试、证据报告｜English: TDD, test-first, red-green, RED gate, coverage, evidence report｜TDD 手册（test-engineer/verifier 引用）：强制测试先行——RED 门不可让渡（只写未执行不算 RED），GREEN 与覆盖率核验后写证据报告（五列保证表）。"
 ---
 
 # TDD 工作流（tdd-workflow · DSH 版）
 
-本件确保所有代码开发遵循 TDD 原则并有完整测试证据。
+本件确保所有代码开发遵循 TDD 原则并有完整测试证据。本件是方法论手册，供 test-engineer / verifier 引用，**不并入任何角色**（不作为角色 persona 注入）。
 
 ## 何时启用
 

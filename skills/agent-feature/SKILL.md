@@ -1,12 +1,13 @@
 ---
 name: agent-feature
-description: "触发：加个功能、实现一个功能、新增特性、给项目加 X、做个小需求、feature 流水线｜English: add a feature, implement X, new feature pipeline, feature development｜特性开发流水线（agent-feature，编排 dsh-agents 的 6 个 sub agent）：analyst 把特性需求转成可测验收标准 → planner 出带完成判据的分步计划 → executor 按步实现（最小 diff）→ test-engineer 补测试并跑绿 → code-reviewer 分级评审 → verifier 取证收尾；对应 OMC team 的 team-plan/team-prd/team-exec/team-verify 四阶段。适用于：给现有项目加一个明确的新特性（需求基本清晰，不需要完整 autopilot）。触发：用户说「加个特性/实现 X 功能/feature 流水线」，且能指名目标项目与特性描述。"
+description: "触发：加个功能、实现一个功能、新增特性、给项目加 X、做个小需求、feature 流水线｜English: add a feature, implement X, new feature pipeline, feature development｜特性开发流水线（编排 6 个 sub agent）：analyst 验收→planner 计划→executor 实现→test-engineer 跑绿→code-reviewer 评审→verifier 取证；适用于给现有项目加明确新特性（需求清晰、不需 autopilot）。"
 ---
 
 # 特性开发流水线（agent-feature）
 
 > 编排 6 角色：analyst → planner → executor → test-engineer → code-reviewer → verifier。
 > 派活方式、回收监控、失败处理与 `agent-autopilot` 完全一致（主路径 agent_spawn / 降级 de_session+personas；错峰 15s；双条件完成标准；回收核对）。本技能不重复，只写差异。
+> 溯源对应：六席执行顺序对应 OMC team 的 team-plan / team-prd / team-exec / team-verify 四阶段（analyst+planner ≙ plan/prd，executor ≙ exec，test-engineer 及之后 ≙ verify）。
 > ⚠️ 工作区纪律：子会话不传 cwd（继承用户派发任务的工作区）；项目子目录路径在任务书里用相对前缀表达（详见 agent-autopilot「工作区纪律」）。
 
 ## Step 0 · 尺寸分级

@@ -1,6 +1,6 @@
 ---
 name: operator-approval-loop
-description: "触发：外发消息审批、代理发信前人工确认、审批账、外发草稿审批｜English: outbound message approval, operator approval, approval ledger｜Operator approval contract with internal filing notices for agent-drafted outbound messages, hashed drafts, epoch-keyed decisions, durable delivery claims and receipts, and a pre-draft baseline gate. Use when an agent drafts messages to external counterparties and a human operator must approve, reject, or steer each send before it leaves."
+description: "触发：外发消息审批、代理发信前人工确认、审批账、外发草稿审批｜English: outbound message approval, operator approval, approval ledger｜Operator approval contract: hashed drafts, epoch-keyed decisions, delivery claims/receipts, baseline gate."
 ---
 
 # Operator Approval Loop

@@ -1,6 +1,6 @@
 ---
 name: error-handling
-description: "触发：错误处理、重试策略、熔断、错误类型设计、错误边界、用户可见报错｜English: error handling, retries, circuit breaker, error types, error boundary｜Patterns for robust error handling across TypeScript, Python, and Go. Covers typed errors, error boundaries, retries, circuit breakers, and user-facing error messages. Use when designing error types, retries, circuit breakers, or user-facing failure messages in TypeScript, Python, or Go."
+description: "触发：错误处理、重试策略、熔断、错误类型设计、错误边界、用户可见报错｜English: error handling, retries, circuit breaker, error types, error boundary｜Robust error handling patterns for TypeScript, Python, and Go"
 ---
 
 # Error Handling Patterns

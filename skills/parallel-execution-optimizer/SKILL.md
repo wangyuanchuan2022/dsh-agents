@@ -1,6 +1,6 @@
 ---
 name: parallel-execution-optimizer
-description: "触发：并行加速、多 agent 并发、批量工具调用、并行验证、怎么更快做完｜English: parallelize, concurrent agents, batched tool calls, speed up｜Use when the user wants a task done much faster through parallel work, concurrent agents, batched tool calls, isolated worktrees, or many independent verification lanes without losing correctness."
+description: "触发：并行加速、多 agent 并发、批量工具调用、并行验证、怎么更快做完｜English: parallelize, concurrent agents, batched tool calls, speed up｜Parallelize without losing correctness: agents, batched calls, worktrees, verification lanes."
 ---
 
 # Parallel Execution Optimizer

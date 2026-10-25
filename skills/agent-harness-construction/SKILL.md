@@ -1,6 +1,6 @@
 ---
 name: agent-harness-construction
-description: "触发：agent 工具面设计、动作空间设计、observation 格式、工具定义优化｜English: agent tool design, action space, observation format｜Design and optimize AI agent action spaces, tool definitions, and observation formatting for higher completion rates. Use when defining or revising an agent's tool set, action space, or observation format."
+description: "触发：agent 工具面设计、动作空间设计、observation 格式、工具定义优化｜English: agent tool design, action space, observation format｜Design and optimize agent harnesses for higher completion rates."
 ---
 
 # Agent Harness Construction
