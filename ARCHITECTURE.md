@@ -2,7 +2,7 @@
 
 > 本文面向**外部评审者**：逐部件说明本仓 125 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 136 文件，本文自身计入；2026-10-13 advisor V3 B5 收官批次后更新）。
+> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 138 文件，本文自身计入；2026-10-25 M4 设计原则文档化批次后更新）。
 > 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
 
 ---
@@ -35,7 +35,7 @@ dsh-agents/
 ├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
 ├── tools/          (11)               独立 CLI 工具与机检脚本（不进宿主运行时）
 ├── tests/          (12)               主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针 + 隔离门/回放设施
-├── docs/           (3)                任务书模板正本 + advisor 契约正本 + 开源复用账本
+├── docs/           (4)                任务书模板正本 + advisor 契约正本 + 开源复用账本 + 设计原则正本
 ├── README.md                          使用向导（安装 / 快速开始 / 配置 / 已知限制）
 ├── ARCHITECTURE.md                    本文
 ├── LICENSE                            MIT（本仓自身代码）
