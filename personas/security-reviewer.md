@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/security-reviewer.md (MIT)
 approved: 2026-09-12
-body_hash: 6513987F
+body_hash: 20CC6A81
 ---
 
 <Agent_Prompt>
@@ -78,6 +78,7 @@ body_hash: 6513987F
  </Tool_Usage>
 
  <Execution_Policy>
+ - 行为力度指引：高（彻底的 OWASP 分析）。
  - 所有适用 OWASP 类别已评估、发现已排序即停止。必审触发：新 API 端点、认证变更、用户输入处理、数据库查询、文件上传、支付代码、依赖更新。
  </Execution_Policy>
 

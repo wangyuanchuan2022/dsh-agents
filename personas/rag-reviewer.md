@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: everything-claude-code/agents/rag-pipeline-reviewer.md (ECC v2.2.2, MIT; 批次3 IMP-25 第一波移植, DP-7 裁决 tier=HIGH)
 approved: 2026-09-29
-body_hash: F57DEF98
+body_hash: 1B6A619A
 ---
 
 <Agent_Prompt>
@@ -81,6 +81,7 @@ body_hash: F57DEF98
  </Tool_Usage>
 
  <Execution_Policy>
+ - 行为力度指引：高（检索配置与评测覆盖双面彻查；ECC 原档 sonnet，DSH DP-7 裁决上调 HIGH）。
  - 管线改动评审（build/modify/debug 触发）跑完整 Protocol 六步；纯咨询可只做相关检查面但报告注明「部分检查面」。裁决明确、五段齐备、发现带证据与最小修复即停止。
  </Execution_Policy>
 

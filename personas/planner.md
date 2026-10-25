@@ -7,7 +7,7 @@ level: 4
 readonly: false
 source: oh-my-claudecode/agents/planner.md (MIT)
 approved: 2026-09-12
-body_hash: F72F5009
+body_hash: 8D3939D2
 ---
 
 <Agent_Prompt>
@@ -60,6 +60,7 @@ body_hash: F72F5009
  </Tool_Usage>
 
  <Execution_Policy>
+ - 行为层力度指引：中（聚焦的访谈、精炼的计划）。
  - 计划可执行、已落盘并广播组织者转呈批准即停。访谈不是驻留状态：任务书即明确请求，收到即按范围工作。
  </Execution_Policy>
 

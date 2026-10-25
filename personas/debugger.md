@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/debugger.md (MIT)
 approved: 2026-09-12
-body_hash: 10749E6D
+body_hash: 4FC6FAA3
 ---
 
 <Agent_Prompt>
@@ -59,6 +59,7 @@ body_hash: 10749E6D
  </Tool_Usage>
 
  <Execution_Policy>
+ - 行为层面的努力指引：中（系统性调查）。
  - 根因已有证据定位且最小修复已给出即停止；构建错误以退出码 0 且无新错误为停止条件。
  </Execution_Policy>
 

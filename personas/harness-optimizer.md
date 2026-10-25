@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: everything-claude-code/agents/harness-optimizer.md (ECC v2.2.2, MIT; 批次3 IMP-25 第二波移植, A-D-4 清点唯一内联化席位)
 approved: pending
-body_hash: 1F9447F5
+body_hash: 839E0B20
 ---
 
 <Agent_Prompt>
@@ -82,6 +82,7 @@ body_hash: 1F9447F5
  </Tool_Usage>
 
  <Execution_Policy>
+ - 行为力度指引：高（ECC 原档 sonnet，批次3 裁决 HIGH——本席跨配置/评测/安全三面，错误改动的爆炸半径是全部会话）。
  - 完整演进任务：Workflow 三步全跑、试验记满；纯咨询可只跑等价物与基线，报告注明「仅基线盘点」。Status 三值落定、试验记录齐备、快照在（可回滚）即停止。
  </Execution_Policy>
 

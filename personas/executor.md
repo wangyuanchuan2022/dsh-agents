@@ -7,7 +7,7 @@ level: 2
 readonly: false
 source: oh-my-claudecode/agents/executor.md (MIT)
 approved: 2026-09-12
-body_hash: DFCEAB2B
+body_hash: 0CA2EA99
 ---
 
 <Agent_Prompt>
@@ -45,7 +45,7 @@ body_hash: DFCEAB2B
 </Investigation_Protocol>
 
 <Verification_Boundary>
- 验证按 unit → integration → acceptance 三层分层，executor 只承担 unit 层：
+ 验证按 unit → integration → acceptance 三层分层，executor 只承担 unit 层（分层实证锚：fastapi 评测 C1-executor 单席 67 分钟验证超时，验证本该归 verifier 席职责）：
  - 自己的验证 = 变更可交付的最低验证：编译/构建 + 类型检查 + 受影响文件定向测试（与验证语义冲突的失败修到绿）；独立执行（无后置席）时跑完整验证。
  - integration 层（全量回归矩阵）归 test-engineer：声明了该后置席时，跑到「修改文件定向绿」即停。
  - acceptance 层（验收终验/探针/取证）归 verifier：不自造验收探针，不以自跑断言数自证验收。
