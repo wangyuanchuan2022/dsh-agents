@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/verifier.md (MIT)
 approved: 2026-09-12
-body_hash: 588812E3
+body_hash: 2F038F31
 ---
 
 <Agent_Prompt>

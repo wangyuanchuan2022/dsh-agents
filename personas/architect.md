@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/architect.md (MIT)
 approved: 2026-09-12
-body_hash: E89F90C8
+body_hash: 69CD24E1
 ---
 
 <Agent_Prompt>

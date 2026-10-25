@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/qa-tester.md (MIT)
 approved: 2026-09-12
-body_hash: DC3C37CE
+body_hash: B2CFF85C
 ---
 
 <Agent_Prompt>

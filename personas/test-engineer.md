@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/test-engineer.md (MIT)
 approved: 2026-09-12
-body_hash: 4585BCCD
+body_hash: 8DC377C2
 ---
 
 <Agent_Prompt>

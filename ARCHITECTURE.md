@@ -64,7 +64,7 @@ dsh-agents/
 | `index.js` | 插件入口：`name` / `inject=['tools']` / `apply(ctx)`；注册 **3 个宿主工具**（agent_roles / agent_taskbook / agent_spawn） | fail-loud 约定：未知档位/角色/半个路由/非法 clarifyMode 一律抛错；`allowSpawn` 紧急刹车开关 |
 | `roles.js` | 23 角色注册表（id/泳道/档位/隔离模式/只读标记），模块级缓存 | 隔离映射 blind/isolated/shared 三者之和恒等于 23（测试钉值） |
 | `routing.js` | 档位路由解析：调用期显式 → roleOverrides → settings 用户层 → cordis 基底 → 内置默认；`tierSources` 记录每档来源 | 「档位是配置不是常量」——任何时刻可查解析值与来源 |
-| `persona.js` | 人格加载（`personas/<id>.md` 剥 frontmatter 取正文；缺文件退化摘要模式并在任务书标注）+ body_hash 留档 | 哈希域说明：文件级 sha256 与正文 body_hash 是不同域，不可互比。body_hash 域口径（2026-10-25 R1 收口核实）：瘦身批次 10 文件 = `sha256(splitFrontmatter(body))` 前 8 位，可仓内复验；装机期 13 文件属安装器写入的历史域，仓内无可复验公式——不可按前式对其判假红 |
+| `persona.js` | 人格加载（`personas/<id>.md` 剥 frontmatter 取正文；缺文件退化摘要模式并在任务书标注）+ body_hash 留档 | 哈希域说明：文件级 sha256 与正文 body_hash 是不同域，不可互比。body_hash 域口径（2026-10-25 R2 C-2 统一重算后）：23 文件全量 = `sha256(splitFrontmatter(body))` 前 8 位，仓内可复验；装机期 13 文件旧声明值经 C-1 tracer 实锤为装机时点快照值（baseline@9bc6c90 正文的 body 域复算值，正文演进后未同步重算），已按 body 域统一重写 frontmatter 单行（正文零改动） |
 | `taskbook.js` | **八节任务书合成** + 派活前置三问（副作用关键词 fail-closed）+ 上下文隔离契约注入 + 泄漏机检 | 六参数 null 穿透守卫（`!= null`，防 `String(null)==='null'` 骗过 trim）；库层入参守卫四态 throws（role/route/task/clarifyMode） |
 | `spawn.js` | 会话创建：对齐宿主 `de_session` 的踩坑修复时序（WorkspaceRegistry 异步就绪 → 惰性 getter 用时解析；主名 workspace + 旧名兜底） | 「只按真名注册」回归门在 tests/run.mjs |
 | `persona-gate.js` | **装配期判据**（install-personas 与 verify-imp26 共用）：LEGACY_OMC_IDS 19 豁免表 / 基线双形态判据（标题形态或非空标签块，空 tag stub 拒收，CRLF 容忍）/「不做什么」缺失 warn | 2026-09-30 曾因交付态偏差丢失导致安装器悬空引用，已按负向自测契约重建并 33/0 全绿（见 §7 案例一） |

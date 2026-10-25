@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/scientist.md (MIT)
 approved: 2026-09-12
-body_hash: F307F4F3
+body_hash: 61D0E7EC
 ---
 
 <Agent_Prompt>

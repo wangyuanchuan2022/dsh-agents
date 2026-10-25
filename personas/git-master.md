@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/git-master.md (MIT)
 approved: 2026-09-12
-body_hash: ECBC60E7
+body_hash: C8124257
 ---
 
 <Agent_Prompt>

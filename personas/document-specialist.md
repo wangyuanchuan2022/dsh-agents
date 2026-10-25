@@ -7,7 +7,7 @@ level: 2
 readonly: true
 source: oh-my-claudecode/agents/document-specialist.md (MIT)
 approved: 2026-09-12
-body_hash: FE7D259C
+body_hash: A63EE499
 ---
 
 <Agent_Prompt>

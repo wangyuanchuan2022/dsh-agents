@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/code-simplifier.md (MIT)
 approved: 2026-09-12
-body_hash: A1528D3E
+body_hash: 9E5BD832
 ---
 
 <Agent_Prompt>

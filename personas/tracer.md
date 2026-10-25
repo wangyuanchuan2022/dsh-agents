@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/tracer.md (MIT)
 approved: 2026-09-12
-body_hash: 8BD6133D
+body_hash: D66118DD
 ---
 
 <Agent_Prompt>

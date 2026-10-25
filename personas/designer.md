@@ -7,7 +7,7 @@ level: 2
 readonly: false
 source: oh-my-claudecode/agents/designer.md (MIT)
 approved: 2026-09-12
-body_hash: 44A722E5
+body_hash: CA186EC2
 ---
 
 <Agent_Prompt>
