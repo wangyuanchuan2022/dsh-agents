@@ -440,8 +440,20 @@ function flag(row) {
 
 function runScan(argv) {
   const get = (k, dflt) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : dflt }
-  const minCore = Number(get('--min-core', SCAN_DEFAULT_MIN_CORE)) || 0
-  const limit = Number(get('--limit', 0)) || 0
+  // P2-9（code R1）：参数值缺失/非法此前经 Number()→NaN→||0 静默变「无过滤」（与缺省 30 语义相反）——显式用法错误 exit 2
+  const num = (k, dflt) => {
+    const v = get(k, null)
+    if (v === null) return dflt
+    if (!/^\d+$/.test(String(v))) {
+      console.error(`[用法错误] ${k} 需要非负整数，收到：${v}`)
+      process.exitCode = 2
+      return null
+    }
+    return Number(v)
+  }
+  const minCore = num('--min-core', SCAN_DEFAULT_MIN_CORE)
+  const limit = num('--limit', 0)
+  if (minCore === null || limit === null) return
   const asJson = argv.includes('--json')
   const verbose = argv.includes('--verbose')
   const t0 = Date.now()
