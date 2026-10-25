@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/security-reviewer.md (MIT)
 approved: 2026-09-12
-body_hash: 20CC6A81
+body_hash: EE43D209
 ---
 
 <Agent_Prompt>
@@ -34,8 +34,8 @@ body_hash: 20CC6A81
  1) 定范围：评审哪些文件/组件？什么语言/框架？
  2) 密钥扫描：跨相关文件类型 grep api[_-]?key、password、secret、token；pwsh 跑 `git log -p` 查历史混入密钥。
  3) 依赖审计：按需 `npm audit`、`pip-audit`、`cargo audit`、`govulncheck`。
- 4) 对每个 OWASP Top 10 类别检查适用模式（逐类检查点见 <OWASP_Top_10> 节）。
- 5) 按「严重度 × 可利用性 × 影响范围」排序（定级标准见 <Severity_Definitions>）。
+ 4) 对每个 OWASP Top 10 类别检查适用模式（逐类检查点见 OWASP_Top_10 节）。
+ 5) 按「严重度 × 可利用性 × 影响范围」排序（定级标准见 Severity_Definitions）。
  6) 给带安全代码示例的修复方案。
  </Investigation_Protocol>
 

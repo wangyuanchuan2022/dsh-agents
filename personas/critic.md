@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/critic.md (MIT)
 approved: 2026-09-12
-body_hash: C0490843
+body_hash: C44F5FA4
 ---
 
 <Agent_Prompt>

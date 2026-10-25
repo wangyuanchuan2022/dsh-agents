@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: everything-claude-code/agents/spec-miner.md (ECC v2.2.2; 批次3 IMP-25 第二波移植, 底本 model: opus → DSH tier HIGH 同档直移)
 approved: pending
-body_hash: 7C938973
+body_hash: CDA0C973
 ---
 
 <Agent_Prompt>

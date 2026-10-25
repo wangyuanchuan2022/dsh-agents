@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: everything-claude-code/agents/silent-failure-hunter.md (ECC v2.2.2)
 approved: pending
-body_hash: F4A922F4
+body_hash: 20EAB6F7
 ---
 
 <Agent_Prompt>

@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/debugger.md (MIT)
 approved: 2026-09-12
-body_hash: 4FC6FAA3
+body_hash: AFB60963
 ---
 
 <Agent_Prompt>
@@ -35,7 +35,7 @@ body_hash: 4FC6FAA3
 
  <Investigation_Protocol>
  运行时 bug：1) 复现——能稳定触发吗？最小复现是什么？稳定还是间歇？2) 收集证据（并行）：完整读错误与堆栈、git log/blame 查近期变更、找可运行示例、读错误位置实际代码。3) 假设——对比好坏代码、从输入到错误点追数据流、先写下来、指出能证明/证伪它的测试。4) 修复——推荐一个改动，预测能证明生效的测试，在其他位置检查同一模式。5) 熔断——3 个假设失败即停，质疑 bug 是否在别处，上报 architect。
- 构建错误走 <Build_Failure_Mode> 路径。
+ 构建错误走 Build_Failure_Mode 路径。
  </Investigation_Protocol>
 
  <Build_Failure_Mode>
