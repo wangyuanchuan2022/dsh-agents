@@ -21,6 +21,10 @@
  *   5) measure 新增 tailDangling 死亡签名字段（悬尾事件对检测，L1-04 无声死亡特征）：
  *      实测三段衰减对「日志在死亡点直接截断」的会话结构性失明（截断不改变早段均匀交织），
  *      衰减口径抓摆烂（持续产出文本不调工具），死亡靠尾悬事件识别——两族信号互补。
+ *   6) zstd 读取安全接线（2026-10-25 security R1 P1-1 收口）：读端换 zstdReadInfo
+ *      （帧边界 FCS 截断 + 解压预算 fail-closed），跨帧重复行（dupLines>0，帧边界吞并痕迹）
+ *      一律 fail-closed 拒测——旧实现把被吞帧内容静默重复计入读数（真实日志实测 3 文件 5 重复行）；
+ *      --selftest 新增大帧（16KiB 对齐贪读）夹具与预算注入必红断言（旧夹具全小帧，对此零鉴别力）。
  *
  * 用法：
  *   node tools/measure-decay.mjs --selftest
@@ -35,7 +39,7 @@ import { join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 import { zstdCompressSync, zstdDecompressSync, constants } from 'node:zlib'
 import { pathToFileURL } from 'node:url'
-import { zstdRead, countFrames } from './zstd-read.mjs'
+import { zstdRead, zstdReadInfo, countFrames, dedupLines } from './zstd-read.mjs'
 
 const SEGMENTS = ['early', 'mid', 'late']
 // 核心会话骨架事件类型（测量总体；白名单外的只进 otherEvents 聚合数）
@@ -60,12 +64,15 @@ function parseEventsText(text) {
   return { ev, bad, lines: lines.length }
 }
 
-/** 读一个会话日志文件（.zstd 多帧自动识别，否则按明文 JSONL）。 */
+/** 读一个会话日志文件（.zstd 多帧自动识别，否则按明文 JSONL）。
+ *  返回 { ev, bad, lines, isZstd, zstd }；zstd = { frames, truncated, dupLines }（非 zstd 为 null）。
+ *  zstd 解压超预算/完整性异常在 zstdReadInfo 内抛错（fail-closed 上抛给调用方）。 */
 function readSessionFile(path) {
   const buf = readFileSync(path)
   const isZstd = buf.length >= 4 && buf[0] === 0x28 && buf[1] === 0xb5 && buf[2] === 0x2f && buf[3] === 0xfd
-  const text = isZstd ? zstdRead(path) : buf.toString('utf-8')
-  return { ...parseEventsText(text), isZstd }
+  if (!isZstd) return { ...parseEventsText(buf.toString('utf-8')), isZstd, zstd: null }
+  const info = zstdReadInfo(buf)
+  return { ...parseEventsText(info.text), isZstd, zstd: { frames: info.frames, truncated: info.truncated, dupLines: info.dupLines } }
 }
 
 /** 从事件流取会话头元数据（仅 id/createdAt，不取 cwd）。 */
@@ -115,7 +122,9 @@ function measure(ev) {
   }
   // 死亡签名（L1-04 无声死亡特征）：日志尾部「等回应型」事件未获配对回应——
   // tool/call 无后续 tool/result、step/start 无 end、turn/start 无 end、
-  // approval/asked 无 decided、compaction/start 无 end。取最靠后者为签名类型。
+  // approval/asked 无 decided、compaction/start 无 end。按固定优先级序取首个命中
+  // （tool/call > step/start > turn/start > approval/asked > compaction/start），
+  // 不是「最靠后者」——注释与实现口径已于 2026-10-25 P2-6 对齐。
   // 测量学注记：三段密度衰减对「日志在死亡点直接截断」的会话结构性失明
   // （截断不改变前段均匀交织），衰减口径抓的是摆烂（持续产出文本不调工具）；
   // 死亡靠尾悬事件识别——两族信号互补，缺一不可。
@@ -258,7 +267,9 @@ function selftest() {
   const mkTail = (type) => measure([...fix, { type, seq: 999, time: 1700000099999, data: {} }]).tailDangling
   assert(mkTail('tool/call') === 'tool/call', `尾补 tool/call → 悬尾=tool/call (got ${mkTail('tool/call')})`)
   assert(mkTail('step/start') === 'step/start', `尾补 step/start → 悬尾=step/start (got ${mkTail('step/start')})`)
+  assert(mkTail('turn/start') === 'turn/start', `尾补 turn/start → 悬尾=turn/start (got ${mkTail('turn/start')})`)
   assert(mkTail('approval/asked') === 'approval/asked', `尾补 approval/asked → 悬尾=approval/asked (got ${mkTail('approval/asked')})`)
+  assert(mkTail('compaction/start') === 'compaction/start', `尾补 compaction/start → 悬尾=compaction/start (got ${mkTail('compaction/start')})`)
   // tool/call 在前但之后已有 tool/result → 不悬
   const mWithResult = measure([...fix, { type: 'tool/call', seq: 998, time: 1700000099998, data: {} }, { type: 'tool/result', seq: 999, time: 1700000099999, data: {} }])
   assert(mWithResult.tailDangling === null, `tool/call 后有 tool/result → 悬尾===null (got ${mWithResult.tailDangling})`)
@@ -297,6 +308,45 @@ function selftest() {
     assert(countFrames(readFileSync(single)) === 1, `单帧文件帧数===1 (got ${countFrames(readFileSync(single))})`)
     const parsed1 = parseEventsText(zstdRead(single))
     assert(parsed1.ev.length === 1 + rest.length && parsed1.bad === 0, '单帧文件全解一致')
+
+    // 大帧负向夹具（2026-10-25 security R1 P1-1 注入必红；断言鉴别力②）：
+    // 旧夹具全为小帧（<16KiB 且未 16KiB 对齐），对「sync 贪读吞帧」零鉴别力——修不修都绿。
+    console.log('[4] 大帧夹具（16KiB 对齐贪读 + 尾随帧）与 fail-closed 预算')
+    // 4a 贪读阳性对照（L1-14）：flat 16384×2 双帧是矩阵探针实测的必触发形态。
+    //    变异体映射：去掉 FCS 截断 → 4a-3 红（贪读输出未截回，总长翻倍）；
+    //    本机 Node 若无贪读缺陷 → 4a-4 红明示「对照失败」（覆盖缺失可见，不静默）。
+    const flat = Buffer.alloc(16384, 0x61)
+    const twoFlat = Buffer.concat([zstdCompressSync(flat, CHECKSUM_OPTS), zstdCompressSync(flat, CHECKSUM_OPTS)])
+    const infoFlat = zstdReadInfo(twoFlat)
+    assert(infoFlat.frames === 2, `flat 双帧帧数===2 (got ${infoFlat.frames})`)
+    assert(infoFlat.dupLines === 0, `flat 双帧零重复行（截断已消除吞并）(got ${infoFlat.dupLines})`)
+    assert(infoFlat.text.length === 32768, `修复后总内容===32768（贪读输出被截回单帧精确长度）(got ${infoFlat.text.length})`)
+    let greedyRaw = 0
+    try { greedyRaw = zstdDecompressSync(twoFlat).length } catch { /* 环境无贪读：greedyRaw 保持 0 */ }
+    assert(greedyRaw > 16384, `环境贪读阳性对照：raw sync ${greedyRaw} > 单帧 16384（红＝本机 Node 无贪读缺陷，4a 失去变异体杀伤力，须换触发形态）`)
+    // 4b 真实形态：header 帧 + 事件帧 + ≥16KiB 大帧 + 尾随帧 → 全解无重复无丢失（尾帧被吞则必红）
+    const bigEvents = Array.from({ length: 400 }, (_, i) => ({ type: 'user/message', seq: 1000 + i, time: 1700000100000 + i * 10, data: { id: `big${i}`, note: 'y'.repeat(48) } }))
+    const big = join(tmp, 'big.zstd')
+    writeZstdFrames(big, [header, rest.slice(0, 8), bigEvents, rest.slice(8)])
+    const parsedBig = parseEventsText(zstdRead(big))
+    assert(parsedBig.bad === 0, `大帧文件零坏行 (got ${parsedBig.bad})`)
+    assert(parsedBig.ev.length === 1 + rest.length + bigEvents.length,
+      `大帧文件全解事件===${1 + rest.length + bigEvents.length}（尾帧被吞则必红）(got ${parsedBig.ev.length})`)
+    const infoBig = zstdReadInfo(readFileSync(big))
+    assert(infoBig.dupLines === 0, `大帧文件零重复行 (got ${infoBig.dupLines})`)
+    // 4c 去重行防护本体（变异体：去掉 dedupLines → 此断言红）
+    const dd = dedupLines('a\nb\na\nc\n')
+    assert(dd.text === 'a\nb\nc\n' && dd.dupLines === 1, `去重行防护：重复行去除且计数 (got ${JSON.stringify(dd.text)} / ${dd.dupLines})`)
+    // 4d 预算 fail-closed（变异体映射：去掉对应上限检查 → 对应断言红）
+    let threw = false
+    try { zstdReadInfo(twoFlat, { maxTotalBytes: 1024 }) } catch { threw = true }
+    assert(threw, '总量预算 fail-closed：maxTotalBytes=1024 必须拒绝')
+    threw = false
+    try { zstdReadInfo(twoFlat, { maxFrameBytes: 1024 }) } catch { threw = true }
+    assert(threw, '单帧预算 fail-closed：maxFrameBytes=1024 必须拒绝')
+    threw = false
+    try { zstdReadInfo(twoFlat, { maxFrames: 1 }) } catch { threw = true }
+    assert(threw, '帧数上限 fail-closed：maxFrames=1 对双帧文件必须拒绝')
   } finally {
     try { rmSync(tmp, { recursive: true, force: true }) } catch { /* 清理失败不遮蔽断言结果 */ }
   }
@@ -339,7 +389,11 @@ function scanAll() {
   const errors = []
   for (const { zpath } of iterSessionLogs()) {
     try {
-      const { ev, bad, isZstd } = readSessionFile(zpath)
+      const { ev, bad, isZstd, zstd } = readSessionFile(zpath)
+      if (zstd && zstd.dupLines > 0) {
+        // 跨帧重复行 = 帧边界吞并痕迹：读数已不可信，静默计入会污染 scan 聚合——fail-closed 拒测
+        throw new Error(`跨帧重复行 ${zstd.dupLines} 条（帧边界吞并痕迹）：测量读数不可信，拒绝（fail-closed）`)
+      }
       const m = measure(ev)
       const meta = sessionMeta(ev)
       rows.push({ sessionId: meta.id, createdAt: meta.createdAt, isZstd, badLines: bad, ...m, zpath })
@@ -421,7 +475,18 @@ function main() {
   if (argv[0] === '--scan') { runScan(argv.slice(1)); return }
   if (argv[0] === '--cases') { runCases(argv.slice(1)); return }
   if (argv[0]) {
-    const { ev, bad, isZstd } = readSessionFile(argv[0])
+    let parsed
+    try { parsed = readSessionFile(argv[0]) } catch (e) {
+      console.error(`[measure-decay] ${e && e.message || e}`)
+      process.exitCode = 1
+      return
+    }
+    const { ev, bad, isZstd, zstd } = parsed
+    if (zstd && zstd.dupLines > 0) {
+      console.error(`[measure-decay] 跨帧重复行 ${zstd.dupLines} 条（帧边界吞并痕迹）：测量读数不可信，拒绝（fail-closed）`)
+      process.exitCode = 1
+      return
+    }
     const m = measure(ev)
     if (bad) console.error(`note: ${bad} 非 JSON 行被跳过 (zstd=${isZstd})`)
     console.log(argv.includes('--json') ? JSON.stringify({ ...sessionMeta(ev), isZstd, badLines: bad, ...m }, null, 1) : textRow(m))
