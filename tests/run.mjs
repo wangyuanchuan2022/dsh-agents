@@ -20,6 +20,7 @@ import { resolveConfig, apply, Config } from '../lib/index.js'
 import { createTiersApi, CONFIG_SCHEMA } from '../lib/settings.js'
 import { CONFIG_ENDPOINT, createConfigHandler } from '../lib/http-config.js'
 import { mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
@@ -1369,6 +1370,37 @@ for (const suite of [
     await testAsync(`[advisor] ${name}`, fn)
   }
 }
+
+// ── 独立门脚本接线（opt-r2 接线批 R2 ④）──────────────────────────────────
+// 三个自包含门（body-hash-check / usage-probe --selftest / session-guard --selftest）
+// 以子进程接入标准门序列。形态约束（任务书⑤）：门必须「失败即非零退出」的响亮形态，
+// 禁静默跳过——spawnSync 启动失败与非零退出都显式入账 failures；子进程输出走 stdio
+// inherit 直落控制台（读数行 = 门自己的 [RESULT] 行），不做 pipe 捕获（沙箱 EPERM 纪律）。
+// 三门均零 dataDir 写入（body-hash 只读 personas/；两探针 selftest 夹具写 tmpdir 并自清理），
+// 不触碰隔离门（tests/isolation-gate.mjs）的快照根。位置约束：advisor 组收尾断言
+// testRealDataDirIsolation 之后、汇总之前——非 advisor 用例，不影响其「组内最后」语义。
+
+/** 跑一个独立门脚本：任何非零结局都响亮入账，没有静默路径。失败走 throw——
+ * 由 test() 的 catch 记入 failures（与套件既有失败通道同构，账面不虚增 passed）。 */
+function gateScript(relPath, args = []) {
+  const script = fileURLToPath(new URL(relPath, import.meta.url))
+  const res = spawnSync(process.execPath, [script, ...args], { stdio: 'inherit' })
+  if (res.error) throw new Error(`子进程启动失败（${res.error.message}）——门未执行，fail-closed`)
+  if (res.status !== 0) throw new Error(`退出码 ${res.status ?? `信号 ${res.signal}`} ≠ 0——门判红，读数见上方子进程输出`)
+}
+
+test('独立门 body-hash-check.mjs：真实 personas/*.md 全量 body_hash 一致（真实输入无 workaround）', () => {
+  gateScript('../tests/body-hash-check.mjs')
+})
+test('独立门 body-hash-check --selftest：阳性对照 + 函数级变异 7/7 注入必红（零真实文件写入）', () => {
+  gateScript('../tests/body-hash-check.mjs', ['--selftest'])
+})
+test('独立门 usage-probe --selftest：24 断言（≥3 元素夹具）+ 三类变异必红（缺字段/坏JSON/空usage）', () => {
+  gateScript('../tools/usage-probe.mjs', ['--selftest'])
+})
+test('独立门 session-guard --selftest：夹具 7 元素 4 态 + 注入必红 3/3（变异副本动态 import）', () => {
+  gateScript('../tools/session-guard.mjs', ['--selftest'])
+})
 
 // ── 汇总 ──────────────────────────────────────────────────────────────────
 console.log(`dsh-agents tests: ${passed} passed, ${failures.length} failed`)

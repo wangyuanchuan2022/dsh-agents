@@ -18,7 +18,7 @@
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
 | 确定性工具 | 宿主注册 3 + `tools/` 共 16（机检脚本 9 · 测量/读取 4 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 297 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
+| 测试断言 | 主套件 301 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
 | 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -190,7 +190,7 @@ dsh-agents/
 
 ---
 
-## 5. tools/ — 独立 CLI 与机检（14 文件 = 机检脚本 8 + 测量/读取 3 + 负向自测 2 + 数据 1）
+## 5. tools/ — 独立 CLI 与机检（16 文件 = 机检脚本 9 + 测量/读取 4 + 负向自测 2 + 数据 1）
 
 | 文件 | 职责 | 自测 |
 |---|---|---|
@@ -202,9 +202,11 @@ dsh-agents/
 | `skill-replica-check.ps1` | 双装机根一致性机检：按 replica-map.json 逐技能 SHA256 比对（match/drift/missing/unknown 四态）。**注**：replica-map.json 含本机装机路径，已移出 git 跟踪、仅维护侧本地维护——clone 后运行会 FAIL exit 1（fail-loud，不静默），属本机运维脚本非对外工具 | 本地运行（需本地 replica-map.json） |
 | `verify-imp26.mjs` | persona-gate 负向自测四层：①判据层纯函数（真实 executor 正文+真实 ECC 基线文本）②E2E 注入必红（fd-stdio 跑真安装器，INSTALL_PERSONAS_ROOT 重定向）③真实树全量跑 ④汇总裁定 | 33 断言——2026-09-30 修复后首次 33/0（见 §7） |
 | `taskbook-26a-negative.mjs` | taskbook 六参数 null 穿透等负向断言（IMP-26a 修复的注入必红回归门） | — |
+| `session-guard.mjs` | 会话悬尾巡检门（clean/suspect/candidate/inflight 四态）：liveness 回填（running/idle/offline）+ self 白名单（测量者自悬排除）+ death-cases 幂等追加；只报警不判因（死因人事后确认）；输入复用 `measure-decay --scan --json`，`--json` 出机器读数 | `--selftest` 19 断言（7 元素 4 态夹具 + 注入必红 3/3：去 liveness 分支 / 去阈值比较 / 密度判据回流，变异副本动态 import） |
 | `measure-injection-surface.mjs` | A1 全注入面基线测量：面A 工具面 / 面B 技能面 / 面C persona 面 / 面D 任务书面四口同测（码点/码元/字节三口径），`--diff` 支持 ±0 复跑判定；面B fail-closed 双臂（数量≠口径 或 坏文件存在 → exit 1） | `--selftest` 9 断言（含坏文件凑足/数量≠口径/尾参缺值注入必红） |
 | `measure-decay.mjs` | 会话日志工具调用密度衰减测量（早/中/晚三段）+ 尾悬死亡签名 + `--scan`/`--cases` 批量模式；zstd 读取经 `zstd-read.mjs`（帧边界 FCS 截断 + fail-closed 预算 + 重复行拒测） | `--selftest` 50 断言（含大帧贪读夹具与预算注入必红） |
 | `zstd-read.mjs` | 宿主多帧 zstd 会话日志读取器：Frame_Magic 候选扫描 → 逐候选解压 → 按帧头 Frame_Content_Size 截断回单帧（Node sync 解码对 16KiB 对齐帧贪读吞并后续帧的防御）+ 帧数/单帧/累计三重预算 + 去重行防护 | 由 measure-decay selftest 覆盖（变异体必红 4/4） |
+| `usage-probe.mjs` | 会话日志 usage/token 持久化探针（M3 缓存对照测量基建，AC-C5）：canonical 四元组 + 恒等式/缺字段/坏行/空 usage 四类诊断 + 首请求冷启动/第二请求稳态/cacheHitShare；多帧 zstd 经 `zstd-read.mjs`；`--scan` 批量模式 | `--selftest` 24 断言（3 请求黄金夹具值两两不同 + 三类变异必红：缺字段/坏 JSON/空 usage + 2 帧 zstd 端到端） |
 | `approved.json` | assemble-review 的批准记录（数据文件） | — |
 
 **tools/ 面设计纪律**：全部机检脚本**注入必红**（把坏样本喂进去断言变红——只验证「好文件过门」的闸门是半成品）；输出排空后再退出；「无意见」唯一合法形态是空输出+exit 0。
@@ -215,12 +217,12 @@ dsh-agents/
 
 | 文件 | 职责 | 当前账 |
 |---|---|---|
-| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 | **297 passed / 0 failed** |
-| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 297 |
+| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **301 passed / 0 failed** |
+| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 301 |
 | `isolation-gate.mjs` | **进程边界双快照隔离门**：before 快照 → 动态 import 主套件 → after 快照 → 断言相等（防「加载期写盘被烘焙进基线」的假绿）；看门狗强制收口；`--selftest` 必红→必绿 | exit 0；selftest **5/5** |
 | `advisor-llm-replay.mjs` | **LLM 录制/回放设施**：录制端透明 passthrough → 落盘 fixture（不存请求正文）→ 回放逐块深比较；`ADVISOR_REPLAY_MISS`/`UNCONSUMED` 双侧 fail-closed | **9/9** |
 | `skill-sync-check.mjs` | **计数漂移门 + `.gitattributes` 门 + eol 一致性门**：README/ARCHITECTURE 里每处技能计数表述必须等于 `skills/**/SKILL.md` 实测件数；全跟踪文件 worktree==index 行尾一致；零命中 fail-closed + 阳性对照 + `--selftest` | PASS（变异体 **16/16** 达到期望） |
-| `body-hash-check.mjs` | **persona body_hash 一致性门**（R2 C-2/C-1 根因机制化）：全 `personas/*.md` 按 body 域公式重算比对，漂移/缺字段/形态非法响亮失败；公式唯一源 = `lib/persona.js` splitFrontmatter；接入 run.mjs 门序列待组织者统一安排（A 线同文件避让） | 真实 23 文件 PASS（exit 0）；`--selftest` 函数级变异 **7/7** 必红（不碰真实文件） |
+| `body-hash-check.mjs` | **persona body_hash 一致性门**（R2 C-2/C-1 根因机制化）：全 `personas/*.md` 按 body 域公式重算比对，漂移/缺字段/形态非法响亮失败；公式唯一源 = `lib/persona.js` splitFrontmatter；已接入 run.mjs 标准门序列（R2 接线批：真实门 + `--selftest` 双注册，子进程形态） | 真实 23 文件 PASS（exit 0）；`--selftest` 函数级变异 **7/7** 必红（不碰真实文件） |
 | `boot-schema-check.mjs` | **装前必过门**：宿主真实校验器（dsh-tools assertSupportedJsonSchema）验证三工具 parameters + output.schema。**前置条件：本机已安装 DSH 宿主**（宿主包路径经 APPDATA 运行时解析）——无宿主环境跑不了，非 clone 即可复现门 | 六项 ALL PASS |
 | `installed-smoke.mjs` | 安装副本烟测：工具 + settings + 端点三方同源 | 安装后跑 |
 | `probe-boot.mjs` / `probe-catalog.mjs` / `probe-client.mjs` / `probe-tier-save-loss.mjs` | 重启后探针：宿主引导图含本插件 / 工具目录可发现 / client.js 可分发 / 三档写保真回归 | 重启后跑 |
@@ -232,7 +234,7 @@ dsh-agents/
 
 ```bash
 npm install                        # 公开 registry 可装（1 个运行时依赖）
-node tests/run.mjs                 # 297/0
+node tests/run.mjs                 # 301/0（含独立门接线组）
 node tests/isolation-gate.mjs      # 隔离门（进程边界双快照）exit 0
 node tests/advisor-llm-replay.mjs  # 录制/回放闭环 9/9
 node tools/crgate.test.mjs         # 65/0
@@ -260,7 +262,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 | 门 | 账面 |
 |---|---|
-| 主套件 | 297/0 |
+| 主套件 | 301/0（含独立门接线组） |
 | 隔离门（isolation-gate） | exit 0（selftest 必红→必绿 5/5） |
 | LLM 回放（advisor-llm-replay） | 9/9 |
 | 计数漂移门（skill-sync-check） | PASS（阳性对照 PASS + 变异体 16/16 变红 + eol 一致） |
