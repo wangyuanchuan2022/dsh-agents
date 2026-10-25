@@ -1,24 +1,24 @@
 # ARCHITECTURE — dsh-agents 仓库全景（评审导览）
 
-> 本文面向**外部评审者**：逐部件说明本仓 140 个跟踪文件的职责、接线与质量账。
+> 本文面向**外部评审者**：逐部件说明本仓 143 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 140 文件，本文自身计入；2026-10-25 R1 收口修复批次后更新）。
+> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 143 文件，本文自身计入；2026-10-25 R2 C 批次后更新）。
 > 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
 
 ---
 
 ## 0. 一句话与关键数字
 
-**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、14 个确定性机检与测量脚本、三层测试链。
+**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、16 个确定性机检与测量脚本、三层测试链。
 
 | 维度 | 数值 | 验证入口 |
 |---|---|---|
-| 跟踪文件 | 140 | `git ls-files` 计数 |
+| 跟踪文件 | 143 | `git ls-files` 计数 |
 | 角色 / 泳道 | 23（build 10 · review 6 · domain 7） | `agent_roles action=list` |
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
-| 确定性工具 | 宿主注册 3 + `tools/` 共 14（机检脚本 8 · 测量/读取 3 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 287 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
+| 确定性工具 | 宿主注册 3 + `tools/` 共 16（机检脚本 9 · 测量/读取 4 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
+| 测试断言 | 主套件 297 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
 | 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -33,8 +33,8 @@ dsh-agents/
 ├── lib/            (37)               插件运行时（三个宿主工具 + 支撑模块 + advisor 子目录 26 件）
 ├── personas/       (34)               23 份角色人格 + checklists/ 11 份评审清单
 ├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
-├── tools/          (14)               独立 CLI 工具与机检脚本（不进宿主运行时）
-├── tests/          (12)               主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针 + 隔离门/回放设施
+├── tools/          (16)               独立 CLI 工具与机检脚本（不进宿主运行时）
+├── tests/          (13)               主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针 + 隔离门/回放设施
 ├── docs/           (4)                任务书模板正本 + advisor 契约正本 + 开源复用账本 + 设计原则正本
 ├── README.md                          使用向导（安装 / 快速开始 / 配置 / 已知限制）
 ├── ARCHITECTURE.md                    本文
@@ -211,15 +211,16 @@ dsh-agents/
 
 ---
 
-## 6. tests/ — 测试与验收门（12 文件）
+## 6. tests/ — 测试与验收门（13 文件）
 
 | 文件 | 职责 | 当前账 |
 |---|---|---|
-| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 | **287 passed / 0 failed** |
-| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 287 |
+| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 | **297 passed / 0 failed** |
+| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 297 |
 | `isolation-gate.mjs` | **进程边界双快照隔离门**：before 快照 → 动态 import 主套件 → after 快照 → 断言相等（防「加载期写盘被烘焙进基线」的假绿）；看门狗强制收口；`--selftest` 必红→必绿 | exit 0；selftest **5/5** |
 | `advisor-llm-replay.mjs` | **LLM 录制/回放设施**：录制端透明 passthrough → 落盘 fixture（不存请求正文）→ 回放逐块深比较；`ADVISOR_REPLAY_MISS`/`UNCONSUMED` 双侧 fail-closed | **9/9** |
 | `skill-sync-check.mjs` | **计数漂移门 + `.gitattributes` 门 + eol 一致性门**：README/ARCHITECTURE 里每处技能计数表述必须等于 `skills/**/SKILL.md` 实测件数；全跟踪文件 worktree==index 行尾一致；零命中 fail-closed + 阳性对照 + `--selftest` | PASS（变异体 **16/16** 达到期望） |
+| `body-hash-check.mjs` | **persona body_hash 一致性门**（R2 C-2/C-1 根因机制化）：全 `personas/*.md` 按 body 域公式重算比对，漂移/缺字段/形态非法响亮失败；公式唯一源 = `lib/persona.js` splitFrontmatter；接入 run.mjs 门序列待组织者统一安排（A 线同文件避让） | 真实 23 文件 PASS（exit 0）；`--selftest` 函数级变异 **7/7** 必红（不碰真实文件） |
 | `boot-schema-check.mjs` | **装前必过门**：宿主真实校验器（dsh-tools assertSupportedJsonSchema）验证三工具 parameters + output.schema。**前置条件：本机已安装 DSH 宿主**（宿主包路径经 APPDATA 运行时解析）——无宿主环境跑不了，非 clone 即可复现门 | 六项 ALL PASS |
 | `installed-smoke.mjs` | 安装副本烟测：工具 + settings + 端点三方同源 | 安装后跑 |
 | `probe-boot.mjs` / `probe-catalog.mjs` / `probe-client.mjs` / `probe-tier-save-loss.mjs` | 重启后探针：宿主引导图含本插件 / 工具目录可发现 / client.js 可分发 / 三档写保真回归 | 重启后跑 |
@@ -231,13 +232,14 @@ dsh-agents/
 
 ```bash
 npm install                        # 公开 registry 可装（1 个运行时依赖）
-node tests/run.mjs                 # 287/0
+node tests/run.mjs                 # 297/0
 node tests/isolation-gate.mjs      # 隔离门（进程边界双快照）exit 0
 node tests/advisor-llm-replay.mjs  # 录制/回放闭环 9/9
 node tools/crgate.test.mjs         # 65/0
 node tools/publish-scan.test.mjs   # 47/0
 node tools/verify-imp26.mjs        # 33/0
 node tests/skill-sync-check.mjs    # 计数漂移门 + .gitattributes + eol 门（零依赖纯 fs）
+node tests/body-hash-check.mjs     # persona body_hash 一致性门（--selftest 函数级变异 7/7）
 npm test                           # 串联入口：主套件 + 隔离门 + 回放 + 计数门 + boot（见下组）
 ```
 
@@ -258,7 +260,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 | 门 | 账面 |
 |---|---|
-| 主套件 | 287/0 |
+| 主套件 | 297/0 |
 | 隔离门（isolation-gate） | exit 0（selftest 必红→必绿 5/5） |
 | LLM 回放（advisor-llm-replay） | 9/9 |
 | 计数漂移门（skill-sync-check） | PASS（阳性对照 PASS + 变异体 16/16 变红 + eol 一致） |
