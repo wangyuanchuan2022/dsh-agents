@@ -22,10 +22,11 @@
  *
  * 退出码：0 成功；1 断言/解析失败（fail-closed）；2 用法错误。
  */
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, statSync, mkdtempSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join, dirname } from 'node:path'
+import { tmpdir } from 'node:os'
 import { rolesTool, taskbookTool, spawnTool, resolveConfig } from '../lib/index.js'
 import { getRole } from '../lib/roles.js'
 import { loadPersona, splitFrontmatter } from '../lib/persona.js'
@@ -42,10 +43,10 @@ const SAMPLE_ROLES = ['explore', 'executor', 'analyst']
 /** dryRun 抽样用中性任务文本（组织者约束：≤50 字、中性、三角色通用）。 */
 const SAMPLE_TASK = '梳理 tools 目录脚本的用途清单，输出一页 markdown 索引；只读不改文件。'
 
-// ── 度量原语 ─────────────────────────────────────────────────────────────────
+// ── 度量原语（导出供单测复用，2026-10-25 P2-7）────────────────────────────────
 
 /** 三口径字符度量：码点 / UTF-16 码元 / UTF-8 字节。 */
-function metrics(str) {
+export function metrics(str) {
   const s = String(str)
   return { codepoints: [...s].length, units: s.length, bytes: Buffer.byteLength(s, 'utf8') }
 }
@@ -61,7 +62,7 @@ function addMetrics(a, b) {
 const ZERO = { codepoints: 0, units: 0, bytes: 0 }
 
 /** 递归收集 schema 树内全部 description 字符串（结构字符不计，只计描述字符串值）。 */
-function collectDescriptions(node, out = []) {
+export function collectDescriptions(node, out = []) {
   if (node === null || node === undefined || typeof node !== 'object') return out
   if (Array.isArray(node)) {
     for (const item of node) collectDescriptions(item, out)
@@ -116,38 +117,52 @@ function measureTools() {
 
 // ── 面B 技能面 ───────────────────────────────────────────────────────────────
 
-/** skills/<dir>/SKILL.md frontmatter description 逐条（解析复用 lib/persona.js splitFrontmatter）。 */
-function measureSkills() {
-  const dirs = readdirSync(SKILLS_DIR, { withFileTypes: true })
+/** skills/<dir>/SKILL.md frontmatter description 逐条（解析复用 lib/persona.js splitFrontmatter）。
+ *  dir 参数缺省测量仓内 skills/，自测可注入临时夹具目录（2026-10-25 P1-2 自测需要）。
+ *  本函数只收集不断言；fail-closed 口径判定统一在 assertSkillCaliber。 */
+function measureSkills(dir = SKILLS_DIR) {
+  const dirs = readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .sort()
   const items = []
   const failures = []
-  for (const dir of dirs) {
-    const abs = join(SKILLS_DIR, dir, 'SKILL.md')
+  for (const name of dirs) {
+    const abs = join(dir, name, 'SKILL.md')
     let raw
     try {
       raw = readFileSync(abs, 'utf8')
     } catch {
-      failures.push(`skills/${dir}/SKILL.md 不存在`)
+      failures.push(`skills/${name}/SKILL.md 不存在`)
       continue
     }
     const desc = splitFrontmatter(raw).meta.description
     if (typeof desc !== 'string' || desc === '') {
-      failures.push(`skills/${dir}/SKILL.md frontmatter description 解析为空`)
+      failures.push(`skills/${name}/SKILL.md frontmatter description 解析为空`)
       continue
     }
-    items.push({ id: dir, ...metrics(desc), sha256: sha256Short(abs) })
+    items.push({ id: name, ...metrics(desc), sha256: sha256Short(abs) })
   }
+  const totals = items.map((it) => ({ codepoints: it.codepoints, units: it.units, bytes: it.bytes })).reduce(addMetrics, ZERO)
+  return { items, totals, failures }
+}
+
+/** 面B fail-closed 口径断言：① 数量等于口径；② 零坏文件。任何一条不满足即抛（exit 1）。
+ *  2026-10-25 P1-2（code-reviewer R1）：旧实现只查①——坏 SKILL.md 被「合法数凑足」掩蔽
+ *  （fail-open）：26 目录 25 合法时 exit 0，基线静默漏计。 */
+function assertSkillCaliber({ items, failures }) {
   if (items.length !== EXPECT.skills) {
     throw new Error(
       `面B：技能数 ${items.length} ≠ 口径 ${EXPECT.skills}（失败：${failures.join('；') || '无'}）。` +
       '口径变更须同步改本脚本 EXPECT 与基线报告。',
     )
   }
-  const totals = items.map((it) => ({ codepoints: it.codepoints, units: it.units, bytes: it.bytes })).reduce(addMetrics, ZERO)
-  return { items, totals, failures }
+  if (failures.length > 0) {
+    throw new Error(
+      `面B：目录数凑足口径但存在 ${failures.length} 个坏技能文件（fail-closed 拒测）：${failures.join('；')}。` +
+      '坏文件使基线静默漏计，修复后再测。',
+    )
+  }
 }
 
 // ── 面C persona 面 ───────────────────────────────────────────────────────────
@@ -188,7 +203,7 @@ function measurePersonas() {
 // ── 面D 任务书面 ─────────────────────────────────────────────────────────────
 
 /** 按二级标题切节：节 = `^## ` 标题行至下一 `## ` 标题行前（含标题行）；头部记 preamble。 */
-function splitSections(text) {
+export function splitSections(text) {
   const lines = String(text).split('\n')
   const sections = []
   let current = { title: '(preamble 头部)', lines: [] }
@@ -244,9 +259,10 @@ function measureTaskbooks(samplesDir) {
 
 // ── 汇总 / diff / 报告 ───────────────────────────────────────────────────────
 
-function buildReadings() {
+function buildReadings(samplesDir = null) {
   const tools = measureTools()
   const skills = measureSkills()
+  assertSkillCaliber(skills) // fail-closed：数量≠口径 或 存在坏文件 → 抛（exit 1），不产出基线
   const personas = measurePersonas()
   return {
     meta: {
@@ -257,7 +273,7 @@ function buildReadings() {
     tools,
     skills,
     personas,
-    taskbooks: measureTaskbooks(),
+    taskbooks: measureTaskbooks(samplesDir),
   }
 }
 
@@ -295,7 +311,7 @@ function fmt(n) {
   return String(n)
 }
 
-function renderReport(r) {
+function renderReport(r, samplesDir = null) {
   const L = []
   L.push('## 读数口径')
   L.push('')
@@ -340,8 +356,10 @@ function renderReport(r) {
   L.push('')
   L.push('## 面D 任务书面（抽样记录，C-11 排除瘦身，Round 2 备料）')
   L.push('')
-  L.push(`- 抽样任务文本（${fmt(r.taskbooks.sampleTask.codepoints ?? [...r.taskbooks.sampleTask].length)} 码点，中性）：「${r.taskbooks.sampleTask}」`)
-  L.push('- 合成链：`composeTaskbook`（lib/taskbook.js:223）dryRun 直调，零 spawn、零模型调用；样本全文见 `agent-out/opt-r1-baseline-samples/`。')
+  L.push(`- 抽样任务文本（${fmt([...r.taskbooks.sampleTask].length)} 码点，中性）：「${r.taskbooks.sampleTask}」`)
+  L.push(samplesDir
+    ? `- 合成链：\`composeTaskbook\`（lib/taskbook.js:223）dryRun 直调，零 spawn、零模型调用；样本全文见 \`${samplesDir}/\`。`
+    : '- 合成链：`composeTaskbook`（lib/taskbook.js:223）dryRun 直调，零 spawn、零模型调用；本次运行未落盘样本（`--samples <dir>` 可落盘）。')
   L.push('')
   L.push('| 角色 | 总码点 | 总码元 | 总字节 | 分节数 |')
   L.push('|---|---|---|---|---|')
@@ -407,6 +425,61 @@ function selftest() {
     eq(collectDescriptions({ type: 'object', properties: { x: { type: 'string' } } }), [], '空收集')
   })
 
+  // ── 面B fail-closed 负向自测（2026-10-25 P1-2 注入必红；断言鉴别力②）──────────
+  // 变异体映射：assertSkillCaliber 去掉 failures 臂 → 「坏文件凑足」用例红；
+  //             去掉数量臂 → 「数量≠口径」用例红；measureSkills 解析坏 → 正例用例红。
+  const mkSkillDir = (entries) => {
+    const dir = mkdtempSync(join(tmpdir(), 'mis-selftest-'))
+    for (const [id, desc] of entries) {
+      mkdirSync(join(dir, id), { recursive: true })
+      const fm = desc === null ? '---\nname: x\n---\n正文' : `---\nname: ${id}\ndescription: "${desc}"\n---\n正文`
+      writeFileSync(join(dir, id, 'SKILL.md'), fm, 'utf8')
+    }
+    return dir
+  }
+  t('measureSkills 夹具 ≥3 元素（合法目录全收集、合计=逐条码点和）', () => {
+    const dir = mkSkillDir([['skill-a', '描述A'], ['skill-b', '描述B'], ['skill-c', '描述C']])
+    try {
+      const r = measureSkills(dir)
+      eq(r.items.length, 3, '三条全收集')
+      eq(r.failures, [], '零失败')
+      eq(r.totals.codepoints, [...'描述A'].length + [...'描述B'].length + [...'描述C'].length, '合计=三条码点和')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+  t('坏 SKILL.md + 合法数凑足必须红（fail-open 洞注入必红，P1-2）', () => {
+    const valid = Array.from({ length: EXPECT.skills }, (_, i) => [`skill-${i}`, `描述${i}`])
+    const dir = mkSkillDir([...valid, ['skill-bad', null]]) // 26 目录：25 合法 + 1 坏（description 缺失）
+    try {
+      const r = measureSkills(dir)
+      eq(r.items.length, EXPECT.skills, '合法数恰好凑足口径（旧实现在此 exit 0）')
+      eq(r.failures.length, 1, '坏文件被记录进 failures')
+      let threw = false
+      try { assertSkillCaliber(r) } catch { threw = true }
+      if (!threw) throw new Error('含坏文件时 assertSkillCaliber 未抛——fail-open 洞回归（必须红）')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+  t('数量 ≠ 口径必须红（fail-closed 数量臂保持）', () => {
+    const valid = Array.from({ length: EXPECT.skills - 1 }, (_, i) => [`skill-${i}`, `描述${i}`])
+    const dir = mkSkillDir(valid) // 24 合法 < 口径 25
+    try {
+      const r = measureSkills(dir)
+      let threw = false
+      try { assertSkillCaliber(r) } catch { threw = true }
+      if (!threw) throw new Error('数量≠口径时 assertSkillCaliber 未抛（必须红）')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+  t('parseArgs 尾参缺值必须报用法错误（退出码 2 契约，P2-3）', () => {
+    const saved = process.exitCode
+    try {
+      eq(parseArgs(['--json']), null, '--json 末参无值 → null（用法错误）')
+      eq(parseArgs(['--diff']), null, '--diff 末参无值 → null（--diff 被吞会让用户误以为跑过对比）')
+      eq(parseArgs(['--json', 'out.json']).json, 'out.json', '带值正常解析')
+      eq(parseArgs(['--selftest']).selftest, true, '布尔旗标不受影响')
+    } finally {
+      process.exitCode = saved // 负向用例的退出码副作用不外溢到自测进程（否则 9/9 PASS 也 exit 2）
+    }
+  })
+
   const failed = results.filter((r) => r[0] === 'FAIL')
   for (const [status, name, msg] of results) console.log(`[selftest] ${status}  ${name}${msg ? `  ←  ${msg}` : ''}`)
   console.log(`[selftest] ${results.length - failed.length}/${results.length} PASS`)
@@ -417,14 +490,26 @@ function selftest() {
 
 function parseArgs(argv) {
   const opts = { json: null, report: null, samples: null, diff: null, selftest: false }
+  const WITH_VALUE = { '--json': 'json', '--report': 'report', '--samples': 'samples', '--diff': 'diff' }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
-    if (a === '--selftest') opts.selftest = true
-    else if (a === '--json') opts.json = argv[++i]
-    else if (a === '--report') opts.report = argv[++i]
-    else if (a === '--samples') opts.samples = argv[++i]
-    else if (a === '--diff') opts.diff = argv[++i]
-    else { console.error(`[用法错误] 未知参数 ${a}`); process.exitCode = 2; return null }
+    if (a === '--selftest') { opts.selftest = true; continue }
+    const key = WITH_VALUE[a]
+    if (key) {
+      const v = argv[++i]
+      if (v === undefined) {
+        // 2026-10-25 P2-3（security R1）：值缺失此前被静默吞掉（undefined → falsy → 分支跳过），
+        // 尤其 --diff 被吞会让用户误以为跑过 ±0 对比——恢复「2=用法错误」契约。
+        console.error(`[用法错误] ${a} 需要一个值（收到末参，值缺失）`)
+        process.exitCode = 2
+        return null
+      }
+      opts[key] = v
+      continue
+    }
+    console.error(`[用法错误] 未知参数 ${a}`)
+    process.exitCode = 2
+    return null
   }
   return opts
 }
@@ -432,14 +517,13 @@ function parseArgs(argv) {
 function main() {
   const opts = parseArgs(process.argv.slice(2))
   if (opts === null) return false
-  if (opts.selftest) return selftest()
-
-  const readings = buildReadings()
-  // 面D 样本落盘（buildReadings 内 measureTaskbooks 默认不落盘，这里按 --samples 显式补）
-  if (opts.samples) {
-    const withSamples = { ...readings, taskbooks: measureTaskbooks(opts.samples) }
-    Object.assign(readings.taskbooks, withSamples.taskbooks)
+  if (opts.selftest) {
+    const ok = selftest()
+    if (!ok) process.exitCode = 1 // 自测失败必须非零退出（2026-10-25 变异体测试暴露：旧实现 FAIL 只打印不置码，闸门 fail-open）
+    return ok
   }
+
+  const readings = buildReadings(opts.samples || null)
 
   const json = JSON.stringify(readings, null, 2)
   if (opts.json) writeFileSync(opts.json, json, 'utf8')
@@ -455,7 +539,7 @@ function main() {
     }
   }
 
-  const report = renderReport(readings)
+  const report = renderReport(readings, opts.samples || null)
   if (opts.report) writeFileSync(opts.report, report, 'utf8')
 
   const tt = readings.tools.totals
@@ -472,6 +556,7 @@ function main() {
   return process.exitCode !== 1
 }
 
-if (!main()) {
-  // 退出码已在内部设置（1=漂移/断言失败，2=用法错误）；不调 process.exit 以保 stdout 排空。
-}
+// 2026-10-25 P2-7：补 import guard（与 zstd-read.mjs/measure-decay.mjs 同款）——
+// 被测试/工具 import 复用 metrics/collectDescriptions/splitSections 时不再整场测量。
+// 退出码在 main 内部设置（1=漂移/断言失败，2=用法错误）；不调 process.exit 以保 stdout 排空。
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main()
