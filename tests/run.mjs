@@ -468,6 +468,58 @@ test('IMP-26a 白名单：readonly 角色自动携带、可写角色不携带（
   assert.ok(readonlyCount >= 3, `readonly 角色应 ≥3 个，实际 ${readonlyCount}`)
 })
 
+// ── ③e D-1a 档位差异化（AC-M2-1，plan-opt-r2 工作流 D 免费段） ────────────────
+// 断言鉴别力①：≥3 元素（同角色 × LOW/MEDIUM/HIGH 三档路由）——单元素/双臂断言
+// 分不出「串接/取首个/按角色贴标签」假实现；同角色只变档位直接证明渲染由档位输入驱动。
+const D1A_TASK = '梳理 tools 目录脚本的用途清单'
+function d1aCompose(tier, roleId = 'explore', extra = {}) {
+  const role = getRole(roleId)
+  const route = resolveRoute({ role, tierTable: resolveTierTable(undefined), tier })
+  return composeTaskbook({ role, persona: loadPersona(role), route, task: D1A_TASK, ...extra })
+}
+const D1A_HAS_LOW = (t) => t.includes('| 情况 |')
+const D1A_HAS_HIGH = (t) => t.includes('### few-shot') && t.includes('- R1 ')
+
+test('D-1a 档位差异化：同角色×三档渲染互异且各命中模式特征（防串接/取首个）', () => {
+  const low = d1aCompose('LOW')
+  const med = d1aCompose('MEDIUM')
+  const high = d1aCompose('HIGH')
+  // ① 三档输出两两不等（模板面 diff 非空——三档返回同一形态即假实现）
+  assert.notEqual(low, med)
+  assert.notEqual(med, high)
+  assert.notEqual(low, high)
+  // ② 各档命中自己的模式特征，且不携带他档特征（LOW=决策表 / HIGH=few-shot+R 编号）
+  assert.ok(D1A_HAS_LOW(low), 'LOW 须含分类决策表（| 情况 | 表）')
+  assert.ok(!low.includes('### few-shot') && !low.includes('- R1 '), 'LOW 不得携带 HIGH 特征')
+  assert.ok(D1A_HAS_HIGH(high), 'HIGH 须含 few-shot 段与 spec 编号条款')
+  assert.ok(!high.includes('| 情况 |'), 'HIGH 不得携带 LOW 特征')
+  // ③ MEDIUM=现行形态（v3.3 A2b 定稿逐字冻结；D-1b 消融对照臂基线）：三特征全不携带
+  assert.ok(!D1A_HAS_LOW(med) && !D1A_HAS_HIGH(med), 'MEDIUM 须保持现行形态（无 LOW/HIGH 特征）')
+  // ④ 注入必红（断言鉴别力②）：抹掉特征行后各谓词必假——谓词非恒真
+  const drop = (text, needle) => text.split('\n').filter((line) => !line.includes(needle)).join('\n')
+  assert.equal(D1A_HAS_LOW(drop(low, '| 情况 |')), false, 'LOW 特征谓词注入必红')
+  assert.equal(D1A_HAS_HIGH(drop(high, '### few-shot')), false, 'HIGH 特征谓词注入必红')
+})
+
+test('D-1a 三自然档角色同任务 dryRun：explore/executor/analyst 各归各位且模板段互异', () => {
+  // 计划断言①照录：≥3 角色 × 同一任务 dryRun 合成，LOW/HIGH 输出 diff 非空且各命中模式特征
+  const build = (id) => {
+    const role = getRole(id)
+    return composeTaskbook({ role, persona: loadPersona(role), route: resolveRoute({ role, tierTable: resolveTierTable(undefined) }), task: D1A_TASK })
+  }
+  const explore = build('explore') // LOW
+  const executor = build('executor') // MEDIUM
+  const analyst = build('analyst') // HIGH
+  assert.ok(D1A_HAS_LOW(explore), 'explore(LOW) 命中决策表特征')
+  assert.ok(!D1A_HAS_LOW(executor) && !D1A_HAS_HIGH(executor), 'executor(MEDIUM) 保持现行')
+  assert.ok(D1A_HAS_HIGH(analyst), 'analyst(HIGH) 命中 few-shot+spec 特征')
+  // 模板静态段（§五~§七，人格之外的部分）跨档 diff 非空：差异在模板本身，不只是人格
+  const slice = (t) => t.slice(t.indexOf('## 五、'), t.indexOf('## 一、角色卡'))
+  assert.notEqual(slice(explore), slice(analyst), 'LOW/HIGH 模板段 diff 非空')
+  assert.notEqual(slice(executor), slice(analyst), 'MEDIUM/HIGH 模板段 diff 非空')
+  assert.notEqual(slice(explore), slice(executor), 'LOW/MEDIUM 模板段 diff 非空')
+})
+
 // ── ④ 派活前置三问 ────────────────────────────────────────────────────────
 test('三问恒为 3 条；副作用动作命中告警；越档有理由位', () => {
   const role = getRole('executor')

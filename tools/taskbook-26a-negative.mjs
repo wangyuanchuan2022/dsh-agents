@@ -19,6 +19,12 @@
  *   M8  只读白名单携带                  （IMP-26a）
  *   M9  只读白名单门控（readonly 判定） （IMP-26a）
  *   M10 organizer 缺失直投地址警示      （DP-1 P1-A/F-2）
+ *   M11 档位差异化失效（三档全回落单档）（D-1a，2026-10-25）
+ *
+ * 锚点维护史：M1/M5/M10 在 A2b 瘦身（e13da3c）时源码措辞收窄未同步，2026-10-25
+ * D-1a 席按「源码已漂移，先修本工具再回归」的头部约定刷新；M3/M4 谓词跑在
+ * LOW 档渲染上（本工具桩 ROUTE tier='LOW'），D-1a 档位差异化后仍成立——
+ * LOW 分支保留 'attempt 级'/'run_failure=' 与熔断小节标题及收尾宽限短语。
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -42,7 +48,7 @@ const broadcastLine = (t) => t.split('\n').find((l) => l.includes('完成广播�
 
 const MUTANTS = [
   { id: 'M1-wake', desc: '完成广播条款去 wake:true',
-    from: '（wake:true） → 组织者', to: ' → 组织者',
+    from: '（wake:true）→ 组织者', to: ' → 组织者',
     verify: (mod) => broadcastLine(tExec(mod, { organizer: 'session-x' })).includes('（wake:true）') },
   { id: 'M2-timeout', desc: '超时字面 5→15（与正本失一致）',
     from: '超过 5 分钟无回音', to: '超过 15 分钟无回音',
@@ -51,14 +57,14 @@ const MUTANTS = [
       const doc = /超时 <N=(\d+)> 分钟/.exec(readFileSync(DOCS, 'utf8'))?.[1]
       return gen !== undefined && doc !== undefined && gen === doc
     } },
-  { id: 'M3-failure53', desc: '§5.3 三层失败分类 run_failure 标记移除',
-    from: 'run_failure=<类目>', to: 'run_failure_MISSING=<类目>',
+  { id: 'M3-failure53', desc: '§5.3 三层失败分类 run_failure 标记移除（LOW 决策表行锚点；MEDIUM 侧标记由 run.mjs §5.3 断言覆盖）',
+    from: '| 整场停摆 | `run_failure=类目`', to: '| 整场停摆 | `run_failure_MISSING=类目`',
     verify: (mod) => tExec(mod).includes('run_failure=') && tExec(mod).includes('attempt 级') },
   { id: 'M4-fuse62', desc: '§6.2 收尾宽限轮语义移除',
-    from: '最后一轮只能交付', to: '最后一轮只可提交',
+    from: "const PHRASE_LAST_ROUND = '最后一轮只能交付'", to: "const PHRASE_LAST_ROUND = '最后一轮只可提交'",
     verify: (mod) => tExec(mod).includes('### 三档熔断与收尾宽限轮') && tExec(mod).includes('最后一轮只能交付') },
   { id: 'M5-cf91', desc: '§9.1 confirmed_findings 条件渲染短路',
-    from: "if (confirmedFindings !== undefined && String(confirmedFindings).trim() !== '') {", to: 'if (false) {',
+    from: "if (confirmedFindings != null && String(confirmedFindings).trim() !== '') {", to: 'if (false) {',
     verify: (mod) => tExec(mod, { confirmedFindings: '1. a.js:1 - x - y' }).includes('confirmed_findings（上一轮已结论清单') },
   { id: 'M6-pathwarn', desc: '无路径警示行改写（降级出口消失）',
     from: '产出落盘路径：⚠️ **未指定**', to: '产出落盘路径：PATH-MISSING',
@@ -73,8 +79,11 @@ const MUTANTS = [
     from: 'return role.readonly === true ? READONLY_WHITELIST : []', to: 'return READONLY_WHITELIST',
     verify: (mod) => !tExec(mod).includes('### 只读工具白名单（readonly 硬边界）') },
   { id: 'M10-organizer', desc: 'organizer 缺失警示移除',
-    from: " ⚠️ **未携带组织者会话 ID**——完成后向派活方（wake 你的来源）索取直投地址，禁止群发", to: " （无直投地址）",
+    from: ' ⚠️ **未携带组织者会话 ID**——向派活方索取直投地址，禁止群发', to: ' （无直投地址）',
     verify: (mod) => broadcastLine(tExec(mod)).includes('未携带组织者会话 ID') },
+  { id: 'M11-tierflat', desc: '档位差异化失效（deliverClauses 三档全回落 MEDIUM 形态）',
+    from: 'function deliverClauses(tier) {', to: "function deliverClauses(tier) { tier = 'MEDIUM';",
+    verify: (mod) => tExec(mod).includes('| 情况 |') },
 ]
 
 let failed = 0
