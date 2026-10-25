@@ -32,10 +32,11 @@
  *   node tools/measure-decay.mjs --scan [--min-core N] [--limit N] [--json] [--verbose]
  *   node tools/measure-decay.mjs --cases [--json]
  *
- * 输出脱敏：会话只以 sessionId 标识；cwd/消息正文/工具参数一律不出现在输出。
+ * 输出脱敏：会话只以 sessionId 标识；cwd/消息正文/工具参数一律不出现；
+ * 日志文件默认只出 basename，完整绝对路径仅 --verbose（JSON/CSV 摘要与 errors 均不含路径）。
  */
-import { readFileSync, writeFileSync, mkdirSync, rmSync, mkdtempSync, existsSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, writeFileSync, mkdirSync, rmSync, mkdtempSync, existsSync, readdirSync, statSync, realpathSync } from 'node:fs'
+import { join, basename, sep } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 import { zstdCompressSync, zstdDecompressSync, constants } from 'node:zlib'
 import { pathToFileURL } from 'node:url'
@@ -364,17 +365,31 @@ function selftest() {
 function iterSessionLogs() {
   const root = join(homedir(), '.dsh', 'sessions')
   if (!existsSync(root)) return []
+  // junction/越界防护（2026-10-25 存疑-1 一锤定音后修复）：Windows 上 JS realpathSync 对
+  // junction 判不出重解析点（本机探针实证：JS 版原样返回 junction 路径、native 版解析到
+  // 真实目标），必须用 realpathSync.native 取规范路径再做包含判定——目录内被投放指向
+  // root 之外的 junction 时跳过该子树，读取面不越出 ~/.dsh/sessions。
+  let rootReal
+  try { rootReal = realpathSync.native(root).toLowerCase() } catch { return [] }
+  const withinRoot = (p) => {
+    try {
+      const r = realpathSync.native(p).toLowerCase()
+      return r !== rootReal && r.startsWith(rootReal + sep.toLowerCase())
+    } catch { return false } // 断链 junction / 竞态删除：跳过
+  }
   const out = []
   for (const ws of readdirSync(root)) {
     const wsPath = join(root, ws)
     let wsSt
     try { wsSt = statSync(wsPath) } catch { continue }
     if (!wsSt.isDirectory()) continue
+    if (!withinRoot(wsPath)) continue
     for (const sd of readdirSync(wsPath)) {
       const sPath = join(wsPath, sd)
       let sSt
       try { sSt = statSync(sPath) } catch { continue }
       if (!sSt.isDirectory()) continue
+      if (!withinRoot(sPath)) continue
       for (const name of ['session.v4.jsonl.zstd', 'session.jsonl.zstd']) {
         const zp = join(sPath, name)
         if (existsSync(zp)) { out.push({ zpath: zp }); break }
@@ -396,9 +411,13 @@ function scanAll() {
       }
       const m = measure(ev)
       const meta = sessionMeta(ev)
-      rows.push({ sessionId: meta.id, createdAt: meta.createdAt, isZstd, badLines: bad, ...m, zpath })
+      // P2-1 脱敏（2026-10-25 security R1）：默认只出 basename；完整路径挂不可枚举字段——
+      // JSON.stringify 跳过它，仅 --verbose 文本行取用
+      const row = { sessionId: meta.id, createdAt: meta.createdAt, isZstd, badLines: bad, ...m, file: basename(zpath) }
+      Object.defineProperty(row, 'zpath', { value: zpath, enumerable: false })
+      rows.push(row)
     } catch (e) {
-      errors.push({ zpath, error: String(e && e.message || e).slice(0, 120) })
+      errors.push({ file: basename(zpath), error: String(e && e.message || e).split(zpath).join(basename(zpath)).slice(0, 120) })
     }
   }
   return { rows, errors }
@@ -433,7 +452,7 @@ function runScan(argv) {
     console.log(JSON.stringify({ scanned: rows.length, errors, rows: out }, null, 1))
   } else {
     console.log(`scanned=${rows.length} errors=${errors.length} shown(>=${minCore}core)=${out.length} in ${Date.now() - t0}ms`)
-    for (const e of errors) console.error(`ERR ${e.zpath} :: ${e.error}`)
+    for (const e of errors) console.error(`ERR ${e.file} :: ${e.error}`)
     for (const r of out) {
       const f = flag(r)
       console.log(`${(r.sessionId || '?').padEnd(40)} core=${String(r.coreEvents).padStart(6)} tools=${String(r.tools).padStart(5)} ${textRow(r)} ${f.kind}`)
@@ -460,7 +479,7 @@ function runCases(argv) {
     }, null, 1))
   } else {
     console.log(`scanned=${rows.length} errors=${errors.length} 长会话总体=${population.length} 灰区=${gray}`)
-    for (const e of errors) console.error(`ERR ${e.zpath} :: ${e.error}`)
+    for (const e of errors) console.error(`ERR ${e.file} :: ${e.error}`)
     console.log(`\n== 候选（死亡签名/骤降/归零）==`)
     for (const c of candidates) console.log(`${c.kind.padEnd(20)} ${(c.sessionId || '?')} core=${c.coreEvents} tools=${c.tools} early=${c.earlyTools} late=${c.lateTools} ratio=${c.earlyLateRatio} dangling=${c.tailDangling ?? '-'} lastTool@${c.lastToolRatio === null ? '-' : Math.round(c.lastToolRatio * 100) + '%'} span=${c.spanMin}min`)
     console.log(`\n== 健康对照（late/early>=${CASES_HEALTHY_RATIO} 且 late>=5）==`)
