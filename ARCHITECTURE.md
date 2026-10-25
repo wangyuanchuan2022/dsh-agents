@@ -1,23 +1,23 @@
 # ARCHITECTURE — dsh-agents 仓库全景（评审导览）
 
-> 本文面向**外部评审者**：逐部件说明本仓 125 个跟踪文件的职责、接线与质量账。
+> 本文面向**外部评审者**：逐部件说明本仓 140 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 138 文件，本文自身计入；2026-10-25 M4 设计原则文档化批次后更新）。
+> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 140 文件，本文自身计入；2026-10-25 R1 收口修复批次后更新）。
 > 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
 
 ---
 
 ## 0. 一句话与关键数字
 
-**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、11 个确定性机检脚本与三层测试链。
+**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、14 个确定性机检与测量脚本、三层测试链。
 
 | 维度 | 数值 | 验证入口 |
 |---|---|---|
-| 跟踪文件 | 125 | `git ls-files` 计数 |
+| 跟踪文件 | 140 | `git ls-files` 计数 |
 | 角色 / 泳道 | 23（build 10 · review 6 · domain 7） | `agent_roles action=list` |
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
-| 确定性工具 | 宿主注册 3 + `tools/` 共 11（机检脚本 8 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
+| 确定性工具 | 宿主注册 3 + `tools/` 共 14（机检脚本 8 · 测量/读取 3 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
 | 测试断言 | 主套件 287 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
 | 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
@@ -33,7 +33,7 @@ dsh-agents/
 ├── lib/            (37)               插件运行时（三个宿主工具 + 支撑模块 + advisor 子目录 26 件）
 ├── personas/       (34)               23 份角色人格 + checklists/ 11 份评审清单
 ├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
-├── tools/          (11)               独立 CLI 工具与机检脚本（不进宿主运行时）
+├── tools/          (14)               独立 CLI 工具与机检脚本（不进宿主运行时）
 ├── tests/          (12)               主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针 + 隔离门/回放设施
 ├── docs/           (4)                任务书模板正本 + advisor 契约正本 + 开源复用账本 + 设计原则正本
 ├── README.md                          使用向导（安装 / 快速开始 / 配置 / 已知限制）
@@ -190,7 +190,7 @@ dsh-agents/
 
 ---
 
-## 5. tools/ — 独立 CLI 与机检（11 文件 = 机检脚本 8 + 负向自测 2 + 数据 1）
+## 5. tools/ — 独立 CLI 与机检（14 文件 = 机检脚本 8 + 测量/读取 3 + 负向自测 2 + 数据 1）
 
 | 文件 | 职责 | 自测 |
 |---|---|---|
@@ -202,6 +202,9 @@ dsh-agents/
 | `skill-replica-check.ps1` | 双装机根一致性机检：按 replica-map.json 逐技能 SHA256 比对（match/drift/missing/unknown 四态）。**注**：replica-map.json 含本机装机路径，已移出 git 跟踪、仅维护侧本地维护——clone 后运行会 FAIL exit 1（fail-loud，不静默），属本机运维脚本非对外工具 | 本地运行（需本地 replica-map.json） |
 | `verify-imp26.mjs` | persona-gate 负向自测四层：①判据层纯函数（真实 executor 正文+真实 ECC 基线文本）②E2E 注入必红（fd-stdio 跑真安装器，INSTALL_PERSONAS_ROOT 重定向）③真实树全量跑 ④汇总裁定 | 33 断言——2026-09-30 修复后首次 33/0（见 §7） |
 | `taskbook-26a-negative.mjs` | taskbook 六参数 null 穿透等负向断言（IMP-26a 修复的注入必红回归门） | — |
+| `measure-injection-surface.mjs` | A1 全注入面基线测量：面A 工具面 / 面B 技能面 / 面C persona 面 / 面D 任务书面四口同测（码点/码元/字节三口径），`--diff` 支持 ±0 复跑判定；面B fail-closed 双臂（数量≠口径 或 坏文件存在 → exit 1） | `--selftest` 9 断言（含坏文件凑足/数量≠口径/尾参缺值注入必红） |
+| `measure-decay.mjs` | 会话日志工具调用密度衰减测量（早/中/晚三段）+ 尾悬死亡签名 + `--scan`/`--cases` 批量模式；zstd 读取经 `zstd-read.mjs`（帧边界 FCS 截断 + fail-closed 预算 + 重复行拒测） | `--selftest` 50 断言（含大帧贪读夹具与预算注入必红） |
+| `zstd-read.mjs` | 宿主多帧 zstd 会话日志读取器：Frame_Magic 候选扫描 → 逐候选解压 → 按帧头 Frame_Content_Size 截断回单帧（Node sync 解码对 16KiB 对齐帧贪读吞并后续帧的防御）+ 帧数/单帧/累计三重预算 + 去重行防护 | 由 measure-decay selftest 覆盖（变异体必红 4/4） |
 | `approved.json` | assemble-review 的批准记录（数据文件） | — |
 
 **tools/ 面设计纪律**：全部机检脚本**注入必红**（把坏样本喂进去断言变红——只验证「好文件过门」的闸门是半成品）；输出排空后再退出；「无意见」唯一合法形态是空输出+exit 0。
