@@ -17,9 +17,10 @@ import { composeTaskbook, preflight, stamp, dedupeEvidencePath } from '../lib/ta
 import { loadPersona, listPersonaFiles, splitFrontmatter } from '../lib/persona.js'
 import { listPresets } from '../lib/spawn.js'
 import { resolveConfig, apply, Config } from '../lib/index.js'
+import { ToolscopeStore, toolscopePath, normalizeToolscope, MINIMAL_TOOLSET_FULL, TOOLSCOPE_SCHEMA_VERSION } from '../lib/toolscope.js'
 import { createTiersApi, CONFIG_SCHEMA } from '../lib/settings.js'
 import { CONFIG_ENDPOINT, createConfigHandler } from '../lib/http-config.js'
-import { mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
@@ -828,6 +829,87 @@ await testAsync('内置预设 root 反推：从进程入口向上找到 config/a
   } finally {
     process.argv[1] = saved
     rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+// ── B1 S1：per-session 工具面策略文件（toolscope，R3-B1 子特性② 数据层） ──
+/** toolscope 用例的隔离数据目录（.fixture 系 gitignored；用完即清）。 */
+function toolscopeFixtureDir() {
+  return fileURLToPath(new URL('./.fixture-toolscope/', import.meta.url))
+}
+
+await testAsync('toolscope：roundtrip 写→读字段一致（allow ≥3 元素）+ 同目录三后缀文件名不碰撞', async () => {
+  const dir = toolscopeFixtureDir()
+  mkdirSync(dir, { recursive: true })
+  try {
+    const store = new ToolscopeStore({ dataDir: dir })
+    const sid = 'session-abc123'
+    const written = store.writeMinimal(sid, { orgId: 'session-org-1' })
+    assert.equal(written.schemaVersion, TOOLSCOPE_SCHEMA_VERSION)
+    assert.equal(written.personaMode, 'minimal')
+    assert.deepEqual(written.toolPolicy, { tier: 'full', allow: [...MINIMAL_TOOLSET_FULL], deny: [] })
+    assert.ok(written.toolPolicy.allow.length >= 3, 'allow 清单 ≥3 元素（断言鉴别力纪律）')
+    assert.equal(written.replyChannel, 'org')
+    assert.equal(written.orgId, 'session-org-1')
+
+    const back = store.read(sid)
+    assert.ok(back !== null, '写后读必须命中')
+    assert.deepEqual(
+      { schemaVersion: back.schemaVersion, sessionId: back.sessionId, personaMode: back.personaMode, toolPolicy: back.toolPolicy, replyChannel: back.replyChannel, orgId: back.orgId },
+      { schemaVersion: written.schemaVersion, sessionId: written.sessionId, personaMode: written.personaMode, toolPolicy: written.toolPolicy, replyChannel: written.replyChannel, orgId: written.orgId },
+      'roundtrip 字段一致（写→读）',
+    )
+
+    // 文件名判据（承 advisor store.js:58-61）：base64url 字母表不含 `.`，
+    // 同 sessionId 的 advisor 配置 / seen / toolscope 三后缀互不碰撞。
+    const b64 = Buffer.from(sid, 'utf8').toString('base64url')
+    assert.equal(toolscopePath(dir, sid), join(dir, 'sessions', `${b64}.toolscope.json`))
+    assert.equal(new Set([`${b64}.json`, `${b64}.seen.json`, `${b64}.toolscope.json`]).size, 3, '三后缀互不碰撞')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('toolscope：非法档名/非法 allow/空 orgId 抛同步异常且零写盘；merge 保留既有 orgId；损坏文件 fail-open', async () => {
+  const dir = toolscopeFixtureDir()
+  mkdirSync(dir, { recursive: true })
+  try {
+    const store = new ToolscopeStore({ dataDir: dir })
+    const sid = 'session-neg'
+    // 三类非法输入（≥3 元素负例夹具，逐类命中一条校验）：
+    assert.throws(() => normalizeToolscope({ sessionId: sid, personaMode: 'minimal', toolPolicy: { tier: 'all', allow: ['read'], deny: [] } }), /tier/)
+    assert.throws(() => normalizeToolscope({ sessionId: sid, personaMode: 'minimal', toolPolicy: { tier: 'full', allow: 'read', deny: [] } }), /allow/)
+    assert.throws(() => normalizeToolscope({ sessionId: sid, personaMode: 'minimal', toolPolicy: { tier: 'full', allow: ['read'], deny: [] }, orgId: '   ' }), /orgId/)
+    assert.equal(store.read(sid), null, '校验失败零写盘（fail-closed）')
+
+    store.writeMinimal(sid, { orgId: 'session-org-keep' })
+    const second = store.write(sid, { sessionId: sid, personaMode: 'minimal', toolPolicy: { tier: 'full', allow: ['read'], deny: [] }, replyChannel: 'org' })
+    assert.equal(second.orgId, 'session-org-keep', '二次写不带 orgId 时 merge 保留既有值（read→merge 语义）')
+
+    writeFileSync(store.path(sid), '{broken json', 'utf8')
+    assert.equal(store.read(sid), null, '损坏文件 fail-open：返回 null 不抛')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('toolscope：底层写盘失败原样抛出（G8 fail-fast 的前提语义，fs 门面注入写失败探针）', async () => {
+  const dir = toolscopeFixtureDir()
+  mkdirSync(dir, { recursive: true })
+  try {
+    const store = new ToolscopeStore({
+      dataDir: dir,
+      fs: {
+        existsSync: () => false,
+        mkdirSync: () => {},
+        writeFileSync: () => { throw new Error('EPERM: 磁盘拒绝写入') },
+        renameSync: () => { throw new Error('rename 不应被走到') },
+        readFileSync: () => { throw new Error('read 不应被走到') },
+      },
+    })
+    assert.throws(() => store.writeMinimal('session-x', { orgId: 'session-org-2' }), /磁盘拒绝/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })
 
