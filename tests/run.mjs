@@ -25,6 +25,7 @@ import {
 import {
   REPLY_DEFAULTS, REPLY_AUDIT_FILENAME, REPLY_TOOL_DESCRIPTION, AUDIT_ROTATE_BYTES,
   resolveDeliveryMode, WakeRateLimiter, taskRef, agentReplyTool, installAgentReply, spawnDecisionAuditWriter,
+  buildReplyMessage,
 } from '../lib/agent-reply.js'
 import {
   loadRosterData, scanRoleReferences, buildCoverageReport, compareHostVersion,
@@ -1912,10 +1913,17 @@ await testAsync('S4 AC3-3 offline 结构化失败不抛 + 内部直投缺省 inj
       agents.byId.get('session-org').status = 'running'
       const steer = pipeline.sendToSession('session-org', '补充', { from: 'session-min', wake: true })
       assert.equal(steer.mode, 'steer')
-      // 信封：user-role + 插件来源 + 首行归属标记
+      // 信封：user-role + 首行归属标记。
+      // 【断言改写留痕 2026-10-26】原断言 source.kind==='plugin'（v1 插件来源标记）已被宿主
+      // v4 校验器证伪：@deepseek-ai/dsh-session-format-v3-to-v4/lib/index.js:126 明确
+      // kind==='plugin' 即抛 SessionFormatError——Phase B 彩排 followup 唤醒 ORG 写日志
+      // 实炸（ORG turn 未启动、本轮运行失败）。「插件来源」语义由 content 首行归属标记
+      // 承载（下一断言不变，防伪装用户指令）；source.kind 契约改为「过宿主校验器」=
+      // 'user'（对齐 spawn.js:86 在役形态）。专项回归用例见「S4 回归（Phase B 事故）」
+      // （负向变异 kind→plugin 必红）。
       const last = agents.callsOf('session-org').at(-1)
       assert.equal(last[1].role, 'user')
-      assert.equal(last[1].source.kind, 'plugin')
+      assert.equal(last[1].source.kind, 'user')
       assert.ok(last[1].content[0].text.startsWith('【agent_reply·来自 session-min】'), '首行归属标记（防伪装用户指令）')
       assert.ok(last[1].content[0].text.endsWith('补充'))
     } finally {
@@ -2122,6 +2130,22 @@ await testAsync('B1 S4 集成（apply 接线）：minimal 派活→created 注�
   } finally {
     minimalEnvTeardown(env)
   }
+})
+
+// ── B1 Phase B 事故回归：投递消息 source kind 必须过宿主 v4 校验器（producer-owned）──
+// 宿主 @deepseek-ai/dsh-session-format-v3-to-v4/lib/index.js:126：kind 非空串且 ≠ 'plugin'，
+// 否则 SessionFormatError「format v4 message requires a producer-owned source kind」。
+// v1 形态 kind:'plugin' 在彩排 followup 唤醒 ORG 写日志时炸掉（ORG turn 未启动，本轮运行失败）。
+// 注入必红对应（L1-15）：把 buildReplyMessage 的 kind 改回 'plugin' 本用例第二断言必红。
+await testAsync('S4 回归（Phase B 事故）：buildReplyMessage 的 source.kind 过宿主 v4 校验器契约（非空串且≠plugin）——负向变异 kind→plugin 本用例必红', async () => {
+  const msg = buildReplyMessage({ from: 'session-min', text: '回归探针' })
+  assert.equal(msg.role, 'user', 'user-role 形态（对齐 spawn.js userMessage）')
+  assert.equal(typeof msg.id, 'string')
+  assert.ok(msg.id.length > 0, 'id 稳定唯一非空')
+  assert.ok(Array.isArray(msg.content) && msg.content[0].type === 'text' && msg.content[0].text.includes('【agent_reply·来自 session-min】'), 'content 首行归属标记保留')
+  assert.equal(typeof msg.source.kind, 'string', 'kind 为字符串')
+  assert.ok(msg.source.kind.length > 0, 'kind 非空（v4 校验器 :126 第一支）')
+  assert.notEqual(msg.source.kind, 'plugin', 'kind ≠ plugin（v4 校验器 :126 第二支——v1 事故根因，改回即红）')
 })
 
 // ── B1 S5：V3-3 收缩生效率读数组消费（efficiencyReadings + replayEntries）────
