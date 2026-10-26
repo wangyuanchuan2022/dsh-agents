@@ -32,9 +32,11 @@
         # 不填 = 走 DSH 默认预设（settings.yaml 的 agent-presets.default，当前 standard）。
         # defaultPreset: standard
         # ── minimal 派活的 Agent 预设（R3-B1 S1；personaMode='minimal' 时解析 agentPreset）──
-        # 缺省 'minimal'（宿主内置预设，跨机可用、不绑本机自建预设名）；自建预设
-        # 显式指向一次生效。非法/不存在的 preset id 在 spawn 时报错并列可用清单
-        # （复用宿主校验）。配套策略文件落 <advisorDataDir>/sessions/<b64>.toolscope.json。
+        # 缺省 'minimal'（语义：指向一个真实存在的预设名；宿主未内置 'minimal' 的环境
+        # ——如本机——需配置覆盖一次，例：minimalPreset: minimal-eval）。自建预设
+        # 显式指向一次生效。非法/不存在的 preset id 在 spawn 时 fail-fast 报错并列可用清单
+        # （复用宿主校验；不存在即拒绝派活，零孤儿会话）。配套策略文件落
+        # <advisorDataDir>/sessions/<b64>.toolscope.json。
         minimalPreset: minimal
         # ── agent_reply 唤醒频控常数（R3-B1 S5 小收口③；V3-2 落点裁决=config 键位）──
         # 唤醒类投递滑动窗口频控：窗口内超过上限自动降级 inject（消息不丢、唤醒不发）；
