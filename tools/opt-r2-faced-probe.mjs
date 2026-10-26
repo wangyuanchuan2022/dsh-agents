@@ -7,10 +7,10 @@
  * 同一任务文本（tools/measure-injection-surface.mjs 的 SAMPLE_TASK 逐字），interactive 最小输入；
  * 分节 = tools/measure-injection-surface.mjs 导出的 splitSections（零口径漂移），度量 = 同文件 metrics。
  *
- * 双口径（A1 设计 3.1）：
+ * 双口径（A1 设计 3.1；B0 删八节后静态面=三节）：
  *   - 全任务书 = 总码点（−15% 记录值口径）
- *   - 口径B（模板态）= 头部 + §五 + §六 + §七 + §八 + §四 内「### 本次参数」块模板行
- *     （before 无参数块 ⇒ 口径B = 头部 + 四节；「### 本次参数」行后内容整体视为模板行——
+ *   - 口径B（模板态）= 头部 + §五 + §六 + §七 + §四 内「### 本次参数」块模板行
+ *     （before 无参数块 ⇒ 口径B = 头部 + 三节；「### 本次参数」行后内容整体视为模板行——
  *      min-input 形态下参数块不含调用方文本，deliverable/acceptance 缺省不渲染）
  *
  * 用法：node tools/opt-r2-faced-probe.mjs <输出.json 路径>
@@ -29,7 +29,7 @@ import { splitSections, metrics } from './measure-injection-surface.mjs'
 
 const SAMPLE_ROLES = ['explore', 'executor', 'analyst']
 const SAMPLE_TASK = '梳理 tools 目录脚本的用途清单，输出一页 markdown 索引；只读不改文件。'
-const STATIC_FOUR = ['五、交付与验收', '六、澄清模式', '七、汇报与回收核对', '八、Claude Code → DSH 工具映射']
+const STATIC_THREE = ['五、交付与验收', '六、澄清模式', '七、汇报与回收核对']
 const outPath = process.argv[2]
 if (!outPath) {
   console.error('用法: node tools/opt-r2-faced-probe.mjs <输出.json 路径>\n输出路径必填（缺参 exit 2）——无参默认写 opt-r2-faced-before.json 已废除（防基线读数被静默覆盖）。')
@@ -56,14 +56,14 @@ for (const id of SAMPLE_ROLES) {
   })
   const sections = splitSections(text).map((sec) => ({ title: sec.title, text: sec.text, ...metrics(sec.text) }))
   const head = sections[0]
-  const four = sections.filter((s) => STATIC_FOUR.some((k) => s.title.includes(k)))
-  if (four.length !== 4) throw new Error(`面D：${id} 静态四节定位失败（命中 ${four.length}）：${sections.map((s) => s.title).join(' | ')}`)
+  const three = sections.filter((s) => STATIC_THREE.some((k) => s.title.includes(k)))
+  if (three.length !== 3) throw new Error(`面D：${id} 静态三节定位失败（命中 ${three.length}）：${sections.map((s) => s.title).join(' | ')}`)
   const paramsTpl = extractParamsTemplate(sections.find((s) => s.title.includes('四、本次任务'))?.text ?? '')
   const caliberB = {
-    codepoints: head.codepoints + four.reduce((n, s) => n + s.codepoints, 0) + [...paramsTpl].length,
+    codepoints: head.codepoints + three.reduce((n, s) => n + s.codepoints, 0) + [...paramsTpl].length,
     parts: {
       head: head.codepoints,
-      four: Object.fromEntries(four.map((s) => [s.title, s.codepoints])),
+      three: Object.fromEntries(three.map((s) => [s.title, s.codepoints])),
       paramsTemplate: [...paramsTpl].length,
     },
   }
@@ -80,7 +80,7 @@ const readings = {
     sampleTask: SAMPLE_TASK,
     sampleTaskCodepoints: [...SAMPLE_TASK].length,
     clarifyMode: 'interactive',
-    caliberNote: '全任务书=总码点；口径B=头部+静态四节+本次参数块模板行（A1 设计 3.1，防搬家虚胖判定口径）',
+    caliberNote: '全任务书=总码点；口径B=头部+静态三节（五/六/七，B0 删八节）+本次参数块模板行（A1 设计 3.1，防搬家虚胖判定口径）',
   },
   items,
   totals: {
@@ -93,7 +93,7 @@ writeFileSync(outPath, JSON.stringify(readings, null, 2), 'utf8')
 console.log(`[faced-probe] ${outPath}`)
 for (const it of items) {
   const p = it.caliberB.parts
-  const byKey = (k) => Object.entries(p.four).find(([t]) => t.includes(k))?.[1] ?? '?'
-  console.log(`  ${it.role} (${it.tier}): total=${it.total.codepoints} 口径B=${it.caliberB.codepoints} (head=${p.head} five=${byKey('五、')} six=${byKey('六、')} seven=${byKey('七、')} eight=${byKey('八、')} params=${p.paramsTemplate})`)
+  const byKey = (k) => Object.entries(p.three).find(([t]) => t.includes(k))?.[1] ?? '?'
+  console.log(`  ${it.role} (${it.tier}): total=${it.total.codepoints} 口径B=${it.caliberB.codepoints} (head=${p.head} five=${byKey('五、')} six=${byKey('六、')} seven=${byKey('七、')} params=${p.paramsTemplate})`)
 }
 console.log(`  mean total=${readings.totals.meanTotalCodepoints} max=${readings.totals.maxTotalCodepoints} mean 口径B=${readings.totals.meanCaliberB}`)

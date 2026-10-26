@@ -38,14 +38,14 @@ complete task brief — plus 25 workflow skills that orchestrate them end to end
 
 1. **按角色复杂度分配模型，而不是拍脑袋。** [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)（OMC）在 19 个 agent 定义里给每个角色钉了一个 `model:` 字段；MACAE 的 ADR-003 从另一个方向得出同一结论——编排者用推理型模型、参与者用便宜模型。两条独立证据指向同一件事：**角色复杂度决定档位**，而不是全都上最贵的。
 2. **派活是一次调用，不是一段规程。** 人格注入、档位解析、任务书合成都发生在 `agent_spawn` 内部；调用者只需要说清「谁做、做什么」。
-3. **任务书是可审计的产物。** 派活消息本身就是一份八节任务书（含硬性完成标准与回收契约），可以先审后派（`agent_taskbook` 只合成不派活），也可以事后据此核对交付。
+3. **任务书是可审计的产物。** 派活消息本身就是一份七节任务书（含硬性完成标准与回收契约），可以先审后派（`agent_taskbook` 只合成不派活），也可以事后据此核对交付。
 
 ## 特性
 
 - **23 个专职角色，3 条泳道**——build（构建与分析 10）· review（评审与质量闸门 6）· domain（领域专家 7）；其中 19 个移植自 OMC，4 个为批次3 新建（rag-reviewer / silent-failure-hunter / spec-miner / harness-optimizer）。
 - **三档模型路由**（LOW / MEDIUM / HIGH ← haiku / sonnet / opus），档位可被用户层覆盖（设置页或 `agent_roles set`），解析优先级明确、可查来源。
 - **只读角色有明确边界**——上游标注 `disallowedTools: Write, Edit` 的 **9 个角色**（explore · analyst · architect · verifier · code-reviewer · security-reviewer · critic · document-specialist · scientist）在任务书里写成只读顾问条款，任务书同时注明这只是文字约束（见[已知限制](#已知限制)）。
-- **任务书八节结构** + **派活前置三问**（副作用关键词 fail-closed 告警）。
+- **任务书七节结构** + **派活前置三问**（副作用关键词 fail-closed 告警）。
 - **评审/验证席的上下文隔离（两层机制）**——**会话层**：每席都是全新会话，不继承派活方对话历史；**材料层**：`blind` 席（code-reviewer / security-reviewer）不得获得作者自评**与其他席位产出**，`isolated` 席（critic / code-simplifier / verifier）不得获得作者自评；任务书自动写入「上下文隔离契约」，并对下发的材料做**泄漏机检**（命中「我已经实现并验证过」「另一席说没问题」这类文本时 fail-closed 告警并回传 `isolationLeaks`）。
 - **25 件工作流技能**（口径：`skills/` 下 25 个 SKILL.md = 25 个技能目录）：入口 2 + 流水线 4 + 协作 5 + 方法论 13 + 顾问 1。
 - **内置 advisor 顾问是被动机制、宿主侧工具面为零**——每个 turn 后自动评审主会话可见消息，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**，不派活也不会被 `agent_spawn` 触发；模型完全手动指定、无任何兜底。V3 已实现 repository-aware 评审：只读检索（文件树/git/搜索 + 符号精读）、agentic 工具循环（模型自调只读检索工具，不占宿主工具位）、决策保护（`docs/DECISIONS.md`）、规则预筛（普通聊天零 token）、停止五类与 blocker 证据下限。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。
@@ -96,7 +96,7 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 | 工具 | 作用 |
 |---|---|
 | `agent_roles` | 角色目录 / 单角色详情 / **档位路由表体检**。动作：`list`（可按泳道、档位过滤）、`show`、`tiers`、`set`（改某档 provider+model，与设置页同源）、`reset`。 |
-| `agent_taskbook` | **只合成任务书，不派活**：角色卡 + 职责边界 + 人格细则 + 任务 + 交付验收 + 澄清模式 + 汇报回收 + Claude→DSH 工具映射，附派活前置三问与本次路由解析结果。 |
+| `agent_taskbook` | **只合成任务书，不派活**：角色卡 + 职责边界 + 人格细则 + 任务 + 交付验收 + 澄清模式 + 汇报回收，附派活前置三问与本次路由解析结果。 |
 | `agent_spawn` | **一步派活**：解析档位 → 注入人格与任务书 → 创建标准 DSH 会话并立即开跑；`dryRun=true` 只回路由与任务书；`tier` / `provider` / `model` 可越档但会记入返回（可审计，不阻拦）。 |
 
 **边界**：本插件只**创建**会话，不负责 `wake` / `status` / `list` / `rename`——那些归 `de_session`。
@@ -124,7 +124,7 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 
 ## 任务书
 
-派活的首条消息 = 八节任务书：
+派活的首条消息 = 七节任务书：
 
 1. **角色卡**：角色 id / 泳道 + 档位与**钉死的 provider/model** + 定档依据 + 权限边界 + 人格文件哈希；
 2. **职责与边界**；
@@ -132,8 +132,9 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 4. **本次任务** + 背景上下文；
 5. **交付与验收**：产出落盘路径、泳道默认交付要求（评审类强制「`文件:行号` + P0/P1/P2 + 【改进点】」）、**硬性完成标准双条件**（落盘 + `de_broadcast` 回报，缺一即未完成）；
 6. **澄清模式**：`interactive` = 缺参数按 `subagent-clarify` 协议问组织者、防编造、超时降级；`autonomous` = 禁提问 + 缺省决策表；
-7. **汇报与回收核对**：完成广播对象、里程碑进度、`de_session list/status` 回收；
-8. **Claude Code → DSH 工具映射**：`lsp_diagnostics`→pwsh 跑检查、`TodoWrite`→`todo_write`、`Task(...)`→`de_session spawn`、tmux→pwsh 后台任务等。
+7. **汇报与回收核对**：完成广播对象、里程碑进度、`de_session list/status` 回收。
+
+（原第 8 节「Claude Code → DSH 工具映射」已删——R3-B0：人格正文全部 DSH 原生化（裸 CC 工具名→DSH 原生指令 + 「对应原 X」inline 注记）后该表成死重；兜底句「未列工具视作不可用」移入职责与边界节。）
 
 另有**派活前置三问**（方向与「失败也照常执行」相反，这里**不派才是安全默认**）：① 这事哪个会话能做？② 目标会话有没有对应工具与数据？③ 是否在要求对方做它做不到的副作用（写库/删数据/发消息/装依赖）？任务文本命中副作用关键词时自动告警（fail-closed）。
 
@@ -300,7 +301,7 @@ dsh-agents/
 ## 许可与致谢
 
 - **本仓库自身代码**：MIT，见 [LICENSE](LICENSE)。
-- **角色体系**：18 个基础角色逐字对照翻译移植自 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)（OMC，MIT，Copyright © 2025 Yeachan Heo）——中文译文逐字对应定义与人格原文；code-reviewer 在 OMC 底本上深度改造升级为 v2.3 反编报形态（不再逐字）；4 个专项角色（rag-reviewer / silent-failure-hunter / spec-miner / harness-optimizer）的方法论移植自 [Everything Claude Code](https://github.com/affaan-m/everything-claude-code)（ECC，MIT，Copyright © 2026 Affaan Mustafa）v2.2.2。各上游版权与许可全文见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+- **角色体系**：18 个基础角色语义对齐移植自 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)（OMC，MIT，Copyright © 2025 Yeachan Heo）——工具名已 DSH 原生化（inline「对应原 X」注记保留可追溯），中文译文对应定义与人格原文；code-reviewer 在 OMC 底本上深度改造升级为 v2.3 反编报形态（不再逐字）；4 个专项角色（rag-reviewer / silent-failure-hunter / spec-miner / harness-optimizer）的方法论移植自 [Everything Claude Code](https://github.com/affaan-m/everything-claude-code)（ECC，MIT，Copyright © 2026 Affaan Mustafa）v2.2.2。各上游版权与许可全文见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 - **任务书模板**：源自 MACAE（[Multi-Agent-Custom-Automation-Engine-Solution-Accelerator](https://github.com/microsoft/Multi-Agent-Custom-Automation-Engine-Solution-Accelerator)，Microsoft，MIT）的可移植机制清单；`skills/subagent-clarify` 的工具级 HITL 机制同出 MACAE（与 OMC AskUserQuestion guard 混合来源）。
 - **部分协作与方法论技能、11 份专项/语言评审清单、`tools/publish-scan.mjs`**：源自 ECC v2.2.2 的分析移植（全量保真；移植时的适配决策记录在提交历史）。
 - **会话创建时序**：来自 `dsh-memory-evolve` 的 `de_session` 实机踩坑记录（预设挂载、provider 解析、种子序号、工作区挂接）。

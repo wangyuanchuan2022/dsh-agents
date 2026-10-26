@@ -176,7 +176,7 @@ test('可用目录过滤：留有模型的；按适配器名单过滤；名单�
 })
 
 // ── ③ 任务书合成 ──────────────────────────────────────────────────────────
-test('任务书含七节 + 工具映射，且钉死档位与模型', () => {
+test('任务书含七节（八节已删），且钉死档位与模型', () => {
   const role = getRole('code-reviewer')
   const route = resolveRoute({ role, tierTable: resolveTierTable(undefined) })
   const persona = loadPersona(role)
@@ -184,7 +184,7 @@ test('任务书含七节 + 工具映射，且钉死档位与模型', () => {
     role, persona, route, tierIntent: TIER_INTENT[route.tier], task: '审查 dsh-agents 的 lib/spawn.js',
     clarifyMode: 'interactive', evidencePath: 'D:\\tmp\\review.md', organizer: 'session-abc', cwd: 'D:\\tmp',
   })
-  for (const section of ['## 一、角色卡', '## 二、职责与边界', '## 三、人格细则', '## 四、本次任务', '## 五、交付与验收', '## 六、澄清模式', '## 七、汇报与回收核对', '## 八、Claude Code → DSH 工具映射']) {
+  for (const section of ['## 一、角色卡', '## 二、职责与边界', '## 三、人格细则', '## 四、本次任务', '## 五、交付与验收', '## 六、澄清模式', '## 七、汇报与回收核对']) {
     assert.ok(text.includes(section), `缺小节 ${section}`)
   }
   assert.ok(text.includes('**HIGH**'))
@@ -193,7 +193,7 @@ test('任务书含七节 + 工具映射，且钉死档位与模型', () => {
   assert.ok(text.includes('双条件，缺一即未完成'))
   assert.ok(text.includes('D:\\tmp\\review.md'))
   assert.ok(text.includes('session-abc'))
-  assert.ok(text.includes('lsp_diagnostics'), '工具映射表须列出 Claude 专属工具')
+  assert.ok(!text.includes('## 八、Claude Code → DSH 工具映射'), '八节已删（B0）：任务书不得再携带工具映射表')
   assert.ok(text.includes('de_broadcast'))
   assert.ok(text.includes('subagent-clarify'), 'interactive 模式须指向澄清协议技能')
 })
