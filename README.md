@@ -50,6 +50,7 @@ complete task brief — plus 25 workflow skills that orchestrate them end to end
 - **25 件工作流技能**（口径：`skills/` 下 25 个 SKILL.md = 25 个技能目录）：入口 2 + 流水线 4 + 协作 5 + 方法论 13 + 顾问 1。
 - **内置 advisor 顾问是被动机制、宿主侧工具面为零**——每个 turn 后自动评审主会话可见消息，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**，不派活也不会被 `agent_spawn` 触发；模型完全手动指定、无任何兜底。V3 已实现 repository-aware 评审：只读检索（文件树/git/搜索 + 符号精读）、agentic 工具循环（模型自调只读检索工具，不占宿主工具位）、决策保护（`docs/DECISIONS.md`）、规则预筛（普通聊天零 token）、停止五类与 blocker 证据下限。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。
 - **11 份评审清单**按扩展名/专项路由（go / ts / python / kotlin / rust / csharp / cpp / sql / pytorch / a11y / performance）。
+- **三种派活形态与 per-session 工具面（R3-B1）**——`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填、宿主内置 minimal 预设承载）；**role 轨默认工具面收缩**（构建期扫 23 角色人格产 per-role 引用表，运行期 restrict 收缩：交集防叠 + 跨代 lift 防线 + 双向对账 fail-open + 收缩生效率读数组）；**极简回复通道**（minimal×org 会话注册 own 层 `agent_reply`：目标钉死 orgId、schema 无 target 参数、唤醒白名单 + 滑动窗口频控 + 连降熔断；投递与派活决策审计同落 `reply-audit.jsonl`）。静态注入面零增长（口径B 1993/2181/2183 锚定），工具描述增量单独计量（合计 ≤400B 上界）。
 - **两个确定性机检工具**：`crgate`（评审证据链 freeze/anchor/finalize）与 `publish-scan`（发布前脱敏六类扫描 + 三值裁定）。
 - **配置错就报错**——未知档位、未知角色、半个路由、非法 `clarifyMode` 一律抛错，不静默兜底。
 
@@ -97,7 +98,8 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 |---|---|
 | `agent_roles` | 角色目录 / 单角色详情 / **档位路由表体检**。动作：`list`（可按泳道、档位过滤）、`show`、`tiers`、`set`（改某档 provider+model，与设置页同源）、`reset`。 |
 | `agent_taskbook` | **只合成任务书，不派活**：角色卡 + 职责边界 + 人格细则 + 任务 + 交付验收 + 澄清模式 + 汇报回收，附派活前置三问与本次路由解析结果。 |
-| `agent_spawn` | **一步派活**：解析档位 → 注入人格与任务书 → 创建标准 DSH 会话并立即开跑；`dryRun=true` 只回路由与任务书；`tier` / `provider` / `model` 可越档但会记入返回（可审计，不阻拦）。 |
+| `agent_spawn` | **一步派活**：解析档位 → 注入人格与任务书 → 创建标准 DSH 会话并立即开跑；`dryRun=true` 只回路由与任务书；`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填）；`tier` / `provider` / `model` 可越档但会记入返回（可审计，不阻拦）。 |
+| `agent_reply`（own 层） | **仅 minimal×org 会话可见**（agent/created 按策略注册，不占宿主工具位）：回复组织者——目标注册时钉死为策略文件 orgId（schema 无 target 参数）；缺省只投不唤醒，对方 idle 唤醒 / running 同回合注入；受滑动窗口频控与连降熔断约束（V3-2）。 |
 
 **边界**：本插件只**创建**会话，不负责 `wake` / `status` / `list` / `rename`——那些归 `de_session`。
 
@@ -209,6 +211,11 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
         clarifyMode: interactive   # interactive | autonomous
         agentOutSubdir: agent-out  # 未显式给 evidencePath 时的产出目录（相对 cwd）
         allowSpawn: true           # false = 紧急刹车，禁用 agent_spawn（另两个工具仍可用）
+        minimalPreset: minimal     # personaMode='minimal' 的 Agent 预设（缺省宿主内置 minimal）
+        toolscopeEnabled: true     # 工具面收缩总开关（false=全链 fail-open 零行为，消融臂）
+        # replyWakeWindowMs: 60000 # agent_reply 唤醒频控：滑动窗口 ms
+        # replyWakeWindowMax: 3    # 窗口内唤醒类请求上限（超限降级 inject 不丢消息）
+        # replyWakeBreakAfter: 10  # 连续降级熔断阈值（熔断至会话结束）
 ```
 
 | 键 | 类型 | 说明 |
@@ -216,9 +223,12 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 | `tiers` | `{LOW,MEDIUM,HIGH} → {provider,model}` | 档位路由基底。别名 `haiku`/`sonnet`/`opus` 同义。 |
 | `roleOverrides` | `{<角色id>: {provider,model}}` | 按角色覆盖档位（优先级低于调用期显式传参）。 |
 | `defaultPreset` | string | 角色会话的 Agent 预设 id；不填走 DSH 默认。 |
+| `minimalPreset` | string | minimal 派活的 Agent 预设 id（缺省 `'minimal'`，宿主内置、跨机可用）。 |
 | `clarifyMode` | `interactive` \| `autonomous` | 任务书澄清模式缺省值。 |
 | `agentOutSubdir` | string | 产出目录名（相对 cwd）。 |
 | `allowSpawn` | boolean | 紧急刹车开关。 |
+| `toolscopeEnabled` | boolean | per-session 工具面收缩总开关（缺省 `true`；`false`=标记不落、管道不装、回复通道一并停——消融实验臂）。 |
+| `replyWakeWindowMs` / `replyWakeWindowMax` / `replyWakeBreakAfter` | number | agent_reply 唤醒频控常数（缺省 60000 / 3 / 10；正数/正整数校验，非法值启动即抛错）。 |
 
 **fail-loud 约定**：未知档位、未知角色 id、半个路由（只给 provider 或只给 model）、非法 `clarifyMode` 一律**直接抛错**——静默兜底会把「改了没生效」变成黑盒。
 
@@ -240,7 +250,7 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 ## 测试
 
 ```bash
-node tests/run.mjs                    # 主测试（303 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
+node tests/run.mjs                    # 主测试（346 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
 node tools/crgate.test.mjs            # 65 断言
 node tools/publish-scan.test.mjs      # 47 断言
 node tests/skill-sync-check.mjs       # 计数漂移门 + .gitattributes 门（文档里的技能件数必须等于磁盘实测）
@@ -273,14 +283,19 @@ dsh-agents/
     settings-compat.js     宿主 settings 服务版本差异的兼容层
     http-config.js         设置卡数据端点
     client.js              浏览器半：设置卡
+    toolscope.js           per-session 工具面策略文件读写（.toolscope.json schema v1；orgId 单源同事务）
+    toolscope-pipeline.js  restrict 管道（created 挂点收缩 + 跨代 lift 表 + 双向对账 fail-open + 留存清扫 + V3-3 审计环）
+    toolscope-roster.js    roster 数据层（角色引用表 + 构建期扫描核 + G11 覆盖率 + M11 宿主版本读取面 + M13 留存）
+    agent-reply.js         极简回复通道（agent_reply + 直投 + V3-2 频控熔断 + 审计轮转有界留存）
     advisor/               (26) advisor 顾问：顶层 6（store/api/observer/runtime/delivery/index）+ assemble/ 4（S5 分层：session-views/context-hooks/runtime-pool/wiring）+ retrieval/ 7（只读检索+git+符号）+ context/ 4（三层装配）+ aci/ 3（agentic 工具循环）+ decision/ 1（规则预筛）+ grammars/ 1（vendor wasm）
+  policies/                toolscope 策略数据（roster 基表手写 + 23 角色引用表机产）
   personas/                23 份人格正文（19 OMC + 4 ECC 系）
   personas/checklists/     11 份评审清单（语言 7 + 专项 4，按扩展名/专项路由）
   skills/                  25 件工作流技能（源副本；25 个 SKILL.md = 25 个技能目录）
   docs/task-brief-v3.md    任务书模板正本
   docs/advisor-contract.md advisor 契约正本（详设）
   docs/third-party-references.md 开源复用账本（AC-61：Aider / SWE-agent / OpenHands 三源六字段）
-  tools/                   crgate / publish-scan / install-personas / assemble-review
+  tools/                   crgate / publish-scan / install-personas / assemble-review / scan-role-toolrefs / toolscope-efficiency / opt-r2-faced-probe 等机检与测量脚本
   tests/                   run.mjs + 宿主校验、烟测与探针
   .gitattributes           `* -text`：禁用换行转换，保住「git 干净 = 字节还原」
   LICENSE                  MIT
@@ -289,7 +304,7 @@ dsh-agents/
 
 ## 已知限制
 
-1. **只读角色是文字约束，不是硬隔离**：DSH 无法按会话禁用工具，只读是任务书条款；要硬隔离需给该角色配一个禁写工具的 Agent 预设（`defaultPreset` / `agentPreset` 可指定）。
+1. **只读角色的工具面约束分两层（R3-B1 后）**：机制层——role 轨按构建期推导表 per-session 默认收缩（fail-open：数据损坏/缺表不收缩，收缩生效率读数可见）；文字层——任务书只读顾问条款仍保留。两层都**不是环境级隔离**：防的是「误用高级工具」，exec 类工具的外联不受约束；策略文件为同机可写面（信任边界与 advisor 同款，用户知情接受）。
 2. **人格文件缺失时退化为摘要模式**：`personas/<id>.md` 不在位时角色仍可用，但行为约束全部来自任务书条款，且任务书里会明确标注。
 3. **只创建，不管理**：`wake` / `status` / `list` / `rename` 归 `de_session`。
 4. **预设只作用于创建时刻**：会话运行中不可切换 Agent 预设（宿主 `agent-preset-locked`）。

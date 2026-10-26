@@ -1,24 +1,24 @@
 # ARCHITECTURE — dsh-agents 仓库全景（评审导览）
 
-> 本文面向**外部评审者**：逐部件说明本仓 143 个跟踪文件的职责、接线与质量账。
+> 本文面向**外部评审者**：逐部件说明本仓 152 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 143 文件，本文自身计入；2026-10-25 R2 C 批次后更新）。
+> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 152 文件，本文自身计入；2026-10-26 R3-B1 S5 批次后更新）。
 > 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
 
 ---
 
 ## 0. 一句话与关键数字
 
-**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、16 个确定性机检与测量脚本、三层测试链。
+**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、19 个确定性机检与测量脚本、三层测试链、per-session 工具面收缩与极简派活/回复通道（R3-B1）。
 
 | 维度 | 数值 | 验证入口 |
 |---|---|---|
-| 跟踪文件 | 143 | `git ls-files` 计数 |
+| 跟踪文件 | 152 | `git ls-files` 计数 |
 | 角色 / 泳道 | 23（build 10 · review 6 · domain 7） | `agent_roles action=list` |
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
-| 确定性工具 | 宿主注册 3 + `tools/` 共 16（机检脚本 9 · 测量/读取 4 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 303 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
+| 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 19（机检脚本 10 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
+| 测试断言 | 主套件 346 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
 | 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -30,10 +30,11 @@
 dsh-agents/
 ├── package.json / package-lock.json   插件清单（dsh.bundle.patch + dsh.client 双半声明）
 ├── cordis.patch.yml                   宿主插件行 + 全部可配项（档位路由基底）
-├── lib/            (37)               插件运行时（三个宿主工具 + 支撑模块 + advisor 子目录 26 件）
+├── lib/            (41)               插件运行时（三个宿主工具 + toolscope/reply 支撑模块 + advisor 子目录 26 件）
 ├── personas/       (34)               23 份角色人格 + checklists/ 11 份评审清单
 ├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
-├── tools/          (16)               独立 CLI 工具与机检脚本（不进宿主运行时）
+├── policies/       (2)                toolscope 策略数据（roster 基表 + 23 角色引用表）
+├── tools/          (19)               独立 CLI 工具与机检脚本（不进宿主运行时）
 ├── tests/          (13)               主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针 + 隔离门/回放设施
 ├── docs/           (4)                任务书模板正本 + advisor 契约正本 + 开源复用账本 + 设计原则正本
 ├── README.md                          使用向导（安装 / 快速开始 / 配置 / 已知限制）
@@ -55,7 +56,7 @@ dsh-agents/
 
 ---
 
-## 2. lib/ — 插件运行时（37 文件 = 顶层 11 + `advisor/` 26）
+## 2. lib/ — 插件运行时（41 文件 = 顶层 15 + `advisor/` 26）
 
 宿主加载入口是 `lib/index.js`；其余模块按职责单一划分。
 
@@ -72,6 +73,10 @@ dsh-agents/
 | `settings-compat.js` | 宿主 settings 服务版本差异兼容层（旧 get(ns) → 新 SettingsForms describe()；typeof 守卫降级） | 宿主 0.1.7 换代的适配层，能力面降级不崩 |
 | `http-config.js` | 设置卡数据端点：`GET/PATCH /plugins/dsh-agents/config`（回环 + Origin 同源防护；回环地址判定收口在白名单） | 端点只绑 loopback |
 | `client.js` | 浏览器半：设置卡（`window.__ModuleLoader__.load` 懒 CJS 工厂 → `settings.plugin.item` 槽位） | 无 `dsh.client` 字段则宿主引导图不含此半（README §设置页） |
+| `toolscope.js` | per-session 工具面策略文件读写（`<dataDir>/sessions/<b64>.toolscope.json`，schema v1：personaMode/toolPolicy{tier:full\|grant\|none,allow,deny}/replyChannel/orgId/role/task/taskbook） | 写 fail-closed（校验失败零写盘）读 fail-open（损坏→null）；与 advisor 配置同目录异名（b64url 无 `.` 三后缀不碰撞）；临界区全同步 |
+| `toolscope-pipeline.js` | restrict 管道：agent/created 决策核（decideToolscope）+ unknown 预校验 + lift-before-set + **跨代 sharedLift**（globalThis Symbol.for，防交集叠加锁死）+ G9 去重通知 + fail-open 全路径 + 死会话留存清扫 + V3-3 生效率审计环（有界 200） | 任何 refuse/skip 路径绝不调用 restrict（AC2-3 三件套）；own 层名禁入 allow（P4 豁免是自动语义） |
+| `toolscope-roster.js` | roster 数据层：两文件加载（损坏 fail-open 不静默）、构建期扫描核（scanRoleReferences，与漂移门同实现）、G11 覆盖率报告、**M11 宿主版本读取面**（detectHostVersion：插件树向上走查 + APPDATA npm 全局前缀候选；checkHostVersion mismatch 告警/unknown 静默）、M13 留存计划纯函数 | 「不猜记缺口」——反引号显式提及不在宇宙才报 unclassified；版本读取两路全落空=null 不抛 |
+| `agent-reply.js` | 极简回复通道：own 层 agent_reply（target 注册时钉死 orgId、schema 无 target 参数）+ 内部直投 sendToSession（缺省 inject）+ 模式解析闸门（纯函数）+ **V3-2 频控熔断**（滑动窗口 60s/3 + 连降 10 熔断至会话结束）+ 审计（reply-audit.jsonl；spawn 决策行并轨 kind:'spawn'；尺寸阈值轮转 `.1` 一代有界留存） | 唤醒白名单=发送方策略文件 orgId 单元素（按次现读，热改即刻生效）；delivered:false 不自动重试；降级请求计入窗口（连降计数可定义） |
 | `advisor/store.js` | advisor 存储：会话级分文件 + 幂等 seen + `records.jsonl` | 临界区全同步（见 §2.1） |
 | `advisor/api.js` | advisor 端点 `/plugins/dsh-agents/advisor`（GET / PATCH / POST） | sessionId 三处共用同一个形状判据（见 §2.1） |
 | `advisor/observer.js` | 每 turn 触发一次的幂等门（宿主真实身份 `(sessionId, turn, seq)`） | 只评审主会话汇总，子会话 step 不可见 |
@@ -87,7 +92,8 @@ dsh-agents/
 
 - **agent_roles** — 角色目录 / 单角色详情 / 档位路由表体检（`tiers` 回显 23/23 与来源）/ 用户层改档（set/reset）。
 - **agent_taskbook** — 只合成七节任务书不派活（先审后派）。
-- **agent_spawn** — 一步派活：解析档位 → 注入人格与任务书 → 创建标准 DSH 会话开跑。
+- **agent_spawn** — 一步派活：解析档位 → 注入人格与任务书 → 创建标准 DSH 会话开跑；`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填缺即拒、策略文件同事务落盘 fail-fast、返回体披露已应用策略）。
+- **agent_reply（own 层，非宿主工具位）** — 仅 minimal×org 会话经策略注册（agent/created 挂点），不在宿主全局工具面；回复组织者，受 V3-2 频控熔断约束（见 §2.2）。
 
 **不在本仓的近亲工具**：批次3 曾交付五个独立 check 模块（memory_secret_lint / config_guard / scope_loop_guard / invisible_chars / manifest_alignment），由本机另一插件（port-kit 系）承载并经安装态活体验证——**本仓不含其源码**，LIVE-VERIFIED 是本机安装态验证记录而非本仓可复现断言，外部评审者在本仓内无法核验此行，评审时请跳过。
 
@@ -125,13 +131,29 @@ dsh-agents/
 
 **宿主侧工具面保持为零**：advisor 仍不注册任何 `advisor*` 工具、不占三工具位。「模型工具面」（agentic 循环内模型自调只读检索）**已实现（B2，`aci/`）**；同轮 tool-call 实时拦截与 L3 依赖图/AST 精析为 V4/增强批次射程，**未实现（设计意向，登记 V4/增强批次）**。
 
+### 2.2 R3-B1 增量（2026-10-26；极简条件人格 + per-session 工具面 + 极简回复通道）
+
+设计正本 `agent-out/opt-b1-design.md` v3（consensus-plan 固定快照）；S1（`53a8790`/`6e31a51`）→ S2 探针（四探针全绿：挂点=agent/created、MCP 最终名规则、跨会话可达、own 层豁免）→ S3（`cca6578`/`2d013dc`）→ S4（`3af21d0`/`10954c2`）→ S5 收口（`52e9a4d`..）。
+
+| 特性 | 落点 | 边界与取舍 |
+|---|---|---|
+| ① 极简条件人格 | `spawn.js` beforeCreate 钩子 + `index.js` spawnTool `personaMode='minimal'`（四行 brief：任务/产出落盘/orgId/完成标准）+ `minimalPreset` 配置（缺省宿主内置 `'minimal'`） | provider+model 必填缺即拒（旁路档位路由后无回落链）；G8 策略文件写失败 fail-fast（不产出「有会话无策略文件」非法态）；G10 返回体披露已应用策略 |
+| ② per-session 工具面收缩 | `toolscope.js`（策略文件）+ `toolscope-roster.js`（两层策略源层 1）+ `toolscope-pipeline.js`（restrict 管道）+ `policies/`（roster 基表 + 23 角色表） | role 轨默认收缩（用户裁决基线行为变更）；minimal 轨显式整集；五重保障=引用推导+构建期机检（漂移门）+双向对账（两实现互红）+fail-open+跨代 lift 防线；防的是「误用高级工具」非环境级隔离（exec 外联不受约束） |
+| ③ 极简回复通道 | `agent-reply.js`（own 层 agent_reply + 直投 + 频控熔断 + 审计） | 仅 minimal×replyChannel='org' 注册；target 钉死 orgId、schema 无 target 参数（8 个收件方向参数名检查器钉死）；唤醒白名单单元素；频控 60s/3 超限降级 inject 不丢消息、连降 10 熔断至会话结束；群发原语不实现 |
+
+**七节任务书现状**：role 轨七节渲染**逐字不变**（净注入门锚定：静态四节口径B 1993/2181/2183，S1/S3/S4/S5 四次实测零增长）；minimal 轨不渲染七节，改产四行 brief；工具描述增量单独计量不同门（agent_spawn 增量 140B + agent_reply 220B 全口径 = 360B，≤400B 合计上界；严格口径 agent_reply 描述 169B）。
+
+**运行时可调面**：频控常数 config 键位（`replyWakeWindowMs`/`replyWakeWindowMax`/`replyWakeBreakAfter`，缺省 60000/3/10，resolveConfig fail-loud 校验）——裁决=config 不入 roster（运行时行为参数非策略数据名单；roster 是插件分发面会被升级覆盖）。审计有界留存：reply-audit.jsonl 尺寸阈值轮转 `.1` 一代（上限 ≈2×512KB，行级粒度轮转不丢行）。M11 宿主版本读取面：插件启动 + 构建期扫描各查一次（真机读数 match 0.1.7-rc.2）；mismatch → warn（R11 重跑彩排），unknown → 静默披露。
+
+**待办（Phase B，阻塞等宿主重启）**：AC1-4/AC3-5 端到端彩排（活体 agent_spawn 产真实 minimal 会话执行可判分小编码任务 → agent_reply 回 ORG → ORG idle 被唤醒、全程无缺工具中断）+ OQ#7 dev_reload 活体观测（best-effort）+ 彩排后九门回归零扰动 + V3-3 生效率读数组真实样本复跑（当前真实 dataDir 零策略文件=无样本，读数组消费器与重放机制已就位：`tools/toolscope-efficiency.mjs`）。
+
 ---
 
 ## 3. personas/ — 角色人格（34 文件）
 
 ### 3.1 角色人格（23 份，frontmatter + 单个 `<Agent_Prompt>` 块）
 
-三泳道 × 三档位全景（🔒 = 只读角色，任务书写成只读顾问条款——DSH 无法按会话禁用工具，这是文字约束，见 README 已知限制 1）：
+三泳道 × 三档位全景（🔒 = 只读角色：机制层有 B1 per-session 收缩（fail-open），文字层任务书只读顾问条款仍保留——均非环境级隔离，见 README 已知限制 1）：
 
 | 档位 | build | review | domain |
 |---|---|---|---|
@@ -190,7 +212,7 @@ dsh-agents/
 
 ---
 
-## 5. tools/ — 独立 CLI 与机检（16 文件 = 机检脚本 9 + 测量/读取 4 + 负向自测 2 + 数据 1）
+## 5. tools/ — 独立 CLI 与机检（19 文件 = 机检脚本 10 + 测量/读取 6 + 负向自测 2 + 数据 1）
 
 | 文件 | 职责 | 自测 |
 |---|---|---|
@@ -201,12 +223,15 @@ dsh-agents/
 | `publish-sync-check.ps1` | **公开仓同步幂等 diff 门**：本地 HEAD vs origin/master 零差异 exit 0；ahead 列文件 / behind 提示 pull（fetch 走 cmd /c 静默取退出码，避 PS5 stderr 陷阱） | 冒烟 in-sync exit 0 |
 | `skill-replica-check.ps1` | 双装机根一致性机检：按 replica-map.json 逐技能 SHA256 比对（match/drift/missing/unknown 四态）。**注**：replica-map.json 含本机装机路径，已移出 git 跟踪、仅维护侧本地维护——clone 后运行会 FAIL exit 1（fail-loud，不静默），属本机运维脚本非对外工具 | 本地运行（需本地 replica-map.json） |
 | `verify-imp26.mjs` | persona-gate 负向自测四层：①判据层纯函数（真实 executor 正文+真实 ECC 基线文本）②E2E 注入必红（fd-stdio 跑真安装器，INSTALL_PERSONAS_ROOT 重定向）③真实树全量跑 ④汇总裁定 | 33 断言——2026-09-30 修复后首次 33/0（见 §7） |
-| `taskbook-26a-negative.mjs` | taskbook 六参数 null 穿透等负向断言（IMP-26a 修复的注入必红回归门） | — |
+| `taskbook-26a-negative.mjs` | taskbook 六参数 null 穿透等负向断言（IMP-26a 修复的注入必红回归门；R3 时代扩为 11 变异体） | 11/11 变异必红 |
 | `session-guard.mjs` | 会话悬尾巡检门（clean/suspect/candidate/inflight 四态）：liveness 回填（running/idle/offline）+ self 白名单（测量者自悬排除）+ death-cases 幂等追加；只报警不判因（死因人事后确认）；输入复用 `measure-decay --scan --json`，`--json` 出机器读数 | `--selftest` 19 断言（7 元素 4 态夹具 + 注入必红 3/3：去 liveness 分支 / 去阈值比较 / 密度判据回流，变异副本动态 import） |
 | `measure-injection-surface.mjs` | A1 全注入面基线测量：面A 工具面 / 面B 技能面 / 面C persona 面 / 面D 任务书面四口同测（码点/码元/字节三口径），`--diff` 支持 ±0 复跑判定；面B fail-closed 双臂（数量≠口径 或 坏文件存在 → exit 1） | `--selftest` 9 断言（含坏文件凑足/数量≠口径/尾参缺值注入必红） |
 | `measure-decay.mjs` | 会话日志工具调用密度衰减测量（早/中/晚三段）+ 尾悬死亡签名 + `--scan`/`--cases` 批量模式；zstd 读取经 `zstd-read.mjs`（帧边界 FCS 截断 + fail-closed 预算 + 重复行拒测） | `--selftest` 50 断言（含大帧贪读夹具与预算注入必红） |
 | `zstd-read.mjs` | 宿主多帧 zstd 会话日志读取器：Frame_Magic 候选扫描 → 逐候选解压 → 按帧头 Frame_Content_Size 截断回单帧（Node sync 解码对 16KiB 对齐帧贪读吞并后续帧的防御）+ 帧数/单帧/累计三重预算 + 去重行防护 | 由 measure-decay selftest 覆盖（变异体必红 4/4） |
 | `usage-probe.mjs` | 会话日志 usage/token 持久化探针（M3 缓存对照测量基建，AC-C5）：canonical 四元组 + 恒等式/缺字段/坏行/空 usage 四类诊断 + 首请求冷启动/第二请求稳态/cacheHitShare；多帧 zstd 经 `zstd-read.mjs`；`--scan` 批量模式 | `--selftest` 24 断言（3 请求黄金夹具值两两不同 + 三类变异必红：缺字段/坏 JSON/空 usage + 2 帧 zstd 端到端） |
+| `opt-r2-faced-probe.mjs` | 面 D 净注入读数探针（口径B：头部+静态三节+参数模板行；R3 净注入门复跑入口）——输出路径**必填**（缺参 exit 2，防历史基线被静默覆盖） | 与 measure-injection-surface 共用 splitSections/metrics（零口径漂移） |
+| `scan-role-toolrefs.mjs` | toolscope 构建期角色引用扫描（B1 S3）：23 角色全扫 → `policies/toolscope-roles.json` + G11 覆盖率报告 + M11 宿主版本构建期查一次；损坏 fail-closed 非零退出 | 漂移门（run.mjs：roles 文件 vs 内存重扫 deep-equal） |
+| `toolscope-efficiency.mjs` | V3-3 收缩生效率读数组消费器（B1 S5）：对账通过率/实际收缩占比/fail-open 原因分布三值；`efficiencyReadings` 纯函数（吃管线 audit 环）+ `replayEntries` 离线重放（同一决策核）；阈值 50%（低于 → verdict 触发表修复轮）；零样本如实 `no-sample` | run.mjs 消费核/重放/无样本如实申报 4 条 |
 | `approved.json` | assemble-review 的批准记录（数据文件） | — |
 
 **tools/ 面设计纪律**：全部机检脚本**注入必红**（把坏样本喂进去断言变红——只验证「好文件过门」的闸门是半成品）；输出排空后再退出；「无意见」唯一合法形态是空输出+exit 0。
@@ -217,8 +242,8 @@ dsh-agents/
 
 | 文件 | 职责 | 当前账 |
 |---|---|---|
-| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + D-1a 档位差异化判别组 + 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **303 passed / 0 failed** |
-| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 303 |
+| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + D-1a 档位差异化判别组 + **B1 三特性组**（AC1/AC2/AC3 断言 + spawn 决策并轨 + 生效率读数组 + M11 读取面 + 频控 config + 审计轮转）+ 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **346 passed / 0 failed** |
+| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 346 |
 | `isolation-gate.mjs` | **进程边界双快照隔离门**：before 快照 → 动态 import 主套件 → after 快照 → 断言相等（防「加载期写盘被烘焙进基线」的假绿）；看门狗强制收口；`--selftest` 必红→必绿 | exit 0；selftest **5/5** |
 | `advisor-llm-replay.mjs` | **LLM 录制/回放设施**：录制端透明 passthrough → 落盘 fixture（不存请求正文）→ 回放逐块深比较；`ADVISOR_REPLAY_MISS`/`UNCONSUMED` 双侧 fail-closed | **9/9** |
 | `skill-sync-check.mjs` | **计数漂移门 + `.gitattributes` 门 + eol 一致性门**：README/ARCHITECTURE 里每处技能计数表述必须等于 `skills/**/SKILL.md` 实测件数；全跟踪文件 worktree==index 行尾一致；零命中 fail-closed + 阳性对照 + `--selftest` | PASS（变异体 **16/16** 达到期望） |
@@ -234,7 +259,7 @@ dsh-agents/
 
 ```bash
 npm install                        # 公开 registry 可装（1 个运行时依赖）
-node tests/run.mjs                 # 303/0（含独立门接线组）
+node tests/run.mjs                 # 346/0（含独立门接线组）
 node tests/isolation-gate.mjs      # 隔离门（进程边界双快照）exit 0
 node tests/advisor-llm-replay.mjs  # 录制/回放闭环 9/9
 node tools/crgate.test.mjs         # 65/0
@@ -262,7 +287,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 | 门 | 账面 |
 |---|---|
-| 主套件 | 303/0（含独立门接线组） |
+| 主套件 | 346/0（含独立门接线组 + B1 三特性组） |
 | 隔离门（isolation-gate） | exit 0（selftest 必红→必绿 5/5） |
 | LLM 回放（advisor-llm-replay） | 9/9 |
 | 计数漂移门（skill-sync-check） | PASS（阳性对照 PASS + 变异体 16/16 变红 + eol 一致） |
@@ -290,7 +315,14 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 ### 7.4 已知限制
 
-完整 8 条见 README「已知限制」。核心三条：只读角色是任务书条款而非硬隔离（可用禁写工具的 Agent 预设补硬隔离）；人格文件缺失时角色退化摘要模式运行；上下文隔离是「硬会话层 + 软材料层」（材料层靠机检告警而非阻断）。
+完整 8 条见 README「已知限制」。核心三条：只读角色的工具面约束是「机制层（B1 per-session 收缩，fail-open）+ 文字层（任务书条款）」双轨，均非环境级隔离（exec 外联不受约束、策略文件同机可写面=advisor 同款信任边界）；人格文件缺失时角色退化摘要模式运行；上下文隔离是「硬会话层 + 软材料层」（材料层靠机检告警而非阻断）。
+
+**B1 开放问题状态（2026-10-26 S5 后，正本 `agent-out/opt-b1-design.md` §七）**：
+
+- **已关**：#2 投递审计 + spawn 决策日志落点 = `reply-audit.jsonl`（S4 定 + S5 并轨，kind:'reply'/'spawn' 同文件异类）；#6 roster 同步挂点 = 独立脚本 `scan-role-toolrefs.mjs` + run.mjs 漂移门（S3 定）。
+- **条件开放**：#4 P1 红分支 MCP 收缩延 B3 排期（当前 P1 绿，条件未触发）；#5 P3 红分支中转回退下的汇报契约重设计（当前 P3 绿，条件未触发）。
+- **Phase B 待办**：#7 宿主 dev_reload 对活体会话 preset scope 重挂观测（彩排 best-effort，不适用则如实 skipped）；AC1-4/AC3-5 端到端彩排（阻塞等宿主重启）。
+- **留组织者裁**：#8 路径级写约束（只读席「只读写盘」纪律的实现化，guard 阶段候选——restrict 是工具名粒度做不到）。
 
 ---
 
