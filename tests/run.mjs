@@ -23,6 +23,10 @@ import {
   DedupNotifier, refuseKey, sharedLiftTable, installToolscopePipeline,
 } from '../lib/toolscope-pipeline.js'
 import {
+  REPLY_DEFAULTS, REPLY_AUDIT_FILENAME, REPLY_TOOL_DESCRIPTION,
+  resolveDeliveryMode, WakeRateLimiter, taskRef, agentReplyTool, installAgentReply,
+} from '../lib/agent-reply.js'
+import {
   loadRosterData, scanRoleReferences, buildCoverageReport, compareHostVersion,
   planRetentionSweep, POLICY_DIR,
 } from '../lib/toolscope-roster.js'
@@ -1662,6 +1666,376 @@ await testAsync('S3 install 接线：enabled=false 或缺 ctx.on ⇒ null（插�
   pipeline.dispose()
   assert.equal(handlers.size, 0, 'dispose 解除全部监听')
   assert.equal(sharedLiftTable().size, 0, 'dispose 后共享表清空（无跨代残留）')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+// ── B1 S4：极简回复通道（agent-reply / AC3-1..4 + AC3-6；AC3-5 端到端归 S5）──
+// 通道四件套：own 层 agent_reply（target 注册时钉死，schema 无 target）＋内部
+// 直投 sendToSession（缺省 inject）＋模式解析闸门＋频控熔断（V3-2）＋审计行。
+// 假宿主纪律：投递目标假体只复刻宿主 Agent 的 status/followup/steer/inject
+// 公开面（dsh-agent-loop :800-813 语义：followup=唤醒收件、steer=同回合可见、
+// inject=只投不唤醒；offline=agents.get 无条目，P3 负例语义）。
+
+/** S4 测试隔离目录（.fixture 系 gitignored；用完即清）。 */
+function agentReplyDir() {
+  return fileURLToPath(new URL('./.fixture-agent-reply/', import.meta.url))
+}
+
+/** 可拨钟（频控测试拨钟推进，不等真实 60 秒）。 */
+function tickClock(start = 1_000_000) {
+  let t = start
+  return { at: () => t, advance: (ms) => { t += ms } }
+}
+
+/** 投递目标假体：记录 followup/steer/inject 调用序（公开面最小复刻）。 */
+function s4AgentsService(targets) {
+  const byId = new Map()
+  for (const [id, spec] of Object.entries(targets)) {
+    byId.set(id, {
+      id,
+      status: spec.status,
+      calls: [],
+      followup(msg) { this.calls.push(['followup', msg]) },
+      steer(msg) { this.calls.push(['steer', msg]) },
+      inject(msg) { this.calls.push(['inject', msg]) },
+    })
+  }
+  return {
+    byId,
+    get: (id) => byId.get(id),
+    callsOf: (id) => byId.get(id)?.calls ?? [],
+  }
+}
+
+/** S4 用 scoped 假工具服务：在 S3 fakeToolsService 语义上加 register 面（own 层注册）。 */
+function s4ScopedTools(globalNames) {
+  const universe = new Set(globalNames)
+  const restrictions = []
+  const registered = new Map()
+  const restrictCalls = []
+  const admits = (name) => restrictions.every((r) => (r.allow === undefined || r.allow.has(name)) && (r.deny === undefined || !r.deny.has(name)))
+  return {
+    registered,
+    restrictions,
+    calls: restrictCalls,
+    tools: {
+      register(def) {
+        if (registered.has(def.name)) throw new Error(`duplicate tool "${def.name}" in one layer`)
+        registered.set(def.name, def)
+        return () => registered.delete(def.name)
+      },
+      view() {
+        const visible = new Set([...universe].filter(admits))
+        for (const name of registered.keys()) visible.add(name) // own 层豁免：恒可见（P4）
+        return { visible, knownNames: new Set([...universe, ...registered.keys()]), restrictableNames: new Set(universe) }
+      },
+      restrict(filter) {
+        restrictCalls.push(filter)
+        const allow = filter.allow
+        const deny = filter.deny
+        if (allow === undefined && deny === undefined) throw new Error('tools.restrict({}) is a no-op')
+        const unknown = [...allow ?? [], ...deny ?? []].filter((n) => !universe.has(n))
+        if (unknown.length > 0) throw new Error(`tools.restrict() names unknown global tools ${unknown.map((n) => `"${n}"`).join(', ')}`)
+        const entry = {
+          ...(allow !== undefined ? { allow: new Set(allow) } : {}),
+          ...(deny !== undefined ? { deny: new Set(deny) } : {}),
+        }
+        restrictions.push(entry)
+        let done = false
+        return () => {
+          if (done) return
+          done = true
+          const i = restrictions.indexOf(entry)
+          if (i >= 0) restrictions.splice(i, 1)
+        }
+      },
+    },
+  }
+}
+
+/** 逐行解析审计 jsonl（AC3-4 的持久面取证入口）。 */
+function readAuditLines(file) {
+  return readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+}
+
+/** target 形参数的健壮性检查器（AC3-2 断言本体：schema 不得声明收件方向参数）。 */
+const REPLY_FORBIDDEN_PARAMS = ['target', 'to', 'recipient', 'recipients', 'sessionId', 'sessionIds', 'roomId', 'organizer']
+function assertNoTargetParam(def) {
+  const props = def.parameters?.properties ?? {}
+  const hit = REPLY_FORBIDDEN_PARAMS.filter((key) => Object.hasOwn(props, key))
+  assert.deepEqual(hit, [], `agent_reply schema 不得声明收件方向参数，命中：${hit.join(', ')}`)
+}
+
+await testAsync('S4 AC3-1 模式解析矩阵：org idle→followup / org running→steer / 非 org 唤醒→inject 降级 / offline→offline / 无唤醒→inject（5 格 ≥3 元素输入）', async () => {
+  assert.deepEqual(resolveDeliveryMode({ isOrg: true, targetState: 'idle', wake: true }), { mode: 'followup', wake: true, degraded: null })
+  assert.deepEqual(resolveDeliveryMode({ isOrg: true, targetState: 'running', wake: true }), { mode: 'steer', wake: true, degraded: null })
+  assert.deepEqual(resolveDeliveryMode({ isOrg: false, targetState: 'idle', wake: true }), { mode: 'inject', wake: false, degraded: 'wake-denied-non-org' })
+  assert.deepEqual(resolveDeliveryMode({ isOrg: false, targetState: 'running', wake: true }), { mode: 'inject', wake: false, degraded: 'wake-denied-non-org' })
+  assert.deepEqual(resolveDeliveryMode({ isOrg: true, targetState: undefined, wake: true }), { mode: 'offline', wake: false, degraded: null }, '宿主漂移（status 读不到）按 offline 拒投——fail-safe 方向')
+  assert.deepEqual(resolveDeliveryMode({ isOrg: true, targetState: 'idle', wake: false }), { mode: 'inject', wake: false, degraded: null }, '缺省只投不唤醒（内部直投缺省语义）')
+})
+
+await testAsync('S4 AC3-6 频控熔断纯逻辑：60 秒窗 ≤3、第 4 次降级、连降 10 次熔断至会话终、成功清零、clear 解除；去频控变异必红对照', async () => {
+  const clock = tickClock()
+  const lim = new WakeRateLimiter({ now: clock.at }) // 缺省常数 60_000/3/10
+  assert.deepEqual({ windowMs: lim.windowMs, windowMax: lim.windowMax, breakAfter: lim.breakAfter }, REPLY_DEFAULTS, '缺省常数=REPLY_DEFAULTS（60s/3/10）')
+  const seq = [1, 2, 3, 4, 5].map(() => lim.request('session-min'))
+  assert.deepEqual(seq.slice(0, 3).map((r) => r.allowed), [true, true, true], '窗口内前 3 次获准')
+  assert.equal(seq[3].allowed, false, '第 4 次降级')
+  assert.equal(seq[3].reason, 'window-exceeded')
+  assert.equal(seq[4].consecutive, 2, '连续降级计数累计')
+  clock.advance(60_001)
+  const slid = lim.request('session-min')
+  assert.equal(slid.allowed, true, '窗口滑动后旧请求出窗，再次获准')
+  assert.equal(lim.request('session-min').consecutive, 0, '获准唤醒清零连续降级计数')
+  // 灌满窗口（现共 3 条，consecutive=0），随后同一窗内连打 10 次全降级——
+  // 第 10 次连续降级触发熔断（REPLY_DEFAULTS.breakAfter=10）。
+  lim.request('session-min')
+  let broke = null
+  for (let i = 0; i < 10; i++) broke = lim.request('session-min')
+  assert.equal(broke.allowed, false)
+  assert.equal(broke.consecutive, 10)
+  assert.equal(broke.circuitBroken, true, '第 10 次连续降级触发熔断（下游据此广播组织者）')
+  assert.equal(lim.broken('session-min'), true)
+  assert.equal(lim.request('session-min').reason, 'circuit-broken', '熔断后一律拒绝唤醒（后续全 inject）')
+  clock.advance(10 * 60_000)
+  assert.equal(lim.request('session-min').allowed, false, '熔断不受窗口滑动影响（至会话结束）')
+  lim.clear('session-min')
+  assert.equal(lim.broken('session-min'), false, 'clear（会话终锚点）解除熔断')
+  assert.equal(lim.request('session-min').allowed, true, '解除后恢复窗口语义')
+  // 去频控变异必红对照（AC3-6 负向）：windowMax 放开=去频控，第 4 次同窗请求
+  // 获准唤醒——AC3-6 断言「第 4 次必须 inject」在变异体下必翻红。
+  const mutant = new WakeRateLimiter({ now: clock.at, windowMax: Number.MAX_SAFE_INTEGER })
+  const mutantSeq = [1, 2, 3, 4].map(() => mutant.request('session-min'))
+  assert.deepEqual(mutantSeq.map((r) => r.allowed), [true, true, true, true], '变异体第 4 次仍获准 ⇒ AC3-6 断言（第 4 次降级）必红')
+  assert.notEqual(mutantSeq[3].allowed, false, '变异体观测值≠被要求值：断言有抓变异的能力（对照证据）')
+})
+
+await testAsync('S4 AC3-2 agent_reply schema 无 target 参数（负向必红：加 target 变异即翻红）+ DSH 硬约束 + 描述 ≤120 字且 ≤200 字节 + execute 物理忽略多余参数', async () => {
+  const def = agentReplyTool({ fromId: 'session-min', orgId: 'session-org', task: 't', send: () => ({ ok: true }) })
+  assert.equal(def.name, 'agent_reply')
+  // DSH 硬约束（工具契约）：parameters 单一 type + 顶层 required、output.schema + render
+  assert.equal(def.parameters.type, 'object')
+  assert.deepEqual(def.parameters.required, ['message'])
+  assert.equal(typeof def.output.render, 'function', 'output.render 必须是函数（宿主 register 契约）')
+  assert.ok(def.output.schema && typeof def.output.schema === 'object')
+  // 计量门（AC1-3 单独计量归因）：描述 ≤120 字且 ≤200 字节（双口径同过）
+  assert.ok(REPLY_TOOL_DESCRIPTION.length <= 120, `描述 ${REPLY_TOOL_DESCRIPTION.length} 字 ≤120`)
+  assert.ok(Buffer.byteLength(REPLY_TOOL_DESCRIPTION, 'utf8') <= 200, `描述 ${Buffer.byteLength(REPLY_TOOL_DESCRIPTION, 'utf8')} 字节 ≤200`)
+  assertNoTargetParam(def)
+  // 负向必红：给变异体加 target 参数，同检查器必须翻红（断言有抓变异能力）
+  const mutant = { ...def, parameters: { ...def.parameters, properties: { ...def.parameters.properties, target: { type: 'string' } } } }
+  assert.throws(() => assertNoTargetParam(mutant), /不得声明收件方向参数.*target/, '加 target 变异必红（AC3-2 负向对照）')
+  // 物理不可达：execute 只读 message——多余参数（哪怕叫 target）不进投递链
+  const seen = []
+  const exec = agentReplyTool({ fromId: 'session-min', orgId: 'session-org', task: 't', send: (input) => { seen.push(input); return { ok: true, delivered: true, mode: 'inject', reason: null, degraded: null } } })
+  const r = await exec.execute({ message: '进度 50%', target: 'session-evil', to: 'session-evil' })
+  assert.deepEqual(seen, [{ text: '进度 50%' }], 'send 只收 message 文本，target/to 物理不可达')
+  assert.equal(r.delivered, true)
+  const empty = await exec.execute({ message: '   ' })
+  assert.equal(empty.delivered, false, '空正文不投递')
+  assert.equal(empty.reason, 'empty-message')
+  assert.equal(seen.length, 1, '空正文不触发 send')
+})
+
+await testAsync('S4 注册门控：minimal×replyChannel=org 才注册（role/无策略/replyChannel null 零触碰）；orgId 缺失跳过并审计；own 层注册豁免 restrict（真实 def 复证 P4）', async () => {
+  const dir = agentReplyDir()
+  mkdirSync(dir, { recursive: true })
+  try {
+    const store = new ToolscopeStore({ dataDir: dir })
+    const clock = tickClock()
+    const svc = s4ScopedTools(['read', 'write'])
+    const agents = s4AgentsService({ 'session-org': { status: 'idle' } })
+    const pipeline = installAgentReply({ ctx: fakeEventCtx().ctx, store, dataDir: dir, agents, now: clock.at, logger: { warn: () => {}, error: () => {} } })
+    try {
+      // 正例：minimal × org → 注册；目标钉死 orgId
+      store.writeMinimal('session-min', { orgId: 'session-org', task: '实现回复通道' })
+      const minAgent = { id: 'session-min', ctx: svc }
+      pipeline.onCreated(minAgent)
+      assert.equal(svc.registered.has('agent_reply'), true, 'minimal×org 注册 agent_reply')
+      const def = svc.registered.get('agent_reply')
+      assert.equal(def.name, 'agent_reply')
+      // own 层豁免复证（真实 def）：restrict allow 只留 read，agent_reply 仍可见
+      svc.tools.restrict({ allow: ['read'] })
+      assert.equal(svc.tools.view().visible.has('agent_reply'), true, 'own 层在收缩后仍可见（P4 语义）')
+      assert.equal(svc.tools.view().visible.has('write'), false, 'restrict 生效（对照面）')
+      // 负例 1：role 轨 → 零触碰
+      store.writeRole('session-role', { role: 'executor', task: 'x' })
+      pipeline.onCreated({ id: 'session-role', ctx: s4ScopedTools(['read', 'write']) })
+      // 负例 2：minimal 但 replyChannel=null → 零触碰
+      store.write('session-nochan', { sessionId: 'session-nochan', personaMode: 'minimal', toolPolicy: { tier: 'full', allow: ['read'], deny: [] }, replyChannel: null, orgId: null })
+      pipeline.onCreated({ id: 'session-nochan', ctx: s4ScopedTools(['read', 'write']) })
+      // 负例 3：无策略文件（非本插件派发）→ 零触碰
+      pipeline.onCreated({ id: 'session-foreign', ctx: s4ScopedTools(['read', 'write']) })
+      assert.equal(svc.registered.size, 1, '只有 minimal×org 会话拿到 agent_reply（其余零触碰）')
+      // 负例 4：minimal×org 但 orgId 缺失 → 跳过注册 + 审计 no-org-target
+      store.write('session-noorg', { sessionId: 'session-noorg', personaMode: 'minimal', toolPolicy: { tier: 'full', allow: ['read'], deny: [] }, replyChannel: 'org', orgId: null })
+      const noorgSvc = s4ScopedTools(['read'])
+      pipeline.onCreated({ id: 'session-noorg', ctx: noorgSvc })
+      assert.equal(noorgSvc.registered.size, 0, '无 orgId 不注册（无钉死目标的通道是无效通道）')
+      assert.equal(pipeline.audit().some((l) => l.reason === 'no-org-target' && l.from === 'session-noorg'), true, '跳过留审计痕')
+    } finally {
+      pipeline.dispose()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S4 AC3-3 offline 结构化失败不抛 + 内部直投缺省 inject/白名单唤醒/模式矩阵（AC3-1 集成面）', async () => {
+  const dir = agentReplyDir()
+  mkdirSync(dir, { recursive: true })
+  try {
+    const store = new ToolscopeStore({ dataDir: dir })
+    store.writeMinimal('session-min', { orgId: 'session-org' })
+    const agents = s4AgentsService({ 'session-org': { status: 'idle' }, 'session-peer': { status: 'running' } })
+    const pipeline = installAgentReply({ ctx: fakeEventCtx().ctx, store, dataDir: dir, agents, logger: { warn: () => {}, error: () => {} } })
+    try {
+      // AC3-3：offline → 结构化失败，不抛、不重试
+      const ghost = pipeline.sendToSession('session-ghost', 'hello', { from: 'session-min' })
+      assert.deepEqual(ghost, { ok: false, delivered: false, mode: 'offline', reason: 'offline', degraded: null })
+      assert.equal(agents.callsOf('session-ghost').length, 0, 'offline 无任何投递调用')
+      // 内部直投缺省 inject（不唤醒）
+      const plain = pipeline.sendToSession('session-org', '通知', { from: 'session-min' })
+      assert.deepEqual(plain, { ok: true, delivered: true, mode: 'inject', reason: null, degraded: null })
+      assert.deepEqual(agents.callsOf('session-org').map(([mode]) => mode), ['inject'])
+      // 唤醒类：target=orgId（白名单单元素）idle→followup
+      const wake = pipeline.sendToSession('session-org', '完成汇报', { from: 'session-min', wake: true })
+      assert.equal(wake.mode, 'followup')
+      // 唤醒类：非 org 目标 → 降级 inject + 标注（消息不丢、唤醒不发）
+      const denied = pipeline.sendToSession('session-peer', '越权唤醒?', { from: 'session-min', wake: true })
+      assert.equal(denied.mode, 'inject')
+      assert.equal(denied.degraded, 'wake-denied-non-org')
+      assert.deepEqual(agents.callsOf('session-peer').map(([mode]) => mode), ['inject'])
+      // org running → steer（同回合可见）
+      agents.byId.get('session-org').status = 'running'
+      const steer = pipeline.sendToSession('session-org', '补充', { from: 'session-min', wake: true })
+      assert.equal(steer.mode, 'steer')
+      // 信封：user-role + 插件来源 + 首行归属标记
+      const last = agents.callsOf('session-org').at(-1)
+      assert.equal(last[1].role, 'user')
+      assert.equal(last[1].source.kind, 'plugin')
+      assert.ok(last[1].content[0].text.startsWith('【agent_reply·来自 session-min】'), '首行归属标记（防伪装用户指令）')
+      assert.ok(last[1].content[0].text.endsWith('补充'))
+    } finally {
+      pipeline.dispose()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S4 AC3-6 频控熔断集成：第 4 次唤醒降级 inject+审计标注、连降 10 次熔断+通知组织者、会话终清态恢复；去频控变异必红对照', async () => {
+  const dir = agentReplyDir()
+  mkdirSync(dir, { recursive: true })
+  try {
+    const store = new ToolscopeStore({ dataDir: dir })
+    store.writeMinimal('session-min', { orgId: 'session-org' })
+    const clock = tickClock()
+    const agents = s4AgentsService({ 'session-org': { status: 'idle' } })
+    const pipeline = installAgentReply({ ctx: fakeEventCtx().ctx, store, dataDir: dir, agents, now: clock.at, logger: { warn: () => {}, error: () => {} } })
+    try {
+      const send = (n) => pipeline.sendToSession('session-org', `m${n}`, { from: 'session-min', wake: true })
+      // 窗口 ≤3（REPLY_DEFAULTS）：1..3 followup，第 4 次降级 inject
+      assert.deepEqual([send(1).mode, send(2).mode, send(3).mode], ['followup', 'followup', 'followup'])
+      const fourth = send(4)
+      assert.equal(fourth.mode, 'inject', 'AC3-6：第 4 次唤醒类投递实际以 inject 送达')
+      assert.equal(fourth.degraded, 'window-exceeded')
+      assert.equal(agents.callsOf('session-org').at(-1)[0], 'inject', '消息不丢（以 inject 送达）')
+      // 连续降级至 10（第 4..13 次）→ 第 13 次触发熔断并通知组织者
+      let broke = null
+      for (let n = 5; n <= 13; n++) broke = send(n)
+      assert.equal(broke.degraded, 'window-exceeded')
+      assert.equal(pipeline.limiter.broken('session-min'), true, '连降 10 次熔断至会话终')
+      const notice = agents.callsOf('session-org').find(([mode, msg]) => mode === 'inject' && msg.content[0].text.includes('熔断'))
+      assert.ok(notice, '熔断事件已 inject 告知组织者（不唤醒）')
+      // 熔断后：唤醒请求一律 inject + circuit-broken 标注
+      const after = send(14)
+      assert.equal(after.mode, 'inject')
+      assert.equal(after.degraded, 'circuit-broken')
+      // 会话终（disposed）清态 → 恢复窗口语义
+      pipeline.onDisposed('session-min')
+      assert.equal(pipeline.limiter.broken('session-min'), false)
+      assert.equal(send(15).mode, 'followup', '会话终后熔断态清空，窗口语义恢复')
+      // 审计降级标注（AC3-4 + V3-2「审计行记降级事件」）
+      const auditLines = readAuditLines(join(dir, REPLY_AUDIT_FILENAME))
+      const degradedLine = auditLines.find((l) => l.degraded === 'window-exceeded')
+      assert.ok(degradedLine, '审计行含降级标注')
+      assert.equal(degradedLine.form, 'inject')
+      // 去频控变异必红对照：放开 windowMax 的同构管线，第 4 次是 followup
+      // ⇒ AC3-6 断言（第 4 次=inject）在变异体下必翻红。
+      const mutantPipeline = installAgentReply({
+        ctx: fakeEventCtx().ctx, store, dataDir: dir, agents,
+        limiter: new WakeRateLimiter({ now: clock.at, windowMax: Number.MAX_SAFE_INTEGER }),
+        auditPath: join(dir, 'mutant-audit.jsonl'),
+        logger: { warn: () => {}, error: () => {} },
+      })
+      try {
+        const mutantSend = (n) => mutantPipeline.sendToSession('session-org', `mm${n}`, { from: 'session-min', wake: true })
+        assert.deepEqual([mutantSend(1).mode, mutantSend(2).mode, mutantSend(3).mode, mutantSend(4).mode], ['followup', 'followup', 'followup', 'followup'], '去频控变异体第 4 次仍 followup ⇒ AC3-6 断言必红（对照证据）')
+      } finally {
+        mutantPipeline.dispose()
+      }
+    } finally {
+      pipeline.dispose()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S4 AC3-4 审计行字段齐（时间/发起会话/目标/形态/任务引用）+ jsonl 持久面落盘 + task 引用截断', async () => {
+  const dir = agentReplyDir()
+  mkdirSync(dir, { recursive: true })
+  try {
+    const store = new ToolscopeStore({ dataDir: dir })
+    store.writeMinimal('session-min', { orgId: 'session-org', task: '实现回复通道四件套' })
+    const agents = s4AgentsService({ 'session-org': { status: 'idle' } })
+    const pipeline = installAgentReply({ ctx: fakeEventCtx().ctx, store, dataDir: dir, agents, logger: { warn: () => {}, error: () => {} } })
+    try {
+      pipeline.sendToSession('session-org', 'a', { from: 'session-min', task: '实现回复通道四件套', wake: true })
+      pipeline.sendToSession('session-ghost', 'b', { from: 'session-min', task: '实现回复通道四件套' })
+      pipeline.sendToSession('session-org', 'c', { from: 'session-min', task: `${'长'.repeat(300)}` })
+      const file = join(dir, REPLY_AUDIT_FILENAME)
+      assert.equal(existsSync(file), true, '审计落盘 dataDir 持久面（OQ#2 裁决）')
+      const lines = readAuditLines(file)
+      assert.ok(lines.length >= 3, `≥3 条审计行（实得 ${lines.length}，断言鉴别力）`)
+      for (const line of lines) {
+        assert.equal(line.kind, 'reply')
+        assert.ok(typeof line.time === 'string' && !Number.isNaN(Date.parse(line.time)), `时间字段 ISO 可解析：${line.time}`)
+        assert.equal(line.from, 'session-min', '发起会话字段')
+        assert.ok('to' in line && line.to !== undefined, '目标字段')
+        assert.ok(['followup', 'steer', 'inject', 'offline', 'skipped'].includes(line.form), `形态字段：${line.form}`)
+        assert.ok(typeof line.task === 'string', '任务引用字段')
+        assert.ok('delivered' in line, 'delivered 字段')
+      }
+      assert.equal(lines[0].form, 'followup')
+      assert.equal(lines[0].task, '实现回复通道四件套')
+      assert.equal(lines[1].form, 'offline', 'offline 失败也留审计行（每次投递尝试一条）')
+      assert.equal(lines[1].delivered, false)
+      assert.equal(lines[2].task.length, 200, 'task 引用截断至 200 字符（引用非全文）')
+      assert.equal(pipeline.audit().length, lines.length, '内存环与文件一致')
+    } finally {
+      pipeline.dispose()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S4 杂项：taskRef 规整 + install 降级（enabled=false 或缺 ctx.on ⇒ null）+ dispose 解除全部监听', async () => {
+  assert.equal(taskRef('  a\n b  '), 'a b', '压平空白')
+  assert.equal(taskRef(`${'x'.repeat(300)}`).length, 200, '截断 200')
+  assert.equal(taskRef(null), '', 'null 安全')
+  const dir = agentReplyDir()
+  const store = new ToolscopeStore({ dataDir: dir })
+  assert.equal(installAgentReply({ ctx: {}, store, dataDir: dir, logger: { warn: () => {}, error: () => {} } }), null, '缺 ctx.on ⇒ null（toolscope 管线同款降级）')
+  assert.equal(installAgentReply({ ctx: fakeEventCtx().ctx, store, dataDir: dir, enabled: false, logger: { warn: () => {}, error: () => {} } }), null, 'enabled=false ⇒ null（消融联动）')
+  const { ctx, handlers } = fakeEventCtx()
+  const pipeline = installAgentReply({ ctx, store, dataDir: dir, logger: { warn: () => {}, error: () => {} } })
+  assert.equal(handlers.size, 3, 'created/disposed×2 三事件接线')
+  pipeline.dispose()
+  assert.equal(handlers.size, 0, 'dispose 解除全部监听')
   rmSync(dir, { recursive: true, force: true })
 })
 
