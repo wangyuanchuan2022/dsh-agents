@@ -23,8 +23,8 @@ import {
   DedupNotifier, refuseKey, sharedLiftTable, installToolscopePipeline,
 } from '../lib/toolscope-pipeline.js'
 import {
-  REPLY_DEFAULTS, REPLY_AUDIT_FILENAME, REPLY_TOOL_DESCRIPTION,
-  resolveDeliveryMode, WakeRateLimiter, taskRef, agentReplyTool, installAgentReply,
+  REPLY_DEFAULTS, REPLY_AUDIT_FILENAME, REPLY_TOOL_DESCRIPTION, AUDIT_ROTATE_BYTES,
+  resolveDeliveryMode, WakeRateLimiter, taskRef, agentReplyTool, installAgentReply, spawnDecisionAuditWriter,
 } from '../lib/agent-reply.js'
 import {
   loadRosterData, scanRoleReferences, buildCoverageReport, compareHostVersion,
@@ -2303,6 +2303,52 @@ test('S5 小收口③ installAgentReply limiterOptions 接线：常数经 config
     const p2 = installAgentReply({ ctx: fakeEventCtx().ctx, store, dataDir: dir, logger: quiet })
     assert.deepEqual({ windowMs: p2.limiter.windowMs, windowMax: p2.limiter.windowMax, breakAfter: p2.limiter.breakAfter }, REPLY_DEFAULTS, '不传 limiterOptions=REPLY_DEFAULTS（60s/3/10）')
     p2.dispose()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ── B1 S5：小收口④ 审计文件有界留存（尺寸阈值轮转 `.1` 一代）────────────────
+// 负向对照两类变异：always-rotate（未超限也轮转 → 无 `.1` 断言翻红）与
+// drop-on-rotate（轮转丢行 → 「.1+当前=全量」断言翻红）。
+
+test('S5 小收口④ 审计轮转：超限轮转一代且行不丢（.1+当前=全量）+ 未超限不轮转 + spawn/reply 两写路径共用同一助手', () => {
+  const dir = agentReplyDir()
+  try {
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'audit-rotate.jsonl')
+    const write = spawnDecisionAuditWriter(file, { maxBytes: 200 })
+    const payloads = ['x'.repeat(80), 'y'.repeat(80), 'z'.repeat(80)]
+    for (const p of payloads) write({ personaMode: 'minimal', task: p })
+    assert.equal(existsSync(`${file}.1`), true, '超限后 `.1` 代存在（轮转发生）')
+    const rotated = readAuditLines(`${file}.1`)
+    const current = readAuditLines(file)
+    assert.equal(rotated.length + current.length, 3, `轮转不丢行：.1(${rotated.length})+当前(${current.length})=3`)
+    assert.equal(current.length, 1, '轮转后当前文件只含最新一代（小于阈值即轮转，行级粒度）')
+    assert.ok(current[0].task.startsWith('z'), '当前文件是最新行')
+    assert.ok(current[0].kind === 'spawn', 'spawn 写路径走同一助手')
+    // 未超限不轮转（防 always-rotate 变异）
+    const file2 = join(dir, 'audit-norotate.jsonl')
+    const write2 = spawnDecisionAuditWriter(file2, { maxBytes: AUDIT_ROTATE_BYTES })
+    write2({ personaMode: 'minimal', task: 'small' })
+    write2({ personaMode: 'minimal', task: 'small-2' })
+    assert.equal(existsSync(`${file2}.1`), false, '未超限不轮转（防 always-rotate 变异）')
+    assert.equal(readAuditLines(file2).length, 2)
+    // reply 写路径（install 管线 audit）同一轮转语义。maxBytes=400 ≫ 单行(~160B)
+    // ——「轮转不丢行」判据在此口径成立（每代容纳多行，只丢最旧一代）；若单行大于
+    // 阈值，每行自成一代、旧代按界丢弃是有界留存的本义，不丢判据不适用。
+    const store = new ToolscopeStore({ dataDir: dir })
+    const quiet = { warn: () => {}, error: () => {} }
+    const agentsSvc = s4AgentsService({ 'session-org': { status: 'idle' } })
+    const pipeline = installAgentReply({ ctx: fakeEventCtx().ctx, store, dataDir: dir, logger: quiet, agents: agentsSvc, auditPath: join(dir, 'pipeline-audit.jsonl'), auditMaxBytes: 400 })
+    for (let i = 0; i < 6; i += 1) pipeline.sendToSession('session-org', `m${i}-${'p'.repeat(60)}`, { from: 'session-min', task: '轮转', wake: false })
+    pipeline.dispose()
+    const pFile = join(dir, 'pipeline-audit.jsonl')
+    const pRotated = existsSync(`${pFile}.1`) ? readAuditLines(`${pFile}.1`) : []
+    const pCurrent = readAuditLines(pFile)
+    assert.equal(pRotated.length + pCurrent.length, 6, 'reply 写路径轮转不丢行（6 次投递 6 行全量，maxBytes≫行尺寸）')
+    assert.ok(pRotated.every((l) => l.delivered === true) && pCurrent.every((l) => l.delivered === true), '投递真达（idle→inject delivered:true，非 offline 兜底行）')
+    assert.ok(pRotated.length >= 3, `小阈值下确实发生轮转（.1 代 ${pRotated.length} 行）`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
