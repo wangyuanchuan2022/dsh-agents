@@ -5,7 +5,7 @@
   "scanIgnore": ["de_session"],
   "classMap": {
     "read-class": ["read", "glob", "grep", "read_image", "web_fetch", "web_search"],
-    "write-class": ["write", "edit"],
+    "write-class": ["write", "edit", "str_replace_editor"],
     "exec-class": ["pwsh"],
     "dispatch-class": ["agent_spawn", "agent_roles", "agent_taskbook", "de_session", "spawn_teammate", "subagent", "subagent_fork", "send_message", "workflow", "team_task_create", "team_task_get", "team_task_update", "wait_agent", "list_agents", "interrupt_agent"],
     "comm-class": ["de_broadcast", "de_channel_send", "ask_user_question"],
@@ -26,12 +26,12 @@
   "retention": { "maxFiles": 512 },
   "presets": {
     "eval-coding": {
-      "description": "评测编码最低集（读+写+编辑+检索+执行）。名单按 S2 P1 结论校准转正：六名在参考基面全部存在且拼名一致。agent_reply 不入列——P4 实证 own 层名不在 restrictableNames，列入 allow 即 unknown 必拒（AC2-3）；own 层豁免是自动语义。",
-      "tools": ["read", "write", "edit", "glob", "grep", "pwsh"]
+      "description": "评测编码最低集（读+写+编辑+截图读+执行）。Phase B 二次校准（2026-10-26）到 minimal-eval 预设真实注册面：dsh-tool-fs 只注册 read/write/edit/read_image（无 glob/grep——旧名单含此二名会对预设会话 unknown-names 必拒 → fail-open 裸面，Phase B 事故二）；编辑补 dsh-tool-str-replace-editor 的 str_replace_editor；执行 dsh-tool-pwsh 的 pwsh。agent_reply 不入列——P4 实证 own 层名不在 restrictableNames，列入 allow 即 unknown 必拒（AC2-3）；own 层豁免是自动语义。",
+      "tools": ["read", "write", "edit", "read_image", "str_replace_editor", "pwsh"]
     },
     "read-only": {
-      "description": "只读档：读类+发件（de_broadcast 为 coreBase 发件基础设施）；写类/执行类/派活类全部收掉（allow 语义下天然不含）。agent_reply（S4 own 层）同样自动豁免。",
-      "tools": ["read", "glob", "grep", "read_image", "de_broadcast"]
+      "description": "只读档：读类+发件（de_broadcast 为 coreBase 发件基础设施）；写类/执行类/派活类全部收掉（allow 语义下天然不含）。Phase B 二次校准：移除 glob/grep（dsh-tool-fs 无此二工具，与 eval-coding 同根因）。agent_reply（S4 own 层）同样自动豁免。",
+      "tools": ["read", "read_image", "de_broadcast"]
     }
   }
 }

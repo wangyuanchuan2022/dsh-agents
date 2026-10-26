@@ -15,7 +15,7 @@ import {
 } from '../lib/routing.js'
 import { composeTaskbook, preflight, stamp, dedupeEvidencePath } from '../lib/taskbook.js'
 import { loadPersona, listPersonaFiles, splitFrontmatter } from '../lib/persona.js'
-import { listPresets } from '../lib/spawn.js'
+import { listPresets, RoleSpawner } from '../lib/spawn.js'
 import { resolveConfig, apply, Config } from '../lib/index.js'
 import { ToolscopeStore, toolscopePath, normalizeToolscope, MINIMAL_TOOLSET_FULL, TOOLSCOPE_SCHEMA_VERSION } from '../lib/toolscope.js'
 import {
@@ -72,6 +72,13 @@ function fakeCtx(overrides = {}) {
         created.push(options)
         return { agent: { followup: (msg) => created.push({ followup: msg }) }, dispose: () => {} }
       },
+    },
+    // B1-PhaseB 修复①配套缺省假服务：修复②后「显式预设 + 服务缺失」= fail-fast，
+    // minimal 用例必须拿得到 agentPresets 才能走通挂载路径（resolve 幂等回显 +
+    // mount 空实现）；要测「服务缺失」语义的用例请构造独立 ctx（见 PhaseB 修复测试）。
+    agentPresets: {
+      resolve: async (id) => ({ id: id ?? 'minimal' }),
+      mount: async () => {},
     },
     effect: (fn) => { fn() },
     inject: (deps, cb) => { if (deps.every((d) => ctx[d] !== undefined)) cb(ctx) },
@@ -2376,6 +2383,67 @@ test('S5 小收口④ 审计轮转：超限轮转一代且行不丢（.1+当前=
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ── B1 PhaseB：预设挂载主根因修复（组织者诊断一/二：懒注入缓存 + 显式预设
+// fail-fast + allow 名单校准真实面）───────────────────────────────────────────
+
+await testAsync('S5-PhaseB 修复①：agentPresets 解析序=懒注入缓存 → ctx.get → 属性；resolve+mount 经 setup 被 create 执行（正例）', async () => {
+  const mounts = []
+  const fakePresets = {
+    resolve: async (id) => ({ id: id ?? 'minimal' }),
+    mount: async (_agentCtx, presetId) => { mounts.push(presetId) },
+  }
+  const ctx = {
+    get: () => undefined, // ctx.get 路，拿不到——证明缓存路生效（事故形态的对照面）
+    agents: { create: async (options) => { if (typeof options.setup === 'function') await options.setup({ fake: 'agentCtx' }); return { agent: { followup: () => {} }, dispose: () => {} } } },
+    effect: (fn) => fn(),
+  }
+  const spawner = new RoleSpawner(ctx, { agentPresetsOf: () => fakePresets, attachDelays: [0] })
+  assert.equal(spawner.resolveAgentPresets(), fakePresets, '缓存路命中（ctx.get 拿不到服务也能挂载——主根因修复本体）')
+  const r = await spawner.spawn({ prompt: 'p', agentPreset: 'minimal-eval', provider: 'prov', model: 'm' })
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.agentPreset, 'minimal-eval')
+  assert.deepEqual(mounts, ['minimal-eval'], 'mount 恰一次且带预设 id（setup 回调被 create 执行）')
+})
+
+await testAsync('S5-PhaseB 修复②：服务不可达 + 显式预设 → fail-fast 拒绝（零会话创建，负例必红）；role 轨无显式预设 → legacy 降级照常创建', async () => {
+  const created = []
+  const ctx = {
+    get: () => undefined,
+    agents: { create: async (options) => { created.push(options); return { agent: { followup: () => {} }, dispose: () => {} } } },
+    effect: (fn) => fn(),
+  }
+  const spawner = new RoleSpawner(ctx, { agentPresetsOf: () => null, attachDelays: [0] })
+  assert.equal(spawner.resolveAgentPresets(), undefined, '三路全空（缓存 null / get undefined / 属性 undefined）')
+  const refused = await spawner.spawn({ prompt: 'p', agentPreset: 'minimal-eval', provider: 'prov', model: 'm' })
+  assert.equal(refused.ok, false, '显式预设 + 服务缺失必须拒绝（静默裸会话=事故形态被堵死）')
+  assert.ok(refused.message.includes('fail-fast'), `拒绝消息含 fail-fast：${refused.message}`)
+  assert.ok(refused.message.includes('agentPresets') && refused.message.includes('可用预设'), '拒绝消息点名服务与可用预设')
+  assert.equal(created.length, 0, '零会话创建')
+  const role = await spawner.spawn({ prompt: 'p', provider: 'prov', model: 'm' })
+  assert.equal(role.ok, true, 'role 轨无显式预设 → legacy 降级照常创建（不扩大 fail-fast 范围）')
+  assert.equal(role.agentPreset, null)
+  assert.equal(created.length, 1)
+})
+
+test('S5-PhaseB 修复③：eval-coding / read-only 名单 ⊆ minimal-eval 预设真实注册面（dsh-tool-fs 四名 + str_replace_editor + pwsh + de_broadcast）', () => {
+  // 宿主注册面锚（Phase B 事故二根因，注册名实测）：dsh-tool-fs 只注册
+  // read/write/edit/read_image（dsh-tool-fs/lib/index.js，无 glob/grep）；
+  // dsh-tool-str-replace-editor 注册 str_replace_editor；dsh-tool-pwsh 注册 pwsh；
+  // de_broadcast 为本插件宿主工具（coreBase 发件基础设施）。
+  const HOST_PRESET_SURFACE = new Set(['read', 'write', 'edit', 'read_image', 'str_replace_editor', 'pwsh'])
+  const { base } = loadRosterData(POLICY_DIR)
+  assert.ok(base?.presets, 'roster 预置档可加载')
+  for (const [id, preset] of Object.entries(base.presets)) {
+    const names = preset.tools
+    assert.ok(Array.isArray(names) && names.length > 0, `${id} 档名单是非空数组`)
+    const universe = id === 'read-only' ? new Set([...HOST_PRESET_SURFACE, 'de_broadcast']) : HOST_PRESET_SURFACE
+    const offside = names.filter((n) => !universe.has(n))
+    assert.deepEqual(offside, [], `${id} 档名单全部落在宿主真实注册面（越界：${offside.join(', ')}）`)
+  }
+  assert.deepEqual([...MINIMAL_TOOLSET_FULL], [...base.presets['eval-coding'].tools], '常量=数据镜像（漂移门同口径复证）')
+  assert.ok(MINIMAL_TOOLSET_FULL.length >= 3, '名单 ≥3 元素（断言鉴别力）')
 })
 
 // ── settings 接线：三档模型运行时配置（设置页同源） ───────────────────────
