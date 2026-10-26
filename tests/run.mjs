@@ -2105,6 +2105,20 @@ await testAsync('B1 S4 集成（apply 接线）：minimal 派活→created 注�
     assert.ok(lines.length >= 2, `审计行 ≥2（实得 ${lines.length}）`)
     assert.equal(lines.at(-1).form, 'offline')
     assert.equal(lines.at(-1).to, 'session-org-e2e')
+    // OQ#2 后半（S5 收口）：spawn 决策行并轨同一审计文件——kind:'spawn' 与
+    // kind:'reply' 同文件异类；两次派活（minimal+role）各留一条。
+    const spawnLines = lines.filter((l) => l.kind === 'spawn')
+    assert.equal(spawnLines.length, 2, `spawn 决策行 2 条（实得 ${spawnLines.length}）`)
+    assert.ok(spawnLines.every((l) => typeof l.time === 'string' && !Number.isNaN(Date.parse(l.time))), 'spawn 行时间字段 ISO 可解析')
+    assert.equal(spawnLines[0].personaMode, 'minimal')
+    assert.equal(spawnLines[0].preset, 'minimal', 'minimal 决策行带预设（V2-1 缺省）')
+    assert.equal(spawnLines[0].provider, 'prov-x')
+    assert.equal(spawnLines[0].model, 'model-x')
+    assert.equal(spawnLines[0].orgId, 'session-org-e2e')
+    assert.equal(spawnLines[1].personaMode, 'role')
+    assert.equal(spawnLines[1].role, 'explore', 'role 决策行带角色 id')
+    assert.equal(spawnLines[1].tier, 'LOW', 'role 决策行带档位（explore=LOW）')
+    assert.deepEqual(lines.filter((l) => l.kind === 'reply').map((l) => l.form), ['followup', 'offline'], '回复行与 spawn 行同文件互不干扰')
   } finally {
     minimalEnvTeardown(env)
   }
