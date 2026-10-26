@@ -31,6 +31,11 @@
         # ── 角色会话的 Agent 预设 ──────────────────────────────────────────
         # 不填 = 走 DSH 默认预设（settings.yaml 的 agent-presets.default，当前 standard）。
         # defaultPreset: standard
+        # ── minimal 派活的 Agent 预设（R3-B1 S1；personaMode='minimal' 时解析 agentPreset）──
+        # 缺省 'minimal'（宿主内置预设，跨机可用、不绑本机自建预设名）；自建预设
+        # 显式指向一次生效。非法/不存在的 preset id 在 spawn 时报错并列可用清单
+        # （复用宿主校验）。配套策略文件落 <advisorDataDir>/sessions/<b64>.toolscope.json。
+        minimalPreset: minimal
         # ── 任务书澄清模式缺省值 ───────────────────────────────────────────
         # interactive=缺参数按 subagent-clarify 协议问组织者；
         # autonomous=禁提问，按缺省决策表取值（适合无人值守批量派活）。

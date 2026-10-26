@@ -20,7 +20,7 @@ import { resolveConfig, apply, Config } from '../lib/index.js'
 import { ToolscopeStore, toolscopePath, normalizeToolscope, MINIMAL_TOOLSET_FULL, TOOLSCOPE_SCHEMA_VERSION } from '../lib/toolscope.js'
 import { createTiersApi, CONFIG_SCHEMA } from '../lib/settings.js'
 import { CONFIG_ENDPOINT, createConfigHandler } from '../lib/http-config.js'
-import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
@@ -910,6 +910,187 @@ await testAsync('toolscope：底层写盘失败原样抛出（G8 fail-fast 的�
     assert.throws(() => store.writeMinimal('session-x', { orgId: 'session-org-2' }), /磁盘拒绝/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ── B1 S1：agent_spawn personaMode（minimal 轨）与 AC1-1 / AC1-2 / G8 ─────
+// 环境确定性配方：① 预设 fixture——把 process.argv[1] 指到假入口，借 spawn.js 的
+// 内置 root 反推找到 <fixture>/config/agent-presets/minimal（'minimal' 预设存在，
+// 不依赖本机安装布局）；② 数据目录 env 隔离——DSH_AGENTS_ADVISOR_DATA_DIR 指向
+// fixture 内目录，toolscope 落盘绝不触碰真实 ~/.dsh（承 advisor 测试同款纪律）。
+const ADVISOR_DATA_DIR_ENV = 'DSH_AGENTS_ADVISOR_DATA_DIR'
+const BUILTIN_SECTION_SEVEN = [
+  '## 一、角色卡', '## 二、职责与边界', '## 三、人格细则', '## 四、本次任务',
+  '## 五、交付与验收', '## 六、澄清模式', '## 七、汇报与回收核对',
+]
+function minimalEnvSetup() {
+  const dir = fileURLToPath(new URL('./.fixture-minimal/', import.meta.url))
+  mkdirSync(join(dir, 'bin'), { recursive: true })
+  mkdirSync(join(dir, 'config', 'agent-presets', 'minimal'), { recursive: true })
+  const handle = {
+    dir,
+    prevArgv1: process.argv[1],
+    prevDataDir: process.env[ADVISOR_DATA_DIR_ENV],
+  }
+  process.argv[1] = join(dir, 'bin', 'dsh.js')
+  process.env[ADVISOR_DATA_DIR_ENV] = join(dir, 'data')
+  return handle
+}
+function minimalEnvTeardown(handle) {
+  process.argv[1] = handle.prevArgv1
+  if (handle.prevDataDir === undefined) delete process.env[ADVISOR_DATA_DIR_ENV]
+  else process.env[ADVISOR_DATA_DIR_ENV] = handle.prevDataDir
+  rmSync(handle.dir, { recursive: true, force: true })
+}
+/** minimal 用例的发起会话假体（cwd 已知，requestHeader 供思考等级继承判定）。 */
+function minimalRequester() {
+  return {
+    options: { provider: 'p0', model: 'm0' },
+    session: { header: { cwd: 'D:\\work\\eval' }, requestHeader: () => ({ config: { provider: 'p0', model: 'm0' } }) },
+  }
+}
+/** minimal 轨落盘的 sessions 目录（与 apply 内 store 同一 dataDir 解析链）。 */
+function minimalSessionsDir(handle) {
+  return join(handle.dir, 'data', 'sessions')
+}
+
+await testAsync('B1 AC1-1：minimal 产四行 brief（无角色人格/无七节）+ 策略文件同事务先落盘（create 入口已可见）+ 缺 model 拒绝（M9 负例）+ G10 披露', async () => {
+  const env = minimalEnvSetup()
+  try {
+    const { ctx, tools, created } = fakeCtx({ workspaceRegistry: undefined })
+    apply(ctx, {})
+    const tool = tools.get('agent_spawn')
+    // 同事务判据探针：包一层 agents.create，在 create 入口检查策略文件是否已落盘
+    //（beforeCreate 全同步先于 create ⇒ create 被调时文件必须已存在）。
+    let createSawPolicyFile = null
+    const origCreate = ctx.agents.create
+    ctx.agents.create = async (options) => {
+      const sessionsDir = minimalSessionsDir(env)
+      createSawPolicyFile = existsSync(sessionsDir)
+        && readdirSync(sessionsDir).some((f) => f.endsWith('.toolscope.json'))
+      return origCreate(options)
+    }
+
+    const r = await tool.execute({
+      task: '写一个 fizzbuzz 函数并通过测试',
+      personaMode: 'minimal',
+      provider: 'prov-x', model: 'model-x',
+      organizer: 'session-org-9',
+      acceptance: '测试全绿',
+      cwd: 'D:\\work\\eval',
+    }, { agent: minimalRequester() })
+    assert.equal(r.ok, true, r.message)
+    assert.equal(r.personaMode, 'minimal')
+    assert.match(r.sessionId, /^session-[0-9a-f-]{36}$/)
+    assert.equal(r.agentPreset, 'minimal', '缺省 minimalPreset=宿主内置 minimal（V2-1）')
+    assert.equal(r.provider, 'prov-x')
+    assert.equal(r.model, 'model-x')
+    // G10：返回体披露已应用策略
+    assert.equal(r.toolscope?.orgId, 'session-org-9')
+    assert.equal(r.toolscope?.toolPolicy?.tier, 'full')
+    assert.ok(r.toolscope?.toolPolicy?.allow?.length >= 3, 'allow 整集 ≥3 元素')
+    assert.equal(r.toolscope?.replyChannel, 'org')
+    assert.ok(typeof r.toolscope?.path === 'string' && r.toolscope.path.endsWith('.toolscope.json'))
+
+    // 四行 brief 断言（正例）
+    const followup = created.find((e) => e.followup)
+    assert.ok(followup, '必须 followup 派发 brief')
+    const briefText = followup.followup.content[0].text
+    assert.equal(briefText.split('\n').length, 4, `brief 恰四行，实得 ${briefText.split('\n').length} 行`)
+    assert.ok(briefText.startsWith('任务：写一个 fizzbuzz 函数并通过测试'), briefText)
+    assert.ok(briefText.includes('产出落盘：'))
+    assert.ok(briefText.includes('orgId：session-org-9'), 'orgId 单一事实源=派活参数 organizer（V2-6）')
+    assert.ok(briefText.includes('完成标准：测试全绿'))
+    // AC1-1 反向断言：不含角色人格与七节任务书
+    for (const banned of [...BUILTIN_SECTION_SEVEN, 'Agent_Prompt', '角色任务书']) {
+      assert.ok(!briefText.includes(banned), `minimal brief 不得含「${banned}」`)
+    }
+    // 同事务（裁 4/V3-7）：create 入口时策略文件已在盘上
+    assert.equal(createSawPolicyFile, true, 'agents.create 入口必须已见策略文件（先落盘后 create）')
+    // G10 与磁盘一致：返回体 path 即真实落点且可读回
+    const onDisk = new ToolscopeStore({ dataDir: join(env.dir, 'data') }).read(r.sessionId)
+    assert.equal(onDisk?.orgId, 'session-org-9', '磁盘文件与 G10 披露一致')
+
+    // M9 负例：缺 model 拒绝，不建会话不落盘
+    const createdBefore = created.length
+    const sessionsBefore = existsSync(minimalSessionsDir(env)) ? readdirSync(minimalSessionsDir(env)).length : 0
+    const noModel = await tool.execute({ task: 'x', personaMode: 'minimal', provider: 'prov-x', organizer: 'session-org-9' }, { agent: minimalRequester() })
+    assert.equal(noModel.ok, false)
+    assert.ok(noModel.message.includes('provider+model'), noModel.message)
+    assert.equal(created.length, createdBefore, 'M9 负例不得创建会话')
+    assert.equal(existsSync(minimalSessionsDir(env)) ? readdirSync(minimalSessionsDir(env)).length : 0, sessionsBefore, 'M9 负例零落盘')
+  } finally {
+    minimalEnvTeardown(env)
+  }
+})
+
+await testAsync('B1 AC1-1 回归：缺省 role 路径七节逐节渲染 + 不落策略文件', async () => {
+  const env = minimalEnvSetup()
+  try {
+    const { ctx, tools, created } = fakeCtx({ workspaceRegistry: undefined })
+    apply(ctx, {})
+    const r = await tools.get('agent_spawn').execute({ role: 'executor', task: '实现 X' }, { agent: minimalRequester() })
+    assert.equal(r.ok, true, r.message)
+    assert.equal(r.personaMode, 'role')
+    const followup = created.find((e) => e.followup)
+    const text = followup.followup.content[0].text
+    for (const section of BUILTIN_SECTION_SEVEN) {
+      assert.ok(text.includes(section), `role 路径七节回归：缺「${section}」`)
+    }
+    assert.equal(existsSync(minimalSessionsDir(env)), false, 'role 路径不落策略文件（S1 只有 minimal 轨写）')
+  } finally {
+    minimalEnvTeardown(env)
+  }
+})
+
+await testAsync('B1 AC1-2：minimalPreset 路由（配置生效/显式优先/缺省 minimal/格式错 apply 响亮失败/不存在列清单复用宿主校验）', async () => {
+  const env = minimalEnvSetup()
+  mkdirSync(join(env.dir, 'config', 'agent-presets', 'eval-min'), { recursive: true })
+  try {
+    assert.equal(resolveConfig({}).minimalPreset, 'minimal', 'resolveConfig 缺省 minimal（V2-1）')
+    assert.throws(() => resolveConfig({ minimalPreset: 'Bad_Preset' }), /minimalPreset 格式不合法/, '格式错大声失败')
+    const { ctx } = fakeCtx()
+    assert.throws(() => apply(ctx, { minimalPreset: 'Bad_Preset' }), /格式不合法/, 'apply 入口同样响亮（配置错不静默）')
+
+    const { ctx: ctx1, tools: tools1 } = fakeCtx({ workspaceRegistry: undefined })
+    apply(ctx1, { minimalPreset: 'eval-min' })
+    const r1 = await tools1.get('agent_spawn').execute({ task: 'x', personaMode: 'minimal', provider: 'p', model: 'm', cwd: 'D:\\work\\eval' }, { agent: minimalRequester() })
+    assert.equal(r1.ok, true, r1.message)
+    assert.equal(r1.agentPreset, 'eval-min', '配置 minimalPreset 生效')
+
+    const { ctx: ctx2, tools: tools2 } = fakeCtx({ workspaceRegistry: undefined })
+    apply(ctx2, { minimalPreset: 'eval-min' })
+    const r2 = await tools2.get('agent_spawn').execute({ task: 'x', personaMode: 'minimal', provider: 'p', model: 'm', agentPreset: 'minimal', cwd: 'D:\\work\\eval' }, { agent: minimalRequester() })
+    assert.equal(r2.ok, true, r2.message)
+    assert.equal(r2.agentPreset, 'minimal', '显式 agentPreset 优先于配置')
+
+    // 不存在的预设 id → 复用宿主 spawn 链校验：报错并列可用清单（不自制白名单）
+    const { ctx: ctx3, tools: tools3 } = fakeCtx({ workspaceRegistry: undefined })
+    apply(ctx3, { minimalPreset: 'ghost-preset' })
+    const r3 = await tools3.get('agent_spawn').execute({ task: 'x', personaMode: 'minimal', provider: 'p', model: 'm' }, { agent: minimalRequester() })
+    assert.equal(r3.ok, false)
+    assert.ok(r3.message.includes('不存在') && r3.message.includes('可用预设'), r3.message)
+  } finally {
+    minimalEnvTeardown(env)
+  }
+})
+
+await testAsync('B1 G8：策略文件写失败 fail-fast——不创建会话、不派 brief（dataDir 指向文件的确定性失败注入）', async () => {
+  const env = minimalEnvSetup()
+  try {
+    // dataDir 指向一个已存在的**文件**：<file>/sessions 的 mkdirSync 必然失败 → 写失败
+    const blockerFile = join(env.dir, 'blocker')
+    writeFileSync(blockerFile, 'not a directory', 'utf8')
+    process.env[ADVISOR_DATA_DIR_ENV] = blockerFile
+    const { ctx, tools, created } = fakeCtx({ workspaceRegistry: undefined })
+    apply(ctx, {})
+    const r = await tools.get('agent_spawn').execute({ task: 'x', personaMode: 'minimal', provider: 'p', model: 'm', organizer: 'session-org-8' }, { agent: minimalRequester() })
+    assert.equal(r.ok, false, 'G8：写失败必须 fail-fast')
+    assert.ok(r.message.includes('fail-fast'), r.message)
+    assert.equal(created.length, 0, '未创建会话（不产出非法态）')
+    assert.equal(created.some((e) => e.followup), false, '未派发 brief')
+  } finally {
+    minimalEnvTeardown(env)
   }
 })
 
