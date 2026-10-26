@@ -16,6 +16,8 @@ import {
 import { composeTaskbook, preflight, stamp, dedupeEvidencePath } from '../lib/taskbook.js'
 import { loadPersona, listPersonaFiles, splitFrontmatter } from '../lib/persona.js'
 import { listPresets, RoleSpawner } from '../lib/spawn.js'
+import { parseYamlMini, YamlMiniError } from '../lib/yaml-mini.js'
+import { loadDiskPreset, listDiskPresets, mountDiskPreset } from '../lib/disk-presets.js'
 import { resolveConfig, apply, Config } from '../lib/index.js'
 import { ToolscopeStore, toolscopePath, normalizeToolscope, MINIMAL_TOOLSET_FULL, TOOLSCOPE_SCHEMA_VERSION } from '../lib/toolscope.js'
 import {
@@ -2388,7 +2390,7 @@ test('S5 小收口④ 审计轮转：超限轮转一代且行不丢（.1+当前=
 // ── B1 PhaseB：预设挂载主根因修复（组织者诊断一/二：懒注入缓存 + 显式预设
 // fail-fast + allow 名单校准真实面）───────────────────────────────────────────
 
-await testAsync('S5-PhaseB 修复①：agentPresets 解析序=懒注入缓存 → ctx.get → 属性；resolve+mount 经 setup 被 create 执行（正例）', async () => {
+await testAsync('S5-PhaseB 修复①：agentPresets 解析序=懒注入缓存 → ctx.get → 属性；resolve+mount 经 setup 被 create 执行（正例，DSH_HOME fixture 使磁盘路径缺席→宿主服务路）', async () => {
   const mounts = []
   const fakePresets = {
     resolve: async (id) => ({ id: id ?? 'minimal' }),
@@ -2399,32 +2401,57 @@ await testAsync('S5-PhaseB 修复①：agentPresets 解析序=懒注入缓存 �
     agents: { create: async (options) => { if (typeof options.setup === 'function') await options.setup({ fake: 'agentCtx' }); return { agent: { followup: () => {} }, dispose: () => {} } } },
     effect: (fn) => fn(),
   }
-  const spawner = new RoleSpawner(ctx, { agentPresetsOf: () => fakePresets, attachDelays: [0] })
-  assert.equal(spawner.resolveAgentPresets(), fakePresets, '缓存路命中（ctx.get 拿不到服务也能挂载——主根因修复本体）')
-  const r = await spawner.spawn({ prompt: 'p', agentPreset: 'minimal-eval', provider: 'prov', model: 'm' })
-  assert.equal(r.ok, true, r.message)
-  assert.equal(r.agentPreset, 'minimal-eval')
-  assert.deepEqual(mounts, ['minimal-eval'], 'mount 恰一次且带预设 id（setup 回调被 create 执行）')
+  // fixture：shipped root 白名单占位（listPresets 认得 id），磁盘 .agent-presets 不含它
+  // → 走宿主服务路（本测试的路径对象）；真机磁盘上的 minimal-eval 不掺和。
+  const home = fileURLToPath(new URL('./.fixture-dsh-home-host/', import.meta.url))
+  const shipped = join(home, 'source', 'current', 'apps', 'cli', 'config', 'agent-presets', 'host-only-preset')
+  mkdirSync(shipped, { recursive: true })
+  const prevDshHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  try {
+    const spawner = new RoleSpawner(ctx, { agentPresetsOf: () => fakePresets, attachDelays: [0] })
+    assert.equal(spawner.resolveAgentPresets(), fakePresets, '缓存路命中（ctx.get 拿不到服务也能挂载——主根因修复本体）')
+    const r = await spawner.spawn({ prompt: 'p', agentPreset: 'host-only-preset', provider: 'prov', model: 'm' })
+    assert.equal(r.ok, true, r.message)
+    assert.equal(r.agentPreset, 'host-only-preset')
+    assert.deepEqual(mounts, ['host-only-preset'], 'mount 恰一次且带预设 id（setup 回调被 create 执行）')
+  } finally {
+    if (prevDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevDshHome
+    rmSync(fileURLToPath(new URL('./.fixture-dsh-home-host/', import.meta.url)), { recursive: true, force: true })
+  }
 })
 
-await testAsync('S5-PhaseB 修复②：服务不可达 + 显式预设 → fail-fast 拒绝（零会话创建，负例必红）；role 轨无显式预设 → legacy 降级照常创建', async () => {
+await testAsync('S5-PhaseB 修复②：磁盘缺席 + 服务不可达 + 显式预设 → fail-fast 拒绝（零会话创建，负例必红）；role 轨无显式预设 → legacy 降级照常创建', async () => {
   const created = []
   const ctx = {
     get: () => undefined,
     agents: { create: async (options) => { created.push(options); return { agent: { followup: () => {} }, dispose: () => {} } } },
     effect: (fn) => fn(),
   }
-  const spawner = new RoleSpawner(ctx, { agentPresetsOf: () => null, attachDelays: [0] })
-  assert.equal(spawner.resolveAgentPresets(), undefined, '三路全空（缓存 null / get undefined / 属性 undefined）')
-  const refused = await spawner.spawn({ prompt: 'p', agentPreset: 'minimal-eval', provider: 'prov', model: 'm' })
-  assert.equal(refused.ok, false, '显式预设 + 服务缺失必须拒绝（静默裸会话=事故形态被堵死）')
-  assert.ok(refused.message.includes('fail-fast'), `拒绝消息含 fail-fast：${refused.message}`)
-  assert.ok(refused.message.includes('agentPresets') && refused.message.includes('可用预设'), '拒绝消息点名服务与可用预设')
-  assert.equal(created.length, 0, '零会话创建')
-  const role = await spawner.spawn({ prompt: 'p', provider: 'prov', model: 'm' })
-  assert.equal(role.ok, true, 'role 轨无显式预设 → legacy 降级照常创建（不扩大 fail-fast 范围）')
-  assert.equal(role.agentPreset, null)
-  assert.equal(created.length, 1)
+  // fixture：shipped root 白名单占位（过 listPresets 早期校验），磁盘与服务双缺席。
+  const home = fileURLToPath(new URL('./.fixture-dsh-home-miss/', import.meta.url))
+  const shipped = join(home, 'source', 'current', 'apps', 'cli', 'config', 'agent-presets', 'zz-host-only')
+  mkdirSync(shipped, { recursive: true })
+  const prevDshHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  try {
+    const spawner = new RoleSpawner(ctx, { agentPresetsOf: () => null, attachDelays: [0] })
+    assert.equal(spawner.resolveAgentPresets(), undefined, '三路全空（缓存 null / get undefined / 属性 undefined）')
+    const refused = await spawner.spawn({ prompt: 'p', agentPreset: 'zz-host-only', provider: 'prov', model: 'm' })
+    assert.equal(refused.ok, false, '显式预设 + 双路缺席必须拒绝（静默裸会话=事故形态被堵死）')
+    assert.ok(refused.message.includes('fail-fast'), `拒绝消息含 fail-fast：${refused.message}`)
+    assert.ok(refused.message.includes('agentPresets') && refused.message.includes('可用预设'), '拒绝消息点名服务与可用预设')
+    assert.equal(created.length, 0, '零会话创建')
+    const role = await spawner.spawn({ prompt: 'p', provider: 'prov', model: 'm' })
+    assert.equal(role.ok, true, 'role 轨无显式预设 → legacy 降级照常创建（不扩大 fail-fast 范围）')
+    assert.equal(role.agentPreset, null)
+    assert.equal(created.length, 1)
+  } finally {
+    if (prevDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevDshHome
+    rmSync(fileURLToPath(new URL('./.fixture-dsh-home-miss/', import.meta.url)), { recursive: true, force: true })
+  }
 })
 
 test('S5-PhaseB 修复③：eval-coding / read-only 名单 ⊆ minimal-eval 预设真实注册面（dsh-tool-fs 四名 + str_replace_editor + pwsh + de_broadcast）', () => {
@@ -2444,6 +2471,188 @@ test('S5-PhaseB 修复③：eval-coding / read-only 名单 ⊆ minimal-eval 预�
   }
   assert.deepEqual([...MINIMAL_TOOLSET_FULL], [...base.presets['eval-coding'].tools], '常量=数据镜像（漂移门同口径复证）')
   assert.ok(MINIMAL_TOOLSET_FULL.length >= 3, '名单 ≥3 元素（断言鉴别力）')
+})
+
+// ── B1 PhaseB（用户裁决选项③）：磁盘预设装载器（yaml-mini 子集解析 + 装载校验
+// + 组件级挂载契约 + spawn 链磁盘优先解析序）────────────────────────────────
+
+const MINIMAL_EVAL_YAML = `# minimal-eval — 官方 minimal 条件复刻（编码能力评测专用）
+# 组成：一句 RL 系 persona + pwsh/read 工具 + compaction 组。
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: You are a helpful software engineer assistant.
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-str-replace-editor
+  name: '@deepseek-ai/dsh-tool-str-replace-editor'
+
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+`
+
+test('S5-PhaseB 选项③ yaml-mini：minimal-eval 本体逐字解析（嵌套 group/isolate/单引号/整数标量）', () => {
+  const value = parseYamlMini(MINIMAL_EVAL_YAML)
+  assert.ok(Array.isArray(value) && value.length === 5, `顶层 5 组件行（实得 ${Array.isArray(value) ? value.length : '非数组'}）`)
+  assert.equal(value[0].id, 'persona')
+  assert.equal(value[0].name, '@deepseek-ai/dsh-persona', '单引号标量剥引号')
+  assert.equal(value[0].config.text, 'You are a helpful software engineer assistant.')
+  assert.equal(value[1].name, '@deepseek-ai/dsh-tool-pwsh')
+  assert.equal('config' in value[1], false, '无 config 行不产空 config 键')
+  const group = value[4]
+  assert.equal(group.name, 'cordis:group')
+  assert.equal(group.group, true, 'group 标量转 boolean')
+  assert.deepEqual(group.isolate, { compaction: true, toolResultPruner: true })
+  assert.equal(group.config.length, 3, 'group 子组件 3 行')
+  assert.deepEqual(group.config[2].config, { thresholdChars: 8192, headChars: 4096, tailChars: 1024 }, '深层整数标量')
+})
+
+test('S5-PhaseB 选项③ yaml-mini：超子集构造 fail-fast 列明（flow/双引号/TAB/多行标量）', () => {
+  const cases = [
+    ['flow', 'rows: {a: 1}'],
+    ['double-quote', 'name: "x"'],
+    ['multi-line', 'text: |\n  line1'],
+    ['tab', '\tname: x'],
+  ]
+  for (const [kind, yaml] of cases) {
+    assert.throws(() => parseYamlMini(yaml), (e) => e instanceof YamlMiniError, `${kind} 构造必须抛 YamlMiniError`)
+  }
+})
+
+test('S5-PhaseB 选项③ 装载器：元数据+组件行装载 + 未知键 fail-fast 列名 + 真机 minimal-eval 集成（在位时）', () => {
+  const root = fileURLToPath(new URL('./.fixture-disk-presets/', import.meta.url))
+  const dir = join(root, 'disk-eval')
+  mkdirSync(dir, { recursive: true })
+  try {
+    writeFileSync(join(dir, 'preset.yml'), 'name: Disk Eval\ndescription: 测试档\norder: 50\n', 'utf8')
+    writeFileSync(join(dir, 'agent.cordis.yml'), MINIMAL_EVAL_YAML, 'utf8')
+    assert.deepEqual(listDiskPresets(root), ['disk-eval'])
+    const preset = loadDiskPreset(root, 'disk-eval')
+    assert.equal(preset.meta.name, 'Disk Eval')
+    assert.equal(preset.meta.order, 50)
+    assert.equal(preset.rows.length, 5)
+    // 未知键 fail-fast（preset.yml 超子集）
+    writeFileSync(join(dir, 'preset.yml'), 'name: X\nrobots: deny\n', 'utf8')
+    assert.throws(() => loadDiskPreset(root, 'disk-eval'), (e) => String(e.message).includes('未知键') && String(e.message).includes('robots'), 'preset.yml 未知键列名 fail-fast')
+    // 未知行键 fail-fast（组件行超子集；先还原合法 preset.yml 避免被上一负例抢先拦截）
+    writeFileSync(join(dir, 'preset.yml'), 'name: Disk Eval\norder: 50\n', 'utf8')
+    writeFileSync(join(dir, 'agent.cordis.yml'), "- id: a\n  name: 'x'\n  when: manual\n", 'utf8')
+    assert.throws(() => loadDiskPreset(root, 'disk-eval'), (e) => String(e.message).includes('when'), '组件行未知键列名 fail-fast')
+    // 真机 minimal-eval 集成（在位才断言；缺席 = skipped 注记不假绿）
+    const realRoot = join(process.env.USERPROFILE ?? '', '.dsh', '.agent-presets')
+    if (listDiskPresets(realRoot).includes('minimal-eval')) {
+      const real = loadDiskPreset(realRoot, 'minimal-eval')
+      assert.equal(real.rows.length, 5, '真机 minimal-eval：5 组件行')
+      assert.equal(real.rows[4].name, 'cordis:group', '真机 minimal-eval：compaction 组在列')
+    } else {
+      console.log('  [skip] 真机 minimal-eval 不在位（~/.dsh/.agent-presets），真实输入集成留装机环境')
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S5-PhaseB 选项③ 挂载契约：plugin 优先/apply 兜底/group 拍平声明偏差/未知形态 fail-fast 列名', async () => {
+  const fakeModules = {
+    '@fake/apply-tool': { name: '@fake/apply-tool', apply: (ctx, cfg) => { void ctx; fakeLog.push(['apply', '@fake/apply-tool', cfg]) } },
+    '@fake/class-svc': { default: class FakeSvc { static inject = ['x'] } },
+    '@fake/no-shape': { something: 1 },
+  }
+  const fakeLog = []
+  const importer = async (name) => {
+    if (!(name in fakeModules)) throw new Error(`Cannot find module '${name}'`)
+    return fakeModules[name]
+  }
+  // ① agentCtx 有 plugin 面：走完整生命周期路径
+  const pluginCalls = []
+  const ctxWithPlugin = { plugin: async (mod, cfg) => { pluginCalls.push([mod, cfg]) } }
+  const r1 = await mountDiskPreset(ctxWithPlugin, [
+    { id: 't', name: '@fake/apply-tool', config: { k: 1 } },
+    { id: 'g', name: 'cordis:group', group: true, config: [{ id: 's', name: '@fake/class-svc' }] },
+  ], { importer })
+  assert.deepEqual(r1.mounted, ['@fake/apply-tool', '@fake/class-svc'])
+  assert.equal(pluginCalls.length, 2, 'plugin 面在：两组件都走 plugin（group 拍平后子组件同路径）')
+  assert.deepEqual(pluginCalls[0][1], { k: 1 }, 'config 透传')
+  assert.ok(r1.deviations.some((d) => d.includes('cordis:group')), 'group 拍平显式声明偏差')
+  // ② agentCtx 无 plugin 面：apply 直挂兜底 + 降级声明
+  const applyCtx = {}
+  const r2 = await mountDiskPreset(applyCtx, [{ id: 't', name: '@fake/apply-tool' }], { importer })
+  assert.deepEqual(r2.mounted, ['@fake/apply-tool'])
+  assert.deepEqual(fakeLog[0], ['apply', '@fake/apply-tool', {}], 'apply 收到 ctx 与 config（缺省落 {}）')
+  assert.ok(r2.deviations.some((d) => d.includes('apply 直挂')), 'apply 直挂降级声明')
+  // ③ 未知形态 fail-fast 列名：导入失败
+  await assert.rejects(
+    () => mountDiskPreset(ctxWithPlugin, [{ name: '@fake/ghost' }], { importer }),
+    (e) => String(e.message).includes('@fake/ghost') && String(e.message).includes('fail-fast'),
+    '导入失败列组件名',
+  )
+  // ④ 未知形态 fail-fast：无 apply 且 default 非构造器
+  await assert.rejects(
+    () => mountDiskPreset(ctxWithPlugin, [{ name: '@fake/no-shape' }], { importer }),
+    (e) => String(e.message).includes('@fake/no-shape') && String(e.message).includes('形态不在挂载契约内'),
+    '形态不符列组件名',
+  )
+})
+
+await testAsync('S5-PhaseB 选项③ spawn 链：磁盘目录优先（宿主服务缺失也能挂载）——DSH_HOME fixture 全链', async () => {
+  const home = fileURLToPath(new URL('./.fixture-dsh-home/', import.meta.url))
+  const presetDir = join(home, '.agent-presets', 'disk-eval')
+  mkdirSync(presetDir, { recursive: true })
+  writeFileSync(join(presetDir, 'preset.yml'), 'name: Disk Eval\norder: 50\n', 'utf8')
+  writeFileSync(join(presetDir, 'agent.cordis.yml'), "- id: persona\n  name: '@fake/persona'\n  config:\n    text: hi\n\n- id: tool-fs\n  name: '@fake/tool-fs'\n", 'utf8')
+  const prevDshHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  try {
+    const pluginCalls = []
+    const fakePresetsMissing = null // 宿主服务缺失：磁盘优先路径必须独立成立
+    const ctx = {
+      get: () => undefined,
+      agents: { create: async (options) => {
+        const fakeAgentCtx = { plugin: async (mod, cfg) => { pluginCalls.push([String(mod?.name ?? mod), cfg]) } }
+        if (typeof options.setup === 'function') await options.setup(fakeAgentCtx)
+        return { agent: { followup: () => {} }, dispose: () => {} }
+      } },
+      effect: (fn) => fn(),
+    }
+    const spawner = new RoleSpawner(ctx, { agentPresetsOf: () => fakePresetsMissing, attachDelays: [0], mountDeps: { importer: async (name) => ({ name, apply: () => {} }) } })
+    const r = await spawner.spawn({ prompt: 'p', agentPreset: 'disk-eval', provider: 'prov', model: 'm' })
+    assert.equal(r.ok, true, r.message)
+    assert.equal(r.agentPreset, 'disk-eval', '磁盘预设路径返回 id')
+    assert.equal(pluginCalls.length, 2, 'setup 内两组件经 plugin 挂载（磁盘优先，无需宿主服务）')
+    assert.equal(pluginCalls[0][0], '@fake/persona')
+    // 磁盘装载损坏 → fail-fast 不静默回落
+    writeFileSync(join(presetDir, 'agent.cordis.yml'), "- id: x\n  name: 'y'\n  unknownKey: 1\n", 'utf8')
+    const broken = await spawner.spawn({ prompt: 'p', agentPreset: 'disk-eval', provider: 'prov', model: 'm' })
+    assert.equal(broken.ok, false, '磁盘预设损坏必须 fail-fast（目录存在即权威，不静默回落宿主）')
+    assert.ok(broken.message.includes('磁盘预设装载失败') || broken.message.includes('fail-fast'), broken.message)
+    assert.ok(broken.message.includes('unknownKey'), '损坏消息列明未知键')
+  } finally {
+    if (prevDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevDshHome
+    rmSync(fileURLToPath(new URL('./.fixture-dsh-home/', import.meta.url)), { recursive: true, force: true })
+  }
 })
 
 // ── settings 接线：三档模型运行时配置（设置页同源） ───────────────────────
