@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "pinnedHostVersion": "0.1.7-rc.2",
+  "coreBase": ["read", "de_broadcast"],
+  "scanIgnore": ["de_session"],
+  "classMap": {
+    "read-class": ["read", "glob", "grep", "read_image", "web_fetch", "web_search"],
+    "write-class": ["write", "edit"],
+    "exec-class": ["pwsh"],
+    "dispatch-class": ["agent_spawn", "agent_roles", "agent_taskbook", "de_session", "spawn_teammate", "subagent", "subagent_fork", "send_message", "workflow", "team_task_create", "team_task_get", "team_task_update", "wait_agent", "list_agents", "interrupt_agent"],
+    "comm-class": ["de_broadcast", "de_channel_send", "ask_user_question"],
+    "track-class": ["todo_write", "dtodo", "memory", "memory_suggest", "memory_search", "memory_review_status", "skill", "skill_manage", "mflow_remember", "memory_evolve_search_local_files"],
+    "verify-class": ["config_guard", "format_gate", "deliverable_verify", "invisible_chars", "manifest_alignment", "memory_secret_lint", "scope_loop_guard", "model_check", "security_review"],
+    "job-class": ["job_list", "job_output", "job_kill", "create_goal", "get_goal", "update_goal", "present", "de_models", "de_session_search", "exit_plan_mode"]
+  },
+  "familyKeywords": {
+    "read-class": ["读类", "检索类", "全树检索", "只读工具"],
+    "write-class": ["写类", "编辑工具", "写盘", "编辑器"],
+    "exec-class": ["执行类", "命令行", "跑命令", "跑测试", "shell 命令"],
+    "dispatch-class": ["派活", "派生子会话", "派发", "子代理"],
+    "comm-class": ["汇报", "广播", "发件", "澄清"],
+    "track-class": ["待办", "记忆", "技能库"],
+    "verify-class": ["闸门", "校验器", "安全审查"],
+    "job-class": ["后台任务", "长期目标"]
+  },
+  "retention": { "maxFiles": 512 },
+  "presets": {
+    "eval-coding": {
+      "description": "评测编码最低集（读+写+编辑+检索+执行）。名单按 S2 P1 结论校准转正：六名在参考基面全部存在且拼名一致。agent_reply 不入列——P4 实证 own 层名不在 restrictableNames，列入 allow 即 unknown 必拒（AC2-3）；own 层豁免是自动语义。",
+      "tools": ["read", "write", "edit", "glob", "grep", "pwsh"]
+    },
+    "read-only": {
+      "description": "只读档：读类+发件（de_broadcast 为 coreBase 发件基础设施）；写类/执行类/派活类全部收掉（allow 语义下天然不含）。agent_reply（S4 own 层）同样自动豁免。",
+      "tools": ["read", "glob", "grep", "read_image", "de_broadcast"]
+    }
+  }
+}

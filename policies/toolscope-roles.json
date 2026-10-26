@@ -1,0 +1,154 @@
+{
+  "generatedAt": "2026-10-26T08:30:58.646Z",
+  "generator": "tools/scan-role-toolrefs.mjs",
+  "rosterVersion": 1,
+  "scanFace": "persona + taskbook §七(reportLines/fewShotLines) + readonly-whitelist; detector=loose(negation-aware) - scanIgnore",
+  "roles": {
+    "explore": [
+      "glob",
+      "grep",
+      "pwsh",
+      "read"
+    ],
+    "analyst": [
+      "glob",
+      "grep",
+      "read"
+    ],
+    "planner": [
+      "ask_user_question",
+      "de_broadcast",
+      "write"
+    ],
+    "architect": [
+      "de_broadcast",
+      "glob",
+      "grep",
+      "pwsh",
+      "read"
+    ],
+    "debugger": [
+      "edit",
+      "grep",
+      "pwsh",
+      "read"
+    ],
+    "executor": [
+      "de_broadcast",
+      "edit",
+      "glob",
+      "grep",
+      "pwsh",
+      "read",
+      "todo_write",
+      "write"
+    ],
+    "verifier": [
+      "grep",
+      "pwsh",
+      "read"
+    ],
+    "tracer": [
+      "glob",
+      "grep",
+      "pwsh",
+      "read",
+      "skill"
+    ],
+    "harness-optimizer": [
+      "edit",
+      "glob",
+      "grep",
+      "pwsh",
+      "read"
+    ],
+    "spec-miner": [
+      "glob",
+      "grep",
+      "pwsh",
+      "read",
+      "write"
+    ],
+    "code-reviewer": [
+      "de_broadcast",
+      "grep",
+      "pwsh",
+      "read"
+    ],
+    "security-reviewer": [
+      "de_broadcast",
+      "grep",
+      "pwsh",
+      "read"
+    ],
+    "critic": [
+      "glob",
+      "grep",
+      "pwsh",
+      "read"
+    ],
+    "code-simplifier": [
+      "pwsh"
+    ],
+    "silent-failure-hunter": [
+      "grep",
+      "pwsh",
+      "read"
+    ],
+    "rag-reviewer": [
+      "glob",
+      "grep",
+      "present",
+      "pwsh",
+      "read",
+      "write"
+    ],
+    "test-engineer": [
+      "de_broadcast",
+      "edit",
+      "grep",
+      "pwsh",
+      "read",
+      "write"
+    ],
+    "designer": [
+      "de_broadcast",
+      "edit",
+      "glob",
+      "pwsh",
+      "read",
+      "write"
+    ],
+    "writer": [
+      "edit",
+      "glob",
+      "grep",
+      "pwsh",
+      "read",
+      "write"
+    ],
+    "qa-tester": [
+      "job_kill",
+      "job_output",
+      "pwsh"
+    ],
+    "git-master": [
+      "grep",
+      "pwsh",
+      "read",
+      "subagent"
+    ],
+    "document-specialist": [
+      "grep",
+      "pwsh",
+      "read",
+      "web_search"
+    ],
+    "scientist": [
+      "glob",
+      "grep",
+      "pwsh",
+      "read"
+    ]
+  }
+}
