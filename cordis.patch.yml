@@ -36,6 +36,14 @@
         # 显式指向一次生效。非法/不存在的 preset id 在 spawn 时报错并列可用清单
         # （复用宿主校验）。配套策略文件落 <advisorDataDir>/sessions/<b64>.toolscope.json。
         minimalPreset: minimal
+        # ── agent_reply 唤醒频控常数（R3-B1 S5 小收口③；V3-2 落点裁决=config 键位）──
+        # 唤醒类投递滑动窗口频控：窗口内超过上限自动降级 inject（消息不丢、唤醒不发）；
+        # 连续降级达熔断阈值 → 熔断该会话唤醒通道至会话结束。三个键都可选、非法值
+        # 启动即抛错（fail-loud）；roster 表不承载这组常数（它是运行时行为参数，
+        # 不是角色→工具的策略数据名单）。
+        # replyWakeWindowMs: 60000   # 滑动窗口毫秒
+        # replyWakeWindowMax: 3      # 窗口内唤醒类请求上限
+        # replyWakeBreakAfter: 10    # 连续降级熔断阈值
         # ── 任务书澄清模式缺省值 ───────────────────────────────────────────
         # interactive=缺参数按 subagent-clarify 协议问组织者；
         # autonomous=禁提问，按缺省决策表取值（适合无人值守批量派活）。

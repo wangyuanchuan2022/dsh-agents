@@ -2265,6 +2265,49 @@ test('S5 M11 checkHostVersion：mismatch 告警一次 / match 与 unknown 静默
   assert.equal(warns.length, 0, 'unknown → 静默（M11：未知不告警，报告披露）')
 })
 
+// ── B1 S5：小收口③ 频控常数 config 键位（V3-2 落点裁决）────────────────────
+// 裁决=config 不入 roster：频控是运行时行为参数（窗口毫秒/窗口上限/熔断阈值），
+// 不是角色→工具的策略数据名单；roster 是插件分发面（升级覆盖+漂移门约束），
+// config 是用户级可调面（CONFIG_SCHEMA 声明 + resolveConfig fail-loud 校验）。
+
+test('S5 小收口③ 频控常数 config 键位：缺省=REPLY_DEFAULTS + 覆盖生效 + 非法值响亮抛错（5 负例）+ CONFIG_SCHEMA 已声明（防 loader 归一丢弃）', () => {
+  const d = resolveConfig({})
+  assert.deepEqual(
+    { windowMs: d.replyWakeWindowMs, windowMax: d.replyWakeWindowMax, breakAfter: d.replyWakeBreakAfter },
+    { windowMs: REPLY_DEFAULTS.windowMs, windowMax: REPLY_DEFAULTS.windowMax, breakAfter: REPLY_DEFAULTS.breakAfter },
+    '缺省=REPLY_DEFAULTS（60s/3/10）',
+  )
+  const cfg = resolveConfig({ replyWakeWindowMs: 1000, replyWakeWindowMax: 5, replyWakeBreakAfter: 2 })
+  assert.deepEqual({ windowMs: cfg.replyWakeWindowMs, windowMax: cfg.replyWakeWindowMax, breakAfter: cfg.replyWakeBreakAfter }, { windowMs: 1000, windowMax: 5, breakAfter: 2 }, '覆盖生效')
+  const negatives = [
+    ['replyWakeWindowMs', 0], ['replyWakeWindowMs', -5], ['replyWakeWindowMs', 'fast'],
+    ['replyWakeWindowMax', 1.5], ['replyWakeBreakAfter', 0],
+  ]
+  for (const [key, bad] of negatives) {
+    assert.throws(() => resolveConfig({ [key]: bad }), (e) => String(e.message).includes(`config.${key}`), `${key}=${JSON.stringify(bad)} 必须 fail-loud 抛错`)
+  }
+  const schemaKeys = Object.keys(CONFIG_SCHEMA.dict ?? {})
+  for (const key of ['replyWakeWindowMs', 'replyWakeWindowMax', 'replyWakeBreakAfter']) {
+    assert.ok(schemaKeys.includes(key), `CONFIG_SCHEMA 已声明 ${key}（漏声明会被宿主 loader 归一丢弃——settings.js 头部纪律）`)
+  }
+})
+
+test('S5 小收口③ installAgentReply limiterOptions 接线：常数经 config 注入频控器（缺省构造不传=REPLY_DEFAULTS）', () => {
+  const dir = agentReplyDir()
+  try {
+    const store = new ToolscopeStore({ dataDir: dir })
+    const quiet = { warn: () => {}, error: () => {} }
+    const p1 = installAgentReply({ ctx: fakeEventCtx().ctx, store, dataDir: dir, logger: quiet, limiterOptions: { windowMs: 1234, windowMax: 2, breakAfter: 4 } })
+    assert.deepEqual({ windowMs: p1.limiter.windowMs, windowMax: p1.limiter.windowMax, breakAfter: p1.limiter.breakAfter }, { windowMs: 1234, windowMax: 2, breakAfter: 4 }, 'limiterOptions 生效')
+    p1.dispose()
+    const p2 = installAgentReply({ ctx: fakeEventCtx().ctx, store, dataDir: dir, logger: quiet })
+    assert.deepEqual({ windowMs: p2.limiter.windowMs, windowMax: p2.limiter.windowMax, breakAfter: p2.limiter.breakAfter }, REPLY_DEFAULTS, '不传 limiterOptions=REPLY_DEFAULTS（60s/3/10）')
+    p2.dispose()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // ── settings 接线：三档模型运行时配置（设置页同源） ───────────────────────
 /** 最小 settings 服务假体：base 分层 + user 层深合并（register/update/replace）。 */
 function fakeSettings() {
