@@ -2039,6 +2039,76 @@ await testAsync('S4 杂项：taskRef 规整 + install 降级（enabled=false 或
   rmSync(dir, { recursive: true, force: true })
 })
 
+await testAsync('B1 S4 集成（apply 接线）：minimal 派活→created 注册 agent_reply→execute 回 ORG（idle 唤醒 followup）；role 会话不注册；org 离线结构化失败；审计落 <dataDir>/reply-audit.jsonl', async () => {
+  const env = minimalEnvSetup()
+  try {
+    let orgLive = true
+    const orgCalls = []
+    const orgAgent = {
+      id: 'session-org-e2e',
+      status: 'idle',
+      followup(m) { orgCalls.push(['followup', m]) },
+      steer(m) { orgCalls.push(['steer', m]) },
+      inject(m) { orgCalls.push(['inject', m]) },
+    }
+    const handlers = new Map()
+    const createdEvents = []
+    const { ctx, tools } = fakeCtx({
+      on: (event, fn) => { handlers.set(event, fn); return () => handlers.delete(event) },
+      agents: {
+        create: async (options) => {
+          createdEvents.push(options)
+          return { agent: { followup: (msg) => createdEvents.push({ followup: msg }) }, dispose: () => {} }
+        },
+        get: (id) => (id === 'session-org-e2e' && orgLive ? orgAgent : undefined),
+      },
+      workspaceRegistry: undefined,
+    })
+    apply(ctx, {})
+    assert.equal(handlers.has('agent/created'), true, 'apply 接线 agent/created（toolscope/reply 两条管线同事件挂点）')
+    const spawnToolDef = tools.get('agent_spawn')
+    const r = await spawnToolDef.execute({
+      task: '写一个 fizzbuzz 函数并通过测试',
+      personaMode: 'minimal',
+      provider: 'prov-x', model: 'model-x',
+      organizer: 'session-org-e2e',
+      cwd: 'D:\\work\\eval',
+    }, { agent: minimalRequester() })
+    assert.equal(r.ok, true, r.message)
+    assert.equal(r.toolscope?.orgId, 'session-org-e2e')
+    // 假宿主 create 不派发事件：手动派发（suite/探针同款），ctx 带 scoped 工具面
+    const minSvc = s4ScopedTools(['read', 'write', 'edit', 'glob', 'grep', 'pwsh'])
+    handlers.get('agent/created')({ agent: { id: r.sessionId, ctx: minSvc } })
+    assert.equal(minSvc.registered.has('agent_reply'), true, 'created 挂点按策略注册 own 层 agent_reply')
+    assertNoTargetParam(minSvc.registered.get('agent_reply'))
+    // 端到端：minimal 会话调 agent_reply → org idle → followup 唤醒收件
+    const reply = await minSvc.registered.get('agent_reply').execute({ message: '任务完成，产出已落盘' })
+    assert.equal(reply.delivered, true)
+    assert.equal(reply.mode, 'followup', 'AC3-1 集成面：org idle → followup')
+    assert.equal(orgCalls.length, 1)
+    assert.ok(orgCalls[0][1].content[0].text.startsWith('【agent_reply·来自'), '信封首行归属标记')
+    // role 会话：created 零触碰（不注册回复工具）
+    const r2 = await spawnToolDef.execute({ role: 'explore', task: '检索 X' }, { agent: minimalRequester() })
+    assert.equal(r2.ok, true, r2.message)
+    const roleSvc = s4ScopedTools(['read', 'glob', 'grep', 'pwsh'])
+    handlers.get('agent/created')({ agent: { id: r2.sessionId, ctx: roleSvc } })
+    assert.equal(roleSvc.registered.has('agent_reply'), false, 'role 轨会话不注册回复通道')
+    // org 离线（agents.get 无条目）→ 结构化失败不抛（AC3-3 端到端面）
+    orgLive = false
+    const offline = await minSvc.registered.get('agent_reply').execute({ message: 'again' })
+    assert.deepEqual(offline, { ok: false, delivered: false, mode: 'offline', reason: 'offline', degraded: null })
+    // 审计落盘 = dataDir 持久面（OQ#2 裁决的 apply 级证据）
+    const auditFile = join(env.dir, 'data', REPLY_AUDIT_FILENAME)
+    assert.equal(existsSync(auditFile), true, '审计文件落 <dataDir>/reply-audit.jsonl')
+    const lines = readAuditLines(auditFile)
+    assert.ok(lines.length >= 2, `审计行 ≥2（实得 ${lines.length}）`)
+    assert.equal(lines.at(-1).form, 'offline')
+    assert.equal(lines.at(-1).to, 'session-org-e2e')
+  } finally {
+    minimalEnvTeardown(env)
+  }
+})
+
 // ── settings 接线：三档模型运行时配置（设置页同源） ───────────────────────
 /** 最小 settings 服务假体：base 分层 + user 层深合并（register/update/replace）。 */
 function fakeSettings() {
