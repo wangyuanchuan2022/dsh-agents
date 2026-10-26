@@ -376,15 +376,25 @@ test('IMP-26a ① 完成广播带（wake:true）与 L4 同口径；organizer 缺
   assert.ok(noOrgLine.includes('未携带组织者会话 ID') && noOrgLine.includes('禁止群发'), '无 organizer 须附「向派活方索取直投地址」警示')
 })
 
-test('IMP-26a ② 澄清超时口径字面一致：生成面与模板正本同为 5 分钟（单测钉住两边）', () => {
+test('IMP-26a ② 澄清超时口径字面一致：三档三处提取与正本全等（CODE-P2-2）', () => {
   const genSrc = readFileSync(fileURLToPath(new URL('../lib/taskbook.js', import.meta.url)), 'utf8')
   const docSrc = readFileSync(fileURLToPath(new URL('../docs/task-brief-v3.md', import.meta.url)), 'utf8')
-  const genMatch = /超过\s*(\d+)\s*分钟无回音/.exec(genSrc)
+  // D-1a 把「5 分钟」裂成三处措辞（LOW 无「过」/HIGH 带「超时：」前缀/MEDIUM 现行）——
+  // 三处分别提取并断言与正本全等（旧版单正则只命中 MEDIUM，LOW/HIGH 失去钉死锚点）。
+  const lowMatch = /超\s*(\d+)\s*分钟无回音/.exec(genSrc)
+  const highMatch = /超时：\s*(\d+)\s*分钟/.exec(genSrc)
+  const medMatch = /超过\s*(\d+)\s*分钟无回音/.exec(genSrc)
   const docMatch = /超时 <N=(\d+)> 分钟/.exec(docSrc)
-  assert.ok(genMatch, '生成面须含「超过 N 分钟无回音」字面')
+  assert.ok(lowMatch, '生成面 LOW 须含「超 N 分钟无回音」字面')
+  assert.ok(highMatch, '生成面 HIGH 须含「超时：N 分钟」字面')
+  assert.ok(medMatch, '生成面 MEDIUM 须含「超过 N 分钟无回音」字面')
   assert.ok(docMatch, '正本须含「超时 <N=x> 分钟」占位')
-  assert.equal(genMatch[1], docMatch[1], `生成面（${genMatch[1]} 分钟）与正本（${docMatch[1]} 分钟）口径必须一致（DP-1 P1-3）`)
-  assert.equal(genMatch[1], '5', '统一取值=5（对齐正本；如改值须两侧同改并同步本断言）')
+  assert.equal(lowMatch[1], docMatch[1], `LOW（${lowMatch[1]} 分钟）与正本（${docMatch[1]} 分钟）口径必须一致（DP-1 P1-3）`)
+  assert.equal(highMatch[1], docMatch[1], `HIGH（${highMatch[1]} 分钟）与正本（${docMatch[1]} 分钟）口径必须一致（DP-1 P1-3）`)
+  assert.equal(medMatch[1], docMatch[1], `MEDIUM（${medMatch[1]} 分钟）与正本（${docMatch[1]} 分钟）口径必须一致（DP-1 P1-3）`)
+  assert.equal(lowMatch[1], '5', '统一取值=5（LOW；如改值须三处+正本+本断言同改）')
+  assert.equal(highMatch[1], '5', '统一取值=5（HIGH；如改值须三处+正本+本断言同改）')
+  assert.equal(medMatch[1], '5', '统一取值=5（MEDIUM 正本；如改值须三处+正本+本断言同改）')
 })
 
 await testAsync('IMP-26a ③ organizer/statusQuo/confirmedFindings 进两工具 schema 且透传渲染', async () => {
@@ -478,7 +488,11 @@ function d1aCompose(tier, roleId = 'explore', extra = {}) {
   return composeTaskbook({ role, persona: loadPersona(role), route, task: D1A_TASK, ...extra })
 }
 const D1A_HAS_LOW = (t) => t.includes('| 情况 |')
-const D1A_HAS_HIGH = (t) => t.includes('### few-shot') && t.includes('- R1 ')
+// CODE-P2-6：HIGH 档 R1–R5 逐条编号前缀各查 + R3 的 run_failure 标记（既单查 few-shot+R1 时
+// R2–R5 被误删/改写无门红）；注入必红随之取任一单条 R 行删除即翻假（见 ④ 注入断言）。
+const D1A_HAS_HIGH = (t) => t.includes('### few-shot')
+  && ['- R1 ', '- R2 ', '- R3 ', '- R4 ', '- R5 '].every((p) => t.includes(p))
+  && t.includes('run_failure')
 
 test('D-1a 档位差异化：同角色×三档渲染互异且各命中模式特征（防串接/取首个）', () => {
   const low = d1aCompose('LOW')
@@ -498,7 +512,8 @@ test('D-1a 档位差异化：同角色×三档渲染互异且各命中模式特�
   // ④ 注入必红（断言鉴别力②）：抹掉特征行后各谓词必假——谓词非恒真
   const drop = (text, needle) => text.split('\n').filter((line) => !line.includes(needle)).join('\n')
   assert.equal(D1A_HAS_LOW(drop(low, '| 情况 |')), false, 'LOW 特征谓词注入必红')
-  assert.equal(D1A_HAS_HIGH(drop(high, '### few-shot')), false, 'HIGH 特征谓词注入必红')
+  assert.equal(D1A_HAS_HIGH(drop(high, '### few-shot')), false, 'HIGH 特征谓词注入必红（few-shot 行）')
+  assert.equal(D1A_HAS_HIGH(drop(high, '- R3 ')), false, 'HIGH 特征谓词注入必红（R3 编号行——CODE-P2-6 逐条锚点可独立杀伤）')
 })
 
 test('D-1a 三自然档角色同任务 dryRun：explore/executor/analyst 各归各位且模板段互异', () => {

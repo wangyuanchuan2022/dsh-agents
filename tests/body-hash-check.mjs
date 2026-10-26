@@ -17,8 +17,7 @@
  * 负向自测纪律：函数级变异——变异只发生在**内存中的合成 persona 字符串**上，
  * 绝不变异真实文件（真实文件变异后的还原在本仓属雷区，见 ARCHITECTURE §1.1）。
  *
- * 接线状态（2026-10-25 R2 C-2）：独立脚本形态交付；接入 tests/run.mjs 标准门序列
- * **待组织者统一安排**（A 线同期在改 run.mjs，避免同文件并行编辑冲突）。
+ * 接线状态：已接入 run.mjs（5055d8b：真实门 + --selftest 双注册，子进程形态）。
  */
 
 import { createHash } from 'node:crypto'
@@ -171,7 +170,13 @@ export function selftest() {
     expectFail: true,
     run: () => {
       const bodyDrift = buildSyntheticPersona('<Agent_Prompt>\n 另一段正文 alpha\n</Agent_Prompt>\n').replace('alpha', 'alphb')
-      const hashDrift = buildSyntheticPersona('<Agent_Prompt>\n 另一段正文 beta\n</Agent_Prompt>\n').replace(/body_hash: ([0-9A-F])/, 'body_hash: 0')
+      // M2 式条件翻转（CODE-P2-4）：直接把首字符换成 '0' 在哈希首字符恰为 '0' 时构造无效果
+      //（1/16 概率静默失去鉴别力）——翻转保证「替换必然改变值」，并在构造后断言新旧串不等（fail-loud）。
+      const hashDriftRaw = buildSyntheticPersona('<Agent_Prompt>\n 另一段正文 beta\n</Agent_Prompt>\n')
+      const hm = hashDriftRaw.match(/body_hash: ([0-9A-F])/)
+      const hFlipped = hm[1].startsWith('0') ? `1${hm[1].slice(1)}` : `0${hm[1].slice(1)}`
+      const hashDrift = hashDriftRaw.replace(/body_hash: ([0-9A-F])/, `body_hash: ${hFlipped}`)
+      if (hashDrift === hashDriftRaw) throw new Error('M6 构造无效：哈希漂移替换未改变字符串（fail-loud，构造必须生效后才允许进判定）')
       const r = checkPersonaContents([
         { id: 'elem-ok', raw: good },
         { id: 'elem-body-drift', raw: bodyDrift },
