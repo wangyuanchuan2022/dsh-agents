@@ -75,11 +75,15 @@ function fakeCtx(overrides = {}) {
         return { agent: { followup: (msg) => created.push({ followup: msg }) }, dispose: () => {} }
       },
     },
-    // B1-PhaseB 修复①配套缺省假服务：修复②后「显式预设 + 服务缺失」= fail-fast，
-    // minimal 用例必须拿得到 agentPresets 才能走通挂载路径（resolve 幂等回显 +
-    // mount 空实现）；要测「服务缺失」语义的用例请构造独立 ctx（见 PhaseB 修复测试）。
+    // B1-PhaseB 修复①配套缺省假服务：按真 registry 语义认真校验——只认磁盘/fixture
+    // 实际存在的预设 id（listPresets），不认识的抛 Unknown（对齐宿主 registry 行为，
+    // AC1-2「不存在列清单」负例依赖此语义）；mount 空实现。
     agentPresets: {
-      resolve: async (id) => ({ id: id ?? 'minimal' }),
+      resolve: async (id) => {
+        const wanted = id ?? 'minimal'
+        if (!listPresets().includes(wanted)) throw new Error(`Unknown agent preset: ${wanted}（fake registry）`)
+        return { id: wanted }
+      },
       mount: async () => {},
     },
     effect: (fn) => { fn() },
