@@ -50,13 +50,13 @@ complete task brief — plus 25 workflow skills that orchestrate them end to end
 - **25 件工作流技能**（口径：`skills/` 下 25 个 SKILL.md = 25 个技能目录）：入口 2 + 流水线 4 + 协作 5 + 方法论 13 + 顾问 1。
 - **内置 advisor 顾问是被动机制、宿主侧工具面为零**——每个 turn 后自动评审主会话可见消息，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**，不派活也不会被 `agent_spawn` 触发；模型完全手动指定、无任何兜底。V3 已实现 repository-aware 评审：只读检索（文件树/git/搜索 + 符号精读）、agentic 工具循环（模型自调只读检索工具，不占宿主工具位）、决策保护（`docs/DECISIONS.md`）、规则预筛（普通聊天零 token）、停止五类与 blocker 证据下限。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。
 - **11 份评审清单**按扩展名/专项路由（go / ts / python / kotlin / rust / csharp / cpp / sql / pytorch / a11y / performance）。
-- **三种派活形态与 per-session 工具面（R3-B1）**——`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填、**独立预设挂载**：`~/.dsh/.agent-presets/` 磁盘目录优先自制装载（零依赖 YAML 子集解析 + 组件级挂载契约，未知键/未知组件 fail-fast 列名），宿主 registry 兜底）；**role 轨默认工具面收缩**（构建期扫 23 角色人格产 per-role 引用表，运行期 restrict 收缩：交集防叠 + 跨代 lift 防线 + 双向对账 fail-open + 收缩生效率读数组）；**极简回复通道**（minimal×org 会话注册 own 层 `agent_reply`：目标钉死 orgId、schema 无 target 参数、唤醒白名单 + 滑动窗口频控 + 连降熔断；投递与派活决策审计同落 `reply-audit.jsonl`）。静态注入面零增长（口径B 1993/2181/2183 锚定），工具描述增量单独计量（合计 ≤400B 上界）。
+- **三种派活形态与 per-session 工具面（R3-B1）**——`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填、**独立预设挂载**（独立插件定位：宿主 `agentPresets` 服务缺失时磁盘装载路独立成立，不依赖宿主 registry）：解析序 = 磁盘目录 `~/.dsh/.agent-presets/` 优先（零依赖 YAML 子集解析 + 组件级挂载契约，未知键/未知组件 fail-fast 列名；组件导入宿主包根兜底）→ 宿主 registry 兜底；解析失败 fail-fast 拒绝派活并列可用清单（零孤儿会话），存在性校验双路兼容 bundle 迁移的 registry-only 预设）；**role 轨默认工具面收缩**（构建期扫 23 角色人格产 per-role 引用表，运行期 restrict 收缩：交集防叠 + 跨代 lift 防线 + 双向对账 fail-open + 收缩生效率读数组）；**极简回复通道**（minimal×org 会话注册 own 层 `agent_reply`：目标钉死 orgId、schema 无 target 参数、唤醒白名单 + 滑动窗口频控 + 连降熔断；投递与派活决策审计同落 `reply-audit.jsonl`（尺寸阈值轮转有界留存））。静态注入面零增长（口径B 1993/2181/2183 锚定），工具描述增量单独计量（合计 ≤400B 上界）。
 - **两个确定性机检工具**：`crgate`（评审证据链 freeze/anchor/finalize）与 `publish-scan`（发布前脱敏六类扫描 + 三值裁定）。
 - **配置错就报错**——未知档位、未知角色、半个路由、非法 `clarifyMode` 一律抛错，不静默兜底。
 
 ## 环境要求
 
-- **DSH**：需要宿主提供 `tools` 服务（工具经 `ctx.tools.register` 注册）。`settings` / `llm` / `workspaceRegistry` / `agentPresets` 为**可选**服务，按宿主约定动态读取——旧快照缺它们时插件照常加载，只是降级为「不按名解析 provider、不挂工作区分组、不挂预设」。
+- **DSH**：需要宿主提供 `tools` 服务（工具经 `ctx.tools.register` 注册）。`settings` / `llm` / `workspaceRegistry` / `agentPresets` 为**可选**服务，按宿主约定动态读取——旧快照缺它们时插件照常加载，只是降级为「不按名解析 provider、不挂工作区分组」；`agentPresets` 缺失时预设挂载改由磁盘装载器独立承接（磁盘预设可得则照常挂载，见[已知限制](#已知限制)）。
 - **Node.js**：支持 ESM 的现代版本（本仓开发环境为 Node 24）。
 - 新增 bundle 后需要**重启 DSH**：宿主引导图在启动时生成，运行中新增的插件不会被加载。
 
@@ -211,7 +211,7 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
         clarifyMode: interactive   # interactive | autonomous
         agentOutSubdir: agent-out  # 未显式给 evidencePath 时的产出目录（相对 cwd）
         allowSpawn: true           # false = 紧急刹车，禁用 agent_spawn（另两个工具仍可用）
-        minimalPreset: minimal     # personaMode='minimal' 的 Agent 预设（缺省宿主内置 minimal）
+        minimalPreset: minimal     # personaMode='minimal' 的 Agent 预设（缺省 'minimal'，需宿主侧真实存在该 id，缺失时 fail-fast，见已知限制）
         toolscopeEnabled: true     # 工具面收缩总开关（false=全链 fail-open 零行为，消融臂）
         # replyWakeWindowMs: 60000 # agent_reply 唤醒频控：滑动窗口 ms
         # replyWakeWindowMax: 3    # 窗口内唤醒类请求上限（超限降级 inject 不丢消息）
@@ -223,7 +223,7 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 | `tiers` | `{LOW,MEDIUM,HIGH} → {provider,model}` | 档位路由基底。别名 `haiku`/`sonnet`/`opus` 同义。 |
 | `roleOverrides` | `{<角色id>: {provider,model}}` | 按角色覆盖档位（优先级低于调用期显式传参）。 |
 | `defaultPreset` | string | 角色会话的 Agent 预设 id；不填走 DSH 默认。 |
-| `minimalPreset` | string | minimal 派活的 Agent 预设 id（缺省 `'minimal'`，宿主内置、跨机可用）。 |
+| `minimalPreset` | string | minimal 派活的 Agent 预设 id（缺省 `'minimal'`——**要求宿主侧真实存在该 id**：缺失时 spawn fail-fast 并列可用清单，需覆盖为实际可得的预设；本机评测正解为 `minimal-eval` bundle，见[已知限制](#已知限制)）。 |
 | `clarifyMode` | `interactive` \| `autonomous` | 任务书澄清模式缺省值。 |
 | `agentOutSubdir` | string | 产出目录名（相对 cwd）。 |
 | `allowSpawn` | boolean | 紧急刹车开关。 |
@@ -250,7 +250,7 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 ## 测试
 
 ```bash
-node tests/run.mjs                    # 主测试（355 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
+node tests/run.mjs                    # 主测试（356 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
 node tools/crgate.test.mjs            # 65 断言
 node tools/publish-scan.test.mjs      # 47 断言
 node tests/skill-sync-check.mjs       # 计数漂移门 + .gitattributes 门（文档里的技能件数必须等于磁盘实测）
@@ -314,6 +314,7 @@ dsh-agents/
 6. **`agent_spawn` 依赖宿主 `agents` 服务**；`workspaceRegistry` 缺失时不影响创建，只是不挂左侧工作区分组。
 7. **档位表随配置变化**：README 里给的是出厂基底，真实生效值以 `agent_roles action=tiers` 的当次回显为准。
 8. **上下文隔离是「硬会话层 + 软材料层」**：会话层由 `agent_spawn` 硬保证（每次派活全新会话）；材料层靠**机检告警**而非阻断——组织者坚持把作者自评塞进任务书时，工具会点名命中原文但不会拒绝派活。此时该席结论**不应作为独立评审采信**（评审席自身仍须按隔离契约标注污染并只采信可核验证据）。
+9. **minimal 预设可得性依赖宿主侧清单（Phase B 实证）**：`minimalPreset` 缺省 `'minimal'`，能否挂载取决于宿主 registry / 磁盘目录中是否真实存在该预设——本机宿主 registry 曾无 `minimal`，首派被 fail-fast 拦截并列出可用清单。宿主官方已将 `~/.dsh/.agent-presets/` 磁盘预设目录标为 legacy（"Nothing reads that directory any more"），正解是把自建预设做成 bundle 安装（`dsh plugin add`）经宿主 registry 挂载；**本机评测正解为 `minimal-eval` bundle**（官方 minimal 条件复刻：persona + pwsh + tool-fs + str_replace_editor，无记忆/技能/委派面），属本机评测资产、非跨机分发物。
 
 ## 许可与致谢
 
