@@ -1,6 +1,6 @@
 # ARCHITECTURE — dsh-agents 仓库全景（评审导览）
 
-> 本文面向**外部评审者**：逐部件说明本仓 152 个跟踪文件的职责、接线与质量账。
+> 本文面向**外部评审者**：逐部件说明本仓 154 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 > 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 152 文件，本文自身计入；2026-10-26 R3-B1 S5 批次后更新）。
 > 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
@@ -13,12 +13,12 @@
 
 | 维度 | 数值 | 验证入口 |
 |---|---|---|
-| 跟踪文件 | 152 | `git ls-files` 计数 |
+| 跟踪文件 | 154 | `git ls-files` 计数 |
 | 角色 / 泳道 | 23（build 10 · review 6 · domain 7） | `agent_roles action=list` |
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
 | 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 19（机检脚本 10 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 346 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
+| 测试断言 | 主套件 355 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
 | 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -30,7 +30,7 @@
 dsh-agents/
 ├── package.json / package-lock.json   插件清单（dsh.bundle.patch + dsh.client 双半声明）
 ├── cordis.patch.yml                   宿主插件行 + 全部可配项（档位路由基底）
-├── lib/            (41)               插件运行时（三个宿主工具 + toolscope/reply 支撑模块 + advisor 子目录 26 件）
+├── lib/            (43)               插件运行时（三个宿主工具 + toolscope/reply 支撑模块 + advisor 子目录 26 件）
 ├── personas/       (34)               23 份角色人格 + checklists/ 11 份评审清单
 ├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
 ├── policies/       (2)                toolscope 策略数据（roster 基表 + 23 角色引用表）
@@ -56,7 +56,7 @@ dsh-agents/
 
 ---
 
-## 2. lib/ — 插件运行时（41 文件 = 顶层 15 + `advisor/` 26）
+## 2. lib/ — 插件运行时（43 文件 = 顶层 17 + `advisor/` 26）
 
 宿主加载入口是 `lib/index.js`；其余模块按职责单一划分。
 
@@ -77,6 +77,8 @@ dsh-agents/
 | `toolscope-pipeline.js` | restrict 管道：agent/created 决策核（decideToolscope）+ unknown 预校验 + lift-before-set + **跨代 sharedLift**（globalThis Symbol.for，防交集叠加锁死）+ G9 去重通知 + fail-open 全路径 + 死会话留存清扫 + V3-3 生效率审计环（有界 200） | 任何 refuse/skip 路径绝不调用 restrict（AC2-3 三件套）；own 层名禁入 allow（P4 豁免是自动语义） |
 | `toolscope-roster.js` | roster 数据层：两文件加载（损坏 fail-open 不静默）、构建期扫描核（scanRoleReferences，与漂移门同实现）、G11 覆盖率报告、**M11 宿主版本读取面**（detectHostVersion：插件树向上走查 + APPDATA npm 全局前缀候选；checkHostVersion mismatch 告警/unknown 静默）、M13 留存计划纯函数 | 「不猜记缺口」——反引号显式提及不在宇宙才报 unclassified；版本读取两路全落空=null 不抛 |
 | `agent-reply.js` | 极简回复通道：own 层 agent_reply（target 注册时钉死 orgId、schema 无 target 参数）+ 内部直投 sendToSession（缺省 inject）+ 模式解析闸门（纯函数）+ **V3-2 频控熔断**（滑动窗口 60s/3 + 连降 10 熔断至会话结束）+ 审计（reply-audit.jsonl；spawn 决策行并轨 kind:'spawn'；尺寸阈值轮转 `.1` 一代有界留存） | 唤醒白名单=发送方策略文件 orgId 单元素（按次现读，热改即刻生效）；delivered:false 不自动重试；降级请求计入窗口（连降计数可定义） |
+| `yaml-mini.js` | **最小 YAML 子集解析器**（PhaseB 选项③）：嵌套 map/seq + 单引号/整数/布尔标量 + 全行注释；flow/双引号/多行标量/TAB/锚点/标签 fail-fast 列行号 | 不做通用 YAML 的诚实边界；只服务磁盘预设装载器 |
+| `disk-presets.js` | **磁盘预设装载器**（PhaseB 选项③）：`~/.dsh/.agent-presets/<id>/` 装载（preset.yml 元数据 + agent.cordis.yml 组件清单，未知键 fail-fast 列名）+ 组件级挂载契约（plugin 优先 / apply 兜底降级声明 / cordis:group 拍平偏差声明 / 未知形态 fail-fast 列名） | 目录存在即权威（损坏响亮失败不回落宿主）；组件包与插件同住 node_modules 树 import 可解析 |
 | `advisor/store.js` | advisor 存储：会话级分文件 + 幂等 seen + `records.jsonl` | 临界区全同步（见 §2.1） |
 | `advisor/api.js` | advisor 端点 `/plugins/dsh-agents/advisor`（GET / PATCH / POST） | sessionId 三处共用同一个形状判据（见 §2.1） |
 | `advisor/observer.js` | 每 turn 触发一次的幂等门（宿主真实身份 `(sessionId, turn, seq)`） | 只评审主会话汇总，子会话 step 不可见 |
@@ -145,7 +147,17 @@ dsh-agents/
 
 **运行时可调面**：频控常数 config 键位（`replyWakeWindowMs`/`replyWakeWindowMax`/`replyWakeBreakAfter`，缺省 60000/3/10，resolveConfig fail-loud 校验）——裁决=config 不入 roster（运行时行为参数非策略数据名单；roster 是插件分发面会被升级覆盖）。审计有界留存：reply-audit.jsonl 尺寸阈值轮转 `.1` 一代（上限 ≈2×512KB，行级粒度轮转不丢行）。M11 宿主版本读取面：插件启动 + 构建期扫描各查一次（真机读数 match 0.1.7-rc.2）；mismatch → warn（R11 重跑彩排），unknown → 静默披露。
 
-**待办（Phase B，阻塞等宿主重启）**：AC1-4/AC3-5 端到端彩排（活体 agent_spawn 产真实 minimal 会话执行可判分小编码任务 → agent_reply 回 ORG → ORG idle 被唤醒、全程无缺工具中断）+ OQ#7 dev_reload 活体观测（best-effort）+ 彩排后九门回归零扰动 + V3-3 生效率读数组真实样本复跑（当前真实 dataDir 零策略文件=无样本，读数组消费器与重放机制已就位：`tools/toolscope-efficiency.mjs`）。
+**Phase B 状态（2026-10-26 晚）**：两轮彩排完成——事故一（agent_reply source.kind 被宿主 v4 会话日志校验器拒，`6a38224` 修复）与事故二（预设未挂载：spawn ctx.get 活体拿不到宿主 registry 服务 + allow 名单与 tool-fs 真实面不符，`b4b8ee4` 修复批：懒注入缓存 + 显式预设 fail-fast + 名单校准）均已落地并门线验证；第三轮重跑因「宿主 registry 与磁盘用户预设两套清单」卡点转入用户裁决（见 §2.3）。OQ#7 dev_reload 两次冷重启无触发面，skipped 如实申报。
+
+### 2.3 独立预设挂载（PhaseB 选项③，用户裁决：独立插件自制挂载，不依赖宿主 registry）
+
+宿主 `agentPresets` 服务是 **AgentPreset loader entry 注册制**（`dsh-agent-preset/lib/index.js`：`Service.init → ctx.agentPresets.register`），不认 `~/.dsh/.agent-presets/` 磁盘用户预设——第三轮彩排实证（spawn 报 "Unknown agent preset: minimal-eval"，fail-fast 拦截零孤儿会话）。用户裁决走**自制磁盘挂载**（桥接注册与上报宿主两路否决）：
+
+| 部件 | 落点 | 边界与取舍 |
+|---|---|---|
+| yaml-mini 子集解析器 | `lib/yaml-mini.js` | 只覆盖本仓预设实际用到的构造（嵌套 map/seq、单引号、整数、布尔、全行注释）；flow 风格/双引号/多行标量/TAB/锚点/标签一律 fail-fast 列行号——**不做通用 YAML 的诚实边界** |
+| 磁盘装载器 | `lib/disk-presets.js` | `listDiskPresets` / `loadDiskPreset`（preset.yml 元数据 + agent.cordis.yml 组件清单；未知键 fail-fast 列名）/ `mountDiskPreset`（组件级契约：`export{apply…}` 插件形走 `ctx.plugin` 优先、apply 直挂兜底（降级声明）；default class 服务形走 plugin；`cordis:group` v1 **拍平**+isolate 未复刻显式声明偏差；未知形态 fail-fast 列名） |
+| spawn 链解析序 | `lib/spawn.js` | **磁盘目录优先 → 宿主 registry 兜底（服务可得时）**；目录存在即权威（装载失败响亮 fail-fast 不静默回落）；显式/配置预设双路都不可得 → fail-fast（b4b8ee4 ②语义保留） |
 
 ---
 
@@ -242,8 +254,8 @@ dsh-agents/
 
 | 文件 | 职责 | 当前账 |
 |---|---|---|
-| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + D-1a 档位差异化判别组 + **B1 三特性组**（AC1/AC2/AC3 断言 + spawn 决策并轨 + 生效率读数组 + M11 读取面 + 频控 config + 审计轮转）+ 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **346 passed / 0 failed** |
-| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 346 |
+| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + D-1a 档位差异化判别组 + **B1 三特性组**（AC1/AC2/AC3 断言 + spawn 决策并轨 + 生效率读数组 + M11 读取面 + 频控 config + 审计轮转 + 预设挂载/磁盘装载器）+ 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **355 passed / 0 failed** |
+| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 355 |
 | `isolation-gate.mjs` | **进程边界双快照隔离门**：before 快照 → 动态 import 主套件 → after 快照 → 断言相等（防「加载期写盘被烘焙进基线」的假绿）；看门狗强制收口；`--selftest` 必红→必绿 | exit 0；selftest **5/5** |
 | `advisor-llm-replay.mjs` | **LLM 录制/回放设施**：录制端透明 passthrough → 落盘 fixture（不存请求正文）→ 回放逐块深比较；`ADVISOR_REPLAY_MISS`/`UNCONSUMED` 双侧 fail-closed | **9/9** |
 | `skill-sync-check.mjs` | **计数漂移门 + `.gitattributes` 门 + eol 一致性门**：README/ARCHITECTURE 里每处技能计数表述必须等于 `skills/**/SKILL.md` 实测件数；全跟踪文件 worktree==index 行尾一致；零命中 fail-closed + 阳性对照 + `--selftest` | PASS（变异体 **16/16** 达到期望） |
@@ -259,7 +271,7 @@ dsh-agents/
 
 ```bash
 npm install                        # 公开 registry 可装（1 个运行时依赖）
-node tests/run.mjs                 # 346/0（含独立门接线组）
+node tests/run.mjs                 # 355/0（含独立门接线组）
 node tests/isolation-gate.mjs      # 隔离门（进程边界双快照）exit 0
 node tests/advisor-llm-replay.mjs  # 录制/回放闭环 9/9
 node tools/crgate.test.mjs         # 65/0
@@ -287,7 +299,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 | 门 | 账面 |
 |---|---|
-| 主套件 | 346/0（含独立门接线组 + B1 三特性组） |
+| 主套件 | 355/0（含独立门接线组 + B1 三特性组） |
 | 隔离门（isolation-gate） | exit 0（selftest 必红→必绿 5/5） |
 | LLM 回放（advisor-llm-replay） | 9/9 |
 | 计数漂移门（skill-sync-check） | PASS（阳性对照 PASS + 变异体 16/16 变红 + eol 一致） |

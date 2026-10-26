@@ -50,7 +50,7 @@ complete task brief — plus 25 workflow skills that orchestrate them end to end
 - **25 件工作流技能**（口径：`skills/` 下 25 个 SKILL.md = 25 个技能目录）：入口 2 + 流水线 4 + 协作 5 + 方法论 13 + 顾问 1。
 - **内置 advisor 顾问是被动机制、宿主侧工具面为零**——每个 turn 后自动评审主会话可见消息，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**，不派活也不会被 `agent_spawn` 触发；模型完全手动指定、无任何兜底。V3 已实现 repository-aware 评审：只读检索（文件树/git/搜索 + 符号精读）、agentic 工具循环（模型自调只读检索工具，不占宿主工具位）、决策保护（`docs/DECISIONS.md`）、规则预筛（普通聊天零 token）、停止五类与 blocker 证据下限。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。
 - **11 份评审清单**按扩展名/专项路由（go / ts / python / kotlin / rust / csharp / cpp / sql / pytorch / a11y / performance）。
-- **三种派活形态与 per-session 工具面（R3-B1）**——`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填、宿主内置 minimal 预设承载）；**role 轨默认工具面收缩**（构建期扫 23 角色人格产 per-role 引用表，运行期 restrict 收缩：交集防叠 + 跨代 lift 防线 + 双向对账 fail-open + 收缩生效率读数组）；**极简回复通道**（minimal×org 会话注册 own 层 `agent_reply`：目标钉死 orgId、schema 无 target 参数、唤醒白名单 + 滑动窗口频控 + 连降熔断；投递与派活决策审计同落 `reply-audit.jsonl`）。静态注入面零增长（口径B 1993/2181/2183 锚定），工具描述增量单独计量（合计 ≤400B 上界）。
+- **三种派活形态与 per-session 工具面（R3-B1）**——`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填、**独立预设挂载**：`~/.dsh/.agent-presets/` 磁盘目录优先自制装载（零依赖 YAML 子集解析 + 组件级挂载契约，未知键/未知组件 fail-fast 列名），宿主 registry 兜底）；**role 轨默认工具面收缩**（构建期扫 23 角色人格产 per-role 引用表，运行期 restrict 收缩：交集防叠 + 跨代 lift 防线 + 双向对账 fail-open + 收缩生效率读数组）；**极简回复通道**（minimal×org 会话注册 own 层 `agent_reply`：目标钉死 orgId、schema 无 target 参数、唤醒白名单 + 滑动窗口频控 + 连降熔断；投递与派活决策审计同落 `reply-audit.jsonl`）。静态注入面零增长（口径B 1993/2181/2183 锚定），工具描述增量单独计量（合计 ≤400B 上界）。
 - **两个确定性机检工具**：`crgate`（评审证据链 freeze/anchor/finalize）与 `publish-scan`（发布前脱敏六类扫描 + 三值裁定）。
 - **配置错就报错**——未知档位、未知角色、半个路由、非法 `clarifyMode` 一律抛错，不静默兜底。
 
@@ -250,7 +250,7 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 ## 测试
 
 ```bash
-node tests/run.mjs                    # 主测试（346 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
+node tests/run.mjs                    # 主测试（355 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
 node tools/crgate.test.mjs            # 65 断言
 node tools/publish-scan.test.mjs      # 47 断言
 node tests/skill-sync-check.mjs       # 计数漂移门 + .gitattributes 门（文档里的技能件数必须等于磁盘实测）
@@ -287,6 +287,8 @@ dsh-agents/
     toolscope-pipeline.js  restrict 管道（created 挂点收缩 + 跨代 lift 表 + 双向对账 fail-open + 留存清扫 + V3-3 审计环）
     toolscope-roster.js    roster 数据层（角色引用表 + 构建期扫描核 + G11 覆盖率 + M11 宿主版本读取面 + M13 留存）
     agent-reply.js         极简回复通道（agent_reply + 直投 + V3-2 频控熔断 + 审计轮转有界留存）
+    yaml-mini.js           最小 YAML 子集解析器（磁盘预设装载器专用，超子集构造 fail-fast 列行号）
+    disk-presets.js        磁盘预设装载器（~/.dsh/.agent-presets 装载 + 组件级挂载契约，独立插件自制挂载）
     advisor/               (26) advisor 顾问：顶层 6（store/api/observer/runtime/delivery/index）+ assemble/ 4（S5 分层：session-views/context-hooks/runtime-pool/wiring）+ retrieval/ 7（只读检索+git+符号）+ context/ 4（三层装配）+ aci/ 3（agentic 工具循环）+ decision/ 1（规则预筛）+ grammars/ 1（vendor wasm）
   policies/                toolscope 策略数据（roster 基表手写 + 23 角色引用表机产）
   personas/                23 份人格正文（19 OMC + 4 ECC 系）
