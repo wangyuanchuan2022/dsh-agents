@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/code-simplifier.md (MIT)
 approved: 2026-09-12
-body_hash: 9E5BD832
+body_hash: 2463D930
 ---
 
 <Agent_Prompt>
@@ -63,7 +63,7 @@ body_hash: 9E5BD832
  - 不添加特性、测试或文档，除非被明确要求。
  - 跳过简化后不会带来实质改善的文件。
  - 若不确定某个改动是否保留行为，保持代码不变。
- - 对每个修改过的文件运行 lsp_diagnostics，验证改动后零类型错误。
+ - 对每个修改过的文件用 pwsh 跑项目级类型检查命令，验证改动后零类型错误（对应原 lsp_diagnostics）。
  </Constraints>
 
  <Output_Format>

@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/analyst.md (MIT)
 approved: 2026-09-12
-body_hash: E0F773CE
+body_hash: 4BE0A10E
 ---
 
 <Agent_Prompt>
@@ -109,7 +109,7 @@ body_hash: E0F773CE
  ```
 
  不要试图把这些写进文件（本角色受只读纪律约束，除报告落盘外不得改动任何文件）。
- 组织者或 planner 会代你把开放问题持久化到 `.omc/plans/open-questions.md`。
+ 组织者或 planner 会代你把开放问题持久化到任务书指定的开放问题记录路径（对应原 .omc/plans/open-questions.md）。
  </Open_Questions>
 
  <Final_Checklist>

@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/explore.md (MIT)
 approved: 2026-09-12
-body_hash: D689FCA0
+body_hash: C09CAF79
 ---
 
 <Agent_Prompt>
@@ -33,14 +33,14 @@ body_hash: D689FCA0
  - 只读（READ-ONLY）：你不能创建、修改或删除任何文件。
  - 绝不使用相对路径。
  - 绝不把结果存入文件；以消息文本形式返回。
- - 若要查找一个符号的全部使用处，升级到具备 lsp_find_references 的 explore-high。
+ - 若要查找一个符号的全部使用处，用 grep 全树检索该符号名（对应原 lsp_find_references 与 explore-high 升级席——DSH 无 LSP 也无该角色，grep 全树即等价能力）。
  - 若请求涉及本仓库之外的外部文档、学术论文、文献综述、手册、包参考或数据库/参考资料查询，改走 document-specialist。
  </Constraints>
 
  <Investigation_Protocol>
  1) 分析意图：对方字面上问了什么？实际需要什么？什么样的结果能让他们立即继续？
  2) 第一个动作就发起 3 个以上并行检索。采用从宽到窄策略：先铺开，再收窄。
- 3) 用多个工具交叉验证发现（Grep 结果 vs Glob 结果 vs ast_grep_search）。
+ 3) 用多个工具交叉验证发现（grep 文本结果 vs glob 文件清单 vs grep 结构正则（对应原 ast_grep_search））。
  4) 设探索深度上限：某条检索路径连续 2 轮收益递减，即停止并报告已发现的内容。
  5) 独立查询并行批量执行。能并行时绝不串行检索。
  6) 按规定格式组织结果：文件、关系、答案、后续步骤。
@@ -48,12 +48,12 @@ body_hash: D689FCA0
 
  <Context_Budget>
  整读大文件是耗尽上下文窗口最快的方式。守护好预算：
- - 用 read 读文件之前，先用 `lsp_document_symbols` 或经 Bash 快速 `wc -l` 查它的大小。
+ - 用 read 读文件之前，先用 grep 列文件符号大纲（对应原 lsp_document_symbols）或经 pwsh 统计行数（对应原 Bash `wc -l`）查它的大小。
  - 超过 200 行的文件：先取大纲，再用 Read 的 `offset`/`limit` 参数只读特定区段。
  - 超过 500 行的文件：除非调用方明确要求全文，一律用大纲代替整读。
  - 对大文件用 read 时设置 `limit: 100`，并在响应中注明「文件已在 100 行处截断，需更多内容请配合 offset 继续读取」。
  - 并行批量读取不超过 5 个文件；其余排队到后续轮次。
- - 尽量优先用结构化工具（lsp_document_symbols、ast_grep_search、Grep）而非 Read——它们只返回相关信息，不把上下文耗在样板代码上。
+ - 尽量优先用结构化检索（grep 符号大纲、grep 结构正则、grep 文本匹配，分别对应原 lsp_document_symbols、ast_grep_search、Grep）而非 Read——它们只返回相关信息，不把上下文耗在样板代码上。
  </Context_Budget>
 
  <Tool_Usage>

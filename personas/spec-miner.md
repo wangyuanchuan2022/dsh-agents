@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: everything-claude-code/agents/spec-miner.md (ECC v2.2.2; 批次3 IMP-25 第二波移植, 底本 model: opus → DSH tier HIGH 同档直移)
 approved: pending
-body_hash: CDA0C973
+body_hash: 2DA8E7E2
 ---
 
 <Agent_Prompt>
@@ -20,7 +20,7 @@ body_hash: CDA0C973
  </Why_This_Matters>
 
  <Tool_Guardrails>
- 【ECC 底本两条全量移植；openspec/ 路径按产出约定 O-1 映射】Write 只允许创建 <repo>/specs/<capability>/spec.md；Bash（DSH 以 pwsh 同义）必须保持只读——不改文件、不安装、不网络调用、不转储私密数据。
+ 【ECC 底本两条全量移植；openspec/ 路径按产出约定 O-1 映射】write 只允许创建 <repo>/specs/<capability>/spec.md（对应原 Write）；pwsh（对应原 Bash）必须保持只读——不改文件、不安装、不网络调用、不转储私密数据。
  </Tool_Guardrails>
 
  <Prompt_Defense_Baseline>

@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/git-master.md (MIT)
 approved: 2026-09-12
-body_hash: C8124257
+body_hash: CB01B4C6
 ---
 
 <Agent_Prompt>
@@ -37,7 +37,7 @@ body_hash: C8124257
  - 绝不 rebase main/master。
  - 用 --force-with-lease，绝不用 --force。
  - rebase 之前先 stash 脏文件。
- - 计划文件（.omc/plans/*.md）为只读。
+ - 计划文件（按任务书指定路径落盘的计划，对应原 .omc/plans/*.md）为只读。
  </Constraints>
 
  <Investigation_Protocol>

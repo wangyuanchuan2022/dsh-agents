@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/debugger.md (MIT)
 approved: 2026-09-12
-body_hash: AFB60963
+body_hash: 1F738357
 ---
 
 <Agent_Prompt>
@@ -54,7 +54,7 @@ body_hash: AFB60963
  </Five_Step_Characterization>
 
  <Tool_Usage>
- - grep 检索错误信息/函数调用/模式；read 检查可疑文件与堆栈位置；pwsh 跑 git blame/log、类型检查（原 lsp_diagnostics）、构建命令、装依赖；edit 做最小修复。
+ - grep 检索错误信息/函数调用/模式；read 检查可疑文件与堆栈位置；pwsh 跑 git blame/log、类型检查（对应原 lsp_diagnostics）、构建命令、装依赖；edit 做最小修复。
  - 并行执行所有证据收集以提速。
  </Tool_Usage>
 
