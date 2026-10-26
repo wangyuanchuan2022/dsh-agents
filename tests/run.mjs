@@ -28,7 +28,7 @@ import {
 } from '../lib/agent-reply.js'
 import {
   loadRosterData, scanRoleReferences, buildCoverageReport, compareHostVersion,
-  planRetentionSweep, POLICY_DIR,
+  planRetentionSweep, POLICY_DIR, detectHostVersion, checkHostVersion, HOST_PACKAGE_NAME,
 } from '../lib/toolscope-roster.js'
 import { efficiencyReadings, replayEntries, EFFICIENCY_THRESHOLD } from '../tools/toolscope-efficiency.mjs'
 import { createTiersApi, CONFIG_SCHEMA } from '../lib/settings.js'
@@ -2208,6 +2208,61 @@ test('S5 V3-3 replayEntries：真实 dataDir 当前状态如实呈现（零策�
   assert.deepEqual(parseErrors.map((p) => p.startsWith('sessions 目录不可读')), [true])
   const r = efficiencyReadings(entries)
   assert.equal(r.verdict, 'no-sample')
+})
+
+// ── B1 S5：M11 宿主版本公开读取面（detectHostVersion + checkHostVersion）────
+// 读取面两路：插件模块向上走查宿主 package.json（装机形态=宿主树内）→
+// %APPDATA%\npm 全局前缀候选（npm prefix Windows 缺省）；读不到=unknown 不告警。
+
+test('S5 M11 detectHostVersion：向上走查命中宿主 package.json（fake io：lib 两级上找到）', () => {
+  const root = join('D:', 's5-sim')
+  const hostPkg = join(root, 'host', 'package.json')
+  const libPkg = join(root, 'host', 'node_modules', 'dsh-agents', 'package.json')
+  const io = { readFileSync: (p) => {
+    if (p === hostPkg) return JSON.stringify({ name: HOST_PACKAGE_NAME, version: '9.9.9' })
+    if (p === libPkg) return JSON.stringify({ name: 'dsh-agents', version: '0.0.0' })
+    throw new Error('ENOENT')
+  } }
+  const hit = detectHostVersion({ startDir: join(root, 'host', 'node_modules', 'dsh-agents', 'lib'), readFileSync: io.readFileSync, env: {} })
+  assert.deepEqual(hit, { version: '9.9.9', via: hostPkg }, '插件树内向上两级命中宿主（跳过自身 dsh-agents 的 package.json）')
+})
+
+test('S5 M11 detectHostVersion：中途损坏 package.json 跳过继续走查 + APPDATA 全局前缀候选兜底 + 全部落空=null', () => {
+  const root = join('D:\\', 's5-sim2')
+  const calls = []
+  const broken = join(root, 'broken', 'package.json')
+  const fallback = join('X:\\', 'appdata-roaming', 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
+  const io = { readFileSync: (p) => {
+    calls.push(p)
+    if (p === broken) throw new Error('malformed')
+    if (p === fallback) return JSON.stringify({ name: HOST_PACKAGE_NAME, version: '1.2.3-rc.4' })
+    throw new Error('ENOENT')
+  } }
+  const viaFallback = detectHostVersion({ startDir: join(root, 'broken', 'lib'), readFileSync: io.readFileSync, env: { APPDATA: join('X:\\', 'appdata-roaming') } })
+  assert.deepEqual(viaFallback, { version: '1.2.3-rc.4', via: fallback }, '走查落空 → APPDATA npm 全局前缀候选命中')
+  assert.ok(calls.includes(broken), '中途 package.json 被尝试读（损坏不中断走查）')
+  const none = detectHostVersion({ startDir: join(root, 'empty', 'lib'), readFileSync: io.readFileSync, env: {} })
+  assert.equal(none, null, '两路全落空 → null（M11 unknown，不抛不猜）')
+})
+
+test('S5 M11 checkHostVersion：mismatch 告警一次 / match 与 unknown 静默（M11 语义）', () => {
+  const warns = []
+  const logger = { warn: (m) => warns.push(m), info: () => {} }
+  const root = join('D:', 's5-sim3')
+  const hostPkg = join(root, 'package.json')
+  const read = (p) => (p === hostPkg ? JSON.stringify({ name: HOST_PACKAGE_NAME, version: '0.1.7-rc.2' }) : (() => { throw new Error('ENOENT') })())
+  const mismatch = checkHostVersion({ base: { pinnedHostVersion: '0.2.0' }, startDir: root, logger, io: { readFileSync: read } })
+  assert.equal(mismatch.verdict, 'mismatch')
+  assert.equal(warns.length, 1, 'mismatch → warn 恰一次（M11 告警面）')
+  assert.ok(warns[0].includes('0.2.0') && warns[0].includes('0.1.7-rc.2'), '告警含两侧版本号')
+  warns.length = 0
+  const match = checkHostVersion({ base: { pinnedHostVersion: '0.1.7-rc.2' }, startDir: root, logger, io: { readFileSync: read } })
+  assert.equal(match.verdict, 'match')
+  assert.equal(warns.length, 0, 'match → 静默（无告警）')
+  // unknown 场景：走查链上任何一级都没有宿主 package.json（空兄弟根 + 关掉 APPDATA 候选）。
+  const unknown = checkHostVersion({ base: { pinnedHostVersion: '0.1.7-rc.2' }, startDir: join('D:\\', 's5-sim3-empty', 'ghost'), logger, io: { readFileSync: read, env: {} } })
+  assert.equal(unknown.verdict, 'unknown')
+  assert.equal(warns.length, 0, 'unknown → 静默（M11：未知不告警，报告披露）')
 })
 
 // ── settings 接线：三档模型运行时配置（设置页同源） ───────────────────────

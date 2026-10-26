@@ -20,7 +20,7 @@ import { writeFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { ROLES } from '../lib/roles.js'
-import { loadRosterData, buildCoverageReport, scanRoleReferences, POLICY_DIR, ROSTER_ROLES_FILE } from '../lib/toolscope-roster.js'
+import { loadRosterData, buildCoverageReport, scanRoleReferences, POLICY_DIR, ROSTER_ROLES_FILE, checkHostVersion } from '../lib/toolscope-roster.js'
 
 const data = loadRosterData(POLICY_DIR)
 if (!data.base) {
@@ -54,6 +54,9 @@ const reportPath = fileURLToPath(new URL('../agent-out/toolscope-g11-coverage.md
 writeFileSync(reportPath, `${report.lines.join('\n')}\n`, 'utf8')
 
 console.log(`[scan-role-toolrefs] roles=${Object.keys(roleTable).length}/${ROLES.length} refs=${Object.values(roleTable).reduce((n, list) => n + list.length, 0)} unclassified=${allUnclassified.length}`)
+// B1-S5/M11：构建期查一次宿主版本（与插件启动各查一次；unknown 静默披露不告警）。
+const hostCheck = checkHostVersion({ base })
+console.log(`[scan-role-toolrefs] M11 宿主版本：verdict=${hostCheck.verdict} pinned=${hostCheck.pinned ?? '∅'} actual=${hostCheck.actual ?? '∅'}（via=${hostCheck.via ?? '未找到'}）`)
 if (report.missingRoles.length > 0) console.log(`[scan-role-toolrefs] 未入库角色（fail-open）：${report.missingRoles.join(', ')}`)
 if (allUnclassified.length > 0) console.log(`[scan-role-toolrefs] 未归类反引号（披露待增补）：${allUnclassified.join(', ')}`)
 console.log(`[scan-role-toolrefs] 写出 ${rolesPath}`)
