@@ -32,6 +32,8 @@
  * 输出脱敏：会话只以 sessionId 标识；cwd/消息正文/工具参数一律不出现；
  * 日志文件默认只出 basename，完整路径仅 --verbose 文本行（JSON/CSV 摘要与 errors 均不含路径）。
  * 只读宿主会话日志；零网络、零 spawn、零仓源码改动（--selftest 夹具写 os.tmpdir() 并清理）。
+ * 退出码：0=读数完成且无拒测；1=读数失败（逐文件模式任一文件失败 / --scan 模式 errors>0
+ * 部分拒测——CODE-P2-3，2026-10-26 起与逐文件模式语义对齐，不做「scan 恒 0」文档化豁免）；2=用法错误。
  */
 import { readFileSync, existsSync, readdirSync, statSync, realpathSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, basename, sep } from 'node:path'
@@ -276,6 +278,10 @@ function runScan(argv) {
       if (verbose) console.log(`    ${r.zpath}`)
     }
   }
+  // CODE-P2-3（2026-10-26）：部分拒测必须响亮——errors>0 时 exit 1，与逐文件模式
+  // （runFiles 逐文件 exitCode=1）退出码语义对齐；脚本化消费方按退出码即可发现「部分拒测」，
+  // 无需解析输出。errors 本身已双通道显式可见（stdout errors 数组 + stderr ERR 行），不静默。
+  if (errors.length > 0) process.exitCode = 1
 }
 
 // ---------- --selftest：≥3 元素断言（鉴别力①）+ 三类变异体注入必红（L1-15） ----------

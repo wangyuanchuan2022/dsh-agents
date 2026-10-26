@@ -84,7 +84,7 @@
 
 **跨档共享面（不参与差异化）**：§八工具映射表、头部、人格细则（三）、1.1 隔离契约、autonomous 缺省决策表块、降级分层表与退出码表（表本身即决策表形态）、尾置「本次参数」块——逐 spawn 变化项与角色/人格不按档位改写。
 
-**判别断言与负向自测**：同角色 × 三档路由输出两两不等且各命中特征（≥3 元素，防串接/取首个）；`tools/taskbook-26a-negative.mjs` M11 变异体（deliverClauses 三档回落单档）注入必红；净注入不增长口径B 逐角色读数随 commit 复跑（`agent-out/opt-r2-faced-probe.mjs`）。
+**判别断言与负向自测**：同角色 × 三档路由输出两两不等且各命中特征（≥3 元素，防串接/取首个）；`tools/taskbook-26a-negative.mjs` M11 变异体（deliverClauses 三档回落单档）注入必红；净注入不增长口径B 逐角色读数随 commit 复跑（`tools/opt-r2-faced-probe.mjs`，输出路径必填——2026-10-26 R2 P2 修复批移入 tools/ 跟踪面，CODE-P2-7）。
 
 ## 3. 任务目标
 - 一句话目标：
