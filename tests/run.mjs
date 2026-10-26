@@ -507,7 +507,7 @@ test('D-1a 档位差异化：同角色×三档渲染互异且各命中模式特�
   assert.ok(!low.includes('### few-shot') && !low.includes('- R1 '), 'LOW 不得携带 HIGH 特征')
   assert.ok(D1A_HAS_HIGH(high), 'HIGH 须含 few-shot 段与 spec 编号条款')
   assert.ok(!high.includes('| 情况 |'), 'HIGH 不得携带 LOW 特征')
-  // ③ MEDIUM=现行形态（v3.3 A2b 定稿逐字冻结；D-1b 消融对照臂基线）：三特征全不携带
+  // ③ MEDIUM=现行形态（v3.3 定稿=A2b+5ef5c7e R3 返工，逐字冻结；D-1b 消融对照臂基线）：三特征全不携带
   assert.ok(!D1A_HAS_LOW(med) && !D1A_HAS_HIGH(med), 'MEDIUM 须保持现行形态（无 LOW/HIGH 特征）')
   // ④ 注入必红（断言鉴别力②）：抹掉特征行后各谓词必假——谓词非恒真
   const drop = (text, needle) => text.split('\n').filter((line) => !line.includes(needle)).join('\n')
