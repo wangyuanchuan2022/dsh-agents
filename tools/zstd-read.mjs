@@ -21,8 +21,10 @@
  *   ① 解压预算上限（帧数/单帧/累计，超限显式拒绝——构造文件 3430B 即可放大至数百 MiB）；
  *   ② 去重行防护（跨帧重复行 = 吞并痕迹，计数上报供消费方 fail-closed，不再静默膨胀）。
  *   已知残余：无 FCS 字段的帧（流式写端）无法精确定界，靠去重行防护兜底；
- *   node 的 maxOutputLength 选项对 zstd sync 解压**不生效**（实测静默忽略），
- *   预算只能事后校验——单次调用的内存尖峰不受此上限约束（输入规模 × 压缩比）。
+ *   node 的 maxOutputLength 选项对 zstd sync 解压**不生效**（实测静默忽略）。
+ *   预算校验时序（2026-10-26 security R2 P2-1 升级）：带 FCS 帧在解压**前**按帧头
+ *   声明值拒绝超限帧（主形态内存尖峰归零）；无 FCS 帧与「输出 < 声明」完整性核验
+ *   仍只能事后校验——单次调用的内存尖峰不受上限约束（输入规模 × 压缩比）。
  *
  * 用法：
  *   import { zstdRead, zstdReadInfo, zstdReadMultiFrame, countFrames, dedupLines,
@@ -110,6 +112,13 @@ export function decompressAllFrames(buf, opts = {}) {
   let frames = 0
   let truncated = 0
   for (const off of cands) {
+    // FCS 预检前置（2026-10-26 security R2 P2-1）：带 FCS 的帧在解压前按帧头声明值拒绝
+    // 超限帧——内存尖峰对主形态（zstdCompressSync 写端恒携带 FCS，即宿主日志主形态）归零；
+    // 无 FCS 帧无法预检，维持现行为（解压后预算校验 + 去重行防护兜底）。
+    const fcsPre = parseFrameContentSize(buf, off)
+    if (fcsPre !== null && fcsPre > maxFrameBytes) {
+      throw new Error(`帧@${off} 帧头声明 ${fcsPre} 超单帧上限 ${maxFrameBytes}：疑似解压炸弹，解压前拒绝（fail-closed）`)
+    }
     let out
     try { out = zstdDecompressSync(buf.subarray(off)) } catch { continue } // 假 magic：丢弃
     const fcs = parseFrameContentSize(buf, off)

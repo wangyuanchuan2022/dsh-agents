@@ -392,7 +392,12 @@ function iterSessionLogs() {
       if (!withinRoot(sPath)) continue
       for (const name of ['session.v4.jsonl.zstd', 'session.jsonl.zstd']) {
         const zp = join(sPath, name)
-        if (existsSync(zp)) { out.push({ zpath: zp }); break }
+        if (!existsSync(zp)) continue
+        // 文件级越界防护（2026-10-26 security R2 P2-2）：目录校验只保住目录级——日志文件
+        // 本身也可能是指向 root 外的 reparse point，入队前同样过包含判定，越界/断链跳过
+        //（realpathSync.native 于 Windows junction 必需，同上方目录级防御口径）。
+        if (!withinRoot(zp)) continue
+        out.push({ zpath: zp }); break
       }
     }
   }

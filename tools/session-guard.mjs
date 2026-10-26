@@ -98,9 +98,20 @@ function classifyRows(rows, opts) {
   return (rows || []).map((row) => classifyRow(row, ctx))
 }
 
+// sessionId 白名单（2026-10-26 security R2 P2-3）：sessionId 来自日志 session 头行 head.id，
+// 损坏/恶意日志可携带含 `|`/换行的任意串——写入 death-cases.md 表格前白名单校验，非法形态
+// 替换为净化占位（宿主真实形态 = session-<uuid>，白名单不伤真值）。占位内非白名单字符
+// 一并替换为 `_`：截断预览若保留原始字符（如 `|`、换行）则注入面未关死。
+const SAFE_ID_RE = /^[A-Za-z0-9_-]{1,80}$/
+const safeId = (id) => {
+  if (id && SAFE_ID_RE.test(id)) return id
+  const preview = String(id ?? '').slice(0, 12).replace(/[^A-Za-z0-9_-]/g, '_')
+  return preview ? `?(${preview}…)` : '?'
+}
+
 /** 死因人事后确认的累积模板行（guard 只报警不判因；死因列恒为「待人工裁定」占位）。 */
 function templateRow(c, nowMs) {
-  return `| ${iso(nowMs)} | ${c.sessionId || '?'} | ${c.tailDangling || '?'} | ${iso(c.lastEventAt)} | ${Number.isFinite(c.ageH) ? c.ageH.toFixed(1) : '?'} | （待人工裁定） | （待填：de_session status 读数 / 用户裁定原文） | guard 自动追加 |`
+  return `| ${iso(nowMs)} | ${safeId(c.sessionId)} | ${c.tailDangling || '?'} | ${iso(c.lastEventAt)} | ${Number.isFinite(c.ageH) ? c.ageH.toFixed(1) : '?'} | （待人工裁定） | （待填：de_session status 读数 / 用户裁定原文） | guard 自动追加 |`
 }
 
 const DEATH_CASES_HEADER = [
@@ -124,7 +135,7 @@ function appendDeathCases(filePath, candidates, nowMs) {
   } else {
     text = DEATH_CASES_HEADER
   }
-  const fresh = (candidates || []).filter((c) => c.sessionId && !text.includes(c.sessionId))
+  const fresh = (candidates || []).filter((c) => c.sessionId && !text.includes(safeId(c.sessionId)))
   if (!fresh.length) return { appended: 0, skipped: (candidates || []).length, filePath }
   text += fresh.map((c) => templateRow(c, nowMs)).join('\n') + '\n'
   writeFileSync(filePath, text, 'utf8')

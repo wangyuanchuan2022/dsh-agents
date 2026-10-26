@@ -186,7 +186,11 @@ function iterSessionLogs(root) {
       if (!withinRoot(sPath)) continue
       for (const name of ['session.v4.jsonl.zstd', 'session.jsonl.zstd']) {
         const zp = join(sPath, name)
-        if (existsSync(zp)) { out.push({ zpath: zp }); break }
+        if (!existsSync(zp)) continue
+        // 文件级越界防护（2026-10-26 security R2 P2-2，与 measure-decay 同步修）：日志文件
+        // 本身也可能是指向 root 外的 reparse point，入队前同样过包含判定，越界/断链跳过。
+        if (!withinRoot(zp)) continue
+        out.push({ zpath: zp }); break
       }
     }
   }
