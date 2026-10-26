@@ -30,6 +30,7 @@ import {
   loadRosterData, scanRoleReferences, buildCoverageReport, compareHostVersion,
   planRetentionSweep, POLICY_DIR,
 } from '../lib/toolscope-roster.js'
+import { efficiencyReadings, replayEntries, EFFICIENCY_THRESHOLD } from '../tools/toolscope-efficiency.mjs'
 import { createTiersApi, CONFIG_SCHEMA } from '../lib/settings.js'
 import { CONFIG_ENDPOINT, createConfigHandler } from '../lib/http-config.js'
 import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync, utimesSync } from 'node:fs'
@@ -2107,6 +2108,92 @@ await testAsync('B1 S4 集成（apply 接线）：minimal 派活→created 注�
   } finally {
     minimalEnvTeardown(env)
   }
+})
+
+// ── B1 S5：V3-3 收缩生效率读数组消费（efficiencyReadings + replayEntries）────
+// 三值 = 对账通过率 / 实际收缩占比 / fail-open 原因分布（缺失清单聚合）；
+// 阈值（设计 V3-3）：对账生效率 <50% → verdict 触发表修复轮。
+
+test('S5 V3-3 生效率读数组消费核：三值口径 + nothing-to-strip 计入闸分母 + 缺失清单聚合（7 元素夹具）', () => {
+  const entries = [
+    { sessionId: 's1', action: 'allow' },                                                              // full 整集应用
+    { sessionId: 's2', action: 'deny' },                                                               // role 收缩应用
+    { sessionId: 's3', action: 'deny' },
+    { sessionId: 's4', action: 'refuse', reason: 'ref-coverage', missing: ['write', 'edit'] },         // 交叉校验拒绝
+    { sessionId: 's5', action: 'refuse', reason: 'ref-coverage', missing: ['write'] },                 // 同名缺失聚合
+    { sessionId: 's6', action: 'skip', reason: 'tier-none' },                                          // 未进闸（不对账分母）
+    { sessionId: 's7', action: 'skip', reason: 'nothing-to-strip' },                                   // 进闸且通过
+  ]
+  const r = efficiencyReadings(entries)
+  assert.equal(r.empty, false)
+  assert.equal(r.sessions, 7, '收缩占比分母=策略承载会话数')
+  assert.equal(r.applied, 3, '实际收缩=allow/deny 会话数')
+  assert.equal(r.gate.denominator, 6, '对账分母=allow/deny/refuse + nothing-to-strip（3+2+1）')
+  assert.equal(r.gate.passed, 4)
+  assert.ok(Math.abs(r.gate.passRate - 4 / 6) < 1e-9, `对账通过率=4/6（实得 ${r.gate.passRate}）`)
+  assert.ok(Math.abs(r.shrink.ratio - 3 / 7) < 1e-9, `收缩占比=3/7（实得 ${r.shrink.ratio}）`)
+  assert.deepEqual(r.failOpen.byReason, { 'ref-coverage': 2, 'tier-none': 1, 'nothing-to-strip': 1 })
+  assert.deepEqual(r.failOpen.missingAgg, { write: 2, edit: 1 }, '缺失清单跨会话聚合（write 出现 2 次）')
+  assert.equal(r.verdict, 'efficiency-ok')
+  assert.equal(EFFICIENCY_THRESHOLD, 0.5, '阈值钉值（设计 V3-3）')
+})
+
+test('S5 V3-3 生效率低于阈值 → verdict 触发表修复轮；空输入 → no-sample 不伪装读数', () => {
+  const low = efficiencyReadings([
+    { sessionId: 'a', action: 'refuse', reason: 'ref-coverage', missing: ['x'] },
+    { sessionId: 'b', action: 'refuse', reason: 'unknown-names', missing: ['y', 'z'] },
+    { sessionId: 'c', action: 'refuse', reason: 'ref-coverage', missing: ['x'] },
+    { sessionId: 'd', action: 'allow' },
+    { sessionId: 'e', action: 'deny' },
+  ])
+  assert.equal(low.gate.denominator, 5)
+  assert.equal(low.gate.passed, 2)
+  assert.ok(low.gate.passRate < EFFICIENCY_THRESHOLD, '2/5=0.4 < 0.5')
+  assert.equal(low.verdict, 'efficiency-low-repair-round', '触发表修复轮判据在位')
+  const empty = efficiencyReadings([])
+  assert.deepEqual({ empty: empty.empty, sessions: empty.sessions, verdict: empty.verdict }, { empty: true, sessions: 0, verdict: 'no-sample' })
+})
+
+test('S5 V3-3 replayEntries：离线重放同一决策核（真实 roster + 夹具策略文件 3 会话 → deny/skip/allow 同构 entries）', () => {
+  const roster = loadRosterData(POLICY_DIR).roster
+  assert.ok(roster, '真实 roster 可加载（重放前置）')
+  assert.ok(roster.roles.explore, 'explore 在表（deny 路径前置）')
+  const dir = fileURLToPath(new URL('./.fixture-s5-replay/data', import.meta.url))
+  const sessionsDir = join(dir, 'sessions')
+  mkdirSync(sessionsDir, { recursive: true })
+  try {
+    const mk = (sessionId, body) => writeFileSync(
+      join(sessionsDir, `${Buffer.from(sessionId, 'utf8').toString('base64url')}.toolscope.json`),
+      JSON.stringify({ schemaVersion: 1, sessionId, personaMode: body.personaMode, toolPolicy: body.toolPolicy, replyChannel: 'org', orgId: 'session-org', createdAt: 0, updatedAt: 0, ...body.extra }),
+      'utf8',
+    )
+    mk('s5-role-in-roster', { personaMode: 'role', toolPolicy: { tier: 'grant', allow: [] }, extra: { role: 'explore', task: '检索资料' } })
+    mk('s5-ghost-role', { personaMode: 'role', toolPolicy: { tier: 'grant', allow: [] }, extra: { role: 'ghost-role', task: '检索资料' } })
+    mk('s5-minimal-full', { personaMode: 'minimal', toolPolicy: { tier: 'full', allow: [...MINIMAL_TOOLSET_FULL] }, extra: { task: '评测任务' } })
+    const { entries, files, parseErrors } = replayEntries({ dataDir: dir, roster })
+    assert.equal(files, 3, '三个策略文件全部进入重放')
+    assert.deepEqual(parseErrors, [], '零解析错误')
+    const byId = Object.fromEntries(entries.map((e) => [e.sessionId, e]))
+    assert.equal(byId['s5-role-in-roster'].action, 'deny', '在表角色 → 收缩应用（同管线决策核）')
+    assert.equal(byId['s5-ghost-role'].action, 'skip', '缺角色 fail-open skip role-not-in-roster')
+    assert.equal(byId['s5-ghost-role'].reason, 'role-not-in-roster')
+    assert.equal(byId['s5-minimal-full'].action, 'allow', 'minimal 整集（MINIMAL_TOOLSET_FULL ⊆ 宇宙）→ allow')
+    const r = efficiencyReadings(entries)
+    assert.equal(r.sessions, 3)
+    assert.equal(r.applied, 2)
+    assert.equal(r.verdict, 'efficiency-ok')
+  } finally {
+    rmSync(fileURLToPath(new URL('./.fixture-s5-replay/', import.meta.url)), { recursive: true, force: true })
+  }
+})
+
+test('S5 V3-3 replayEntries：真实 dataDir 当前状态如实呈现（零策略文件 → no-sample，不伪装读数）', () => {
+  const roster = loadRosterData(POLICY_DIR).roster
+  const { entries, parseErrors } = replayEntries({ dataDir: join('.tmp-nonexistent-s5', 'data'), roster })
+  assert.equal(entries.length, 0, 'sessions 目录不可读 → 零 entries（不抛不猜）')
+  assert.deepEqual(parseErrors.map((p) => p.startsWith('sessions 目录不可读')), [true])
+  const r = efficiencyReadings(entries)
+  assert.equal(r.verdict, 'no-sample')
 })
 
 // ── settings 接线：三档模型运行时配置（设置页同源） ───────────────────────
