@@ -18,9 +18,17 @@ import { loadPersona, listPersonaFiles, splitFrontmatter } from '../lib/persona.
 import { listPresets } from '../lib/spawn.js'
 import { resolveConfig, apply, Config } from '../lib/index.js'
 import { ToolscopeStore, toolscopePath, normalizeToolscope, MINIMAL_TOOLSET_FULL, TOOLSCOPE_SCHEMA_VERSION } from '../lib/toolscope.js'
+import {
+  mcpPublicName, looseToolRefs, conservativeTaskRefs, decideToolscope,
+  DedupNotifier, refuseKey, sharedLiftTable, installToolscopePipeline,
+} from '../lib/toolscope-pipeline.js'
+import {
+  loadRosterData, scanRoleReferences, buildCoverageReport, compareHostVersion,
+  planRetentionSweep, POLICY_DIR,
+} from '../lib/toolscope-roster.js'
 import { createTiersApi, CONFIG_SCHEMA } from '../lib/settings.js'
 import { CONFIG_ENDPOINT, createConfigHandler } from '../lib/http-config.js'
-import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
+import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync, utimesSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
@@ -1024,7 +1032,7 @@ await testAsync('B1 AC1-1：minimal 产四行 brief（无角色人格/无七节�
   }
 })
 
-await testAsync('B1 AC1-1 回归：缺省 role 路径七节逐节渲染 + 不落策略文件', async () => {
+await testAsync('B1 AC1-1 回归：缺省 role 路径七节逐节渲染 + 落 role 轨策略标记（S3 起语义更新，原断言「不落策略文件」过时）', async () => {
   const env = minimalEnvSetup()
   try {
     const { ctx, tools, created } = fakeCtx({ workspaceRegistry: undefined })
@@ -1037,7 +1045,23 @@ await testAsync('B1 AC1-1 回归：缺省 role 路径七节逐节渲染 + 不落
     for (const section of BUILTIN_SECTION_SEVEN) {
       assert.ok(text.includes(section), `role 路径七节回归：缺「${section}」`)
     }
-    assert.equal(existsSync(minimalSessionsDir(env)), false, 'role 路径不落策略文件（S1 只有 minimal 轨写）')
+    // 【断言改写留痕 2026-10-26】原断言（S1）：「role 路径不落策略文件（S1 只有
+    // minimal 轨写）」——S1 阶段事实，已被 S3 需求取代：role 默认收缩需要 per-session
+    // 激活记录（role id 是 roster 键、task/taskbook 是交叉校验硬闸的时序安全输入，
+    // created 时 prompt 尚未入会话），故 role 轨 spawn 落 tier='grant' 标记文件。
+    // 原判据的语义核心（role 路径渲染行为不变）保留在上方七节逐节断言；本断言
+    // 反转为「标记文件在盘上且字段正确」。依据：opt-b1-design.md §2.2/裁 3 +
+    // 任务书产出清单 ①（agent/created 内按会话策略应用 restrict 的前置数据）。
+    assert.equal(existsSync(minimalSessionsDir(env)), true, 'role 轨落策略标记文件（S3 role 默认收缩激活记录）')
+    const marker = new ToolscopeStore({ dataDir: join(env.dir, 'data') }).read(r.sessionId)
+    assert.equal(marker?.personaMode, 'role')
+    assert.equal(marker?.role, 'executor')
+    assert.equal(marker?.toolPolicy?.tier, 'grant')
+    assert.ok(marker?.taskbook?.includes('# 角色任务书'), 'taskbook 全文随标记落盘')
+    assert.equal(marker?.task, '实现 X')
+    // G10 同款披露：返回体 toolscope 字段与磁盘一致
+    assert.equal(r.toolscope?.role, 'executor')
+    assert.ok(r.toolscope?.path?.endsWith('.toolscope.json'))
   } finally {
     minimalEnvTeardown(env)
   }
@@ -1092,6 +1116,553 @@ await testAsync('B1 G8：策略文件写失败 fail-fast——不创建会话、
   } finally {
     minimalEnvTeardown(env)
   }
+})
+
+// ── B1 S3：restrict 管道（toolscope-pipeline / roster 数据 / AC2-1..11）────
+// 假宿主纪律：工具面用**忠实复刻宿主语义**的最小 fake（dsh-tools 活体确认的三条：
+// unknown 名整段抛错 / restrict 返回 disposer / 多次 restrict 交集叠加）——fake 的
+// 抛错行为与宿主 :2906-2908 区逐字对齐，保证「去预检变异必红」对照有效。
+
+/** S3 测试隔离数据目录（.fixture 系 gitignored；用完即清）。 */
+function toolscopeS3Dir() {
+  return fileURLToPath(new URL('./.fixture-toolscope-s3/', import.meta.url))
+}
+
+/** 宿主 restrict 语义最小复刻：unknown 抛错 + disposer + 交集叠加 + own 层豁免。 */
+function fakeToolsService(names, own = []) {
+  const universe = new Set(names)
+  const restrictions = []
+  const calls = []
+  const disposed = []
+  const admits = (name) => restrictions.every((r) => (r.allow === undefined || r.allow.has(name)) && (r.deny === undefined || !r.deny.has(name)))
+  const api = {
+    calls,
+    disposed,
+    activeCount: () => restrictions.length,
+    visibleOf: () => new Set([...universe].filter(admits)),
+    view() {
+      const visible = new Set([...universe].filter(admits))
+      for (const o of own) visible.add(o) // own 层豁免：恒可见且不入 restrictable（P4）
+      return { visible, knownNames: new Set([...universe, ...own]), restrictableNames: new Set(universe) }
+    },
+  }
+  const scoped = {
+    tools: {
+      view: () => api.view(),
+      restrict(filter) {
+        calls.push(filter)
+        const allow = filter.allow
+        const deny = filter.deny
+        if (allow === undefined && deny === undefined) throw new Error('tools.restrict({}) is a no-op')
+        const unknown = [...allow ?? [], ...deny ?? []].filter((n) => !universe.has(n))
+        if (unknown.length > 0) {
+          throw new Error(`tools.restrict() names unknown global tools ${unknown.map((n) => `"${n}"`).join(', ')}`)
+        }
+        const entry = {
+          ...(allow !== undefined ? { allow: new Set(allow) } : {}),
+          ...(deny !== undefined ? { deny: new Set(deny) } : {}),
+        }
+        restrictions.push(entry)
+        let done = false
+        return () => {
+          if (done) return
+          done = true
+          const i = restrictions.indexOf(entry)
+          if (i >= 0) restrictions.splice(i, 1)
+          disposed.push(entry)
+        }
+      },
+    },
+  }
+  return { api, scoped }
+}
+
+/** 假 agent（pipeline 只用 id 与 ctx.tools 两个面）。 */
+function fakeAgent(id, scoped) {
+  return { id, ctx: scoped }
+}
+
+/** 事件捕获假 ctx（install 接线测试用）。 */
+function fakeEventCtx() {
+  const handlers = new Map()
+  const registered = []
+  const ctx = {
+    on(event, fn, opts) {
+      handlers.set(event, fn)
+      registered.push({ event, opts })
+      return () => handlers.delete(event)
+    },
+  }
+  return { ctx, handlers, registered }
+}
+
+/** S3 决策测试共用 roster fixture（手造小表；真实数据测试单独走 POLICY_DIR）。 */
+function s3RosterFixture() {
+  return {
+    version: 1,
+    coreBase: ['read', 'de_broadcast'],
+    scanIgnore: ['de_session'],
+    classMap: { 'read-class': ['read', 'glob', 'grep'], 'write-class': ['write', 'edit'], 'exec-class': ['pwsh'] },
+    familyKeywords: { 'write-class': ['编辑工具'], 'read-class': ['检索'] },
+    roles: {},
+  }
+}
+
+/** S3 测试宇宙（13 真实名 + own 层 agent_reply，AC2-4/7 同款参考基面）。 */
+const S3_UNIVERSE = ['read', 'write', 'edit', 'glob', 'grep', 'pwsh', 'read_image', 'de_broadcast', 'de_session', 'agent_spawn', 'todo_write', 'memory', 'web_search']
+
+await testAsync('S3 mcpPublicName：P1 活体四分支逐字对上（干净直通/大小写保留/有损 hash/超长 hash）', async () => {
+  assert.equal(mcpPublicName('probetest', 'clean_tool'), 'mcp__probetest__clean_tool', '干净名直通')
+  assert.equal(mcpPublicName('probetest', 'MiXeD-Case_123'), 'mcp__probetest__MiXeD-Case_123', '大小写保留')
+  assert.equal(mcpPublicName('probetest', 'has space!'), 'mcp__probetest__has_space__c8b9b295711c', '有损名=normalized+sha256 前 12hex（P1 活体读数）')
+  assert.equal(
+    mcpPublicName('probetest', 'x'.repeat(80)),
+    `mcp__probetest__${'x'.repeat(35)}_0d0a200d2615`,
+    '超长名=截 51+hash（P1 活体读数 0d0a200d2615）',
+  )
+})
+
+await testAsync('S3 looseToolRefs：子串全量+词边界防误报+否定语境豁免（6 候选名夹具）+豁免关闭对照', async () => {
+  const names = ['read', 'write', 'edit', 'de_session', 'agent_spawn', 'grep']
+  const text = [
+    '- 允许：用 grep 检索文本模式',
+    '- 禁止：`write` / `edit` 等一切写盘动作',
+    '- 组织者以 `de_session status/list` 核对产出',
+    '- 协议名 subagent-clarify 不得误报为 subagent',
+    '- 用 read 读文件',
+  ].join('\n')
+  const hits = looseToolRefs(text, names)
+  assert.deepEqual(hits, ['de_session', 'grep', 'read'], '否定行豁免+连字词防误报（subagent-clarify 不命中）')
+  const unfiltered = looseToolRefs(text, names, { skipNegatedLines: false })
+  assert.deepEqual(unfiltered, ['de_session', 'edit', 'grep', 'read', 'write'], '关闭豁免对照：write/edit 回到命中集（豁免生效的差分证据）')
+})
+
+await testAsync('S3 conservativeTaskRefs：反引号显式+族关键词展开；裸名词不猜；scanIgnore 生效', async () => {
+  const base = s3RosterFixture()
+  // 本用例局部扩 universe：de_session 进 classMap 才能检验 scanIgnore（否则「不在宇宙」与「被忽略」不可区分）
+  base.classMap['dispatch-class'] = ['de_session', 'agent_spawn']
+  const text = '用 `web_search` 查资料；需要编辑工具改文件；裸名词 write 不应被猜记；`de_session` 按名单忽略'
+  const refs = conservativeTaskRefs(text, base, ['web_search'])
+  assert.deepEqual(refs, ['web_search', 'write', 'edit'].sort(), '反引号显式（web_search）+ 关键词展开（write/edit）')
+  assert.equal(conservativeTaskRefs('需要 write 但没反引号', base).includes('write'), false, '裸名词不猜')
+  assert.equal(conservativeTaskRefs('`de_session` 引用', base).includes('de_session'), false, 'scanIgnore 名单生效（在宇宙且被忽略）')
+  assert.equal(conservativeTaskRefs('`agent_spawn` 显式需要', base).includes('agent_spawn'), true, '名单外显式引用正常收录（对照）')
+})
+
+await testAsync('S3 AC2-3 unknown 防御三件套：结构化缺失清单+restrict 未调用+会话存活（allow 5 元素含 2 unknown）+去预检变异必红对照', async () => {
+  const dir = toolscopeS3Dir()
+  const store = new ToolscopeStore({ dataDir: dir })
+  const sid = 'session-s3-ac3'
+  store.writeMinimal(sid, { orgId: null, allow: ['read', 'write', 'ghost-tool-a', 'ghost-tool-b', 'pwsh'] })
+  const svc = fakeToolsService(S3_UNIVERSE, ['agent_reply'])
+  const emits = []
+  const pipeline = installToolscopePipeline({
+    ctx: fakeEventCtx().ctx, store, roster: s3RosterFixture(),
+    logger: { warn: () => {}, error: () => {} },
+  })
+  pipeline.notifier.emitFn = (p) => emits.push(p)
+  try {
+    const agent = fakeAgent(sid, svc.scoped)
+    pipeline.onCreated(agent)
+    assert.equal(svc.api.calls.length, 0, 'AC2-3 三件套之二：restrict 未被调用')
+    const wire = [...svc.scoped.tools.view().visible].sort()
+    assert.equal(wire.length, S3_UNIVERSE.length + 1, 'AC2-3 之三：会话创建存活（wire 全工具面含 own 层）')
+    assert.equal(emits.length, 1, 'G9：拒绝通知恰好一条')
+    assert.deepEqual(emits[0].missing, ['ghost-tool-a', 'ghost-tool-b'], 'AC2-3 之一：结构化缺失清单（排序去重）')
+    assert.equal(emits[0].reason, 'unknown-names')
+    // 去预检变异必红对照：同一 allow 直接打宿主形态 restrict 必抛（预检的价值所在）
+    assert.throws(() => svc.scoped.tools.restrict({ allow: ['read', 'write', 'ghost-tool-a', 'ghost-tool-b', 'pwsh'] }), /unknown global tools/, '宿主对 unknown 名整段抛错（去预检即红）')
+  } finally {
+    pipeline.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S3 AC2-2a 同代两次策略=最后一次（lift-before-set）+交集变异对照必红', async () => {
+  const dir = toolscopeS3Dir()
+  const store = new ToolscopeStore({ dataDir: dir })
+  const roster = s3RosterFixture()
+  roster.roles['scan-role'] = ['glob']
+  const sid = 'session-s3-ac2a'
+  store.writeRole(sid, { role: 'scan-role', task: '整理发现', taskbook: 'x' })
+  const svc = fakeToolsService(S3_UNIVERSE)
+  const pipeline = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster, logger: { warn: () => {}, error: () => {} } })
+  try {
+    const agent = fakeAgent(sid, svc.scoped)
+    pipeline.onCreated(agent)
+    const afterFirst = [...svc.api.visibleOf()].sort()
+    assert.ok(!afterFirst.includes('write') && afterFirst.includes('glob'), '第一次收缩生效')
+    pipeline.onCreated(agent) // 同会话重放（resume 语义）：lift 旧设新
+    assert.equal(svc.api.activeCount(), 1, 'lift-before-set：至多一个我方 restrict 生效（不叠加）')
+    assert.equal(svc.api.disposed.length, 1, '旧 disposer 恰被提起一次')
+    assert.deepEqual([...svc.api.visibleOf()].sort(), afterFirst, '同策略重放结果幂等（G13 不变量 9）')
+    // 变异对照（必红证明）：不去旧直接设新 = 宿主交集语义 ⇒ 可见面越收越窄
+    const r1 = svc.scoped.tools.restrict({ deny: ['write'] })
+    const r2 = svc.scoped.tools.restrict({ deny: ['glob'] })
+    const stacked = [...svc.api.visibleOf()].sort()
+    assert.ok(!stacked.includes('write') && !stacked.includes('glob'), '交集对照：without lift 双 deny 都生效（证明上面断言能抓「越收越窄」）')
+    r1()
+    r2()
+  } finally {
+    pipeline.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S3 AC2-2b 跨代 sharedLift：旧代设下的 restrict 可被新代 lift，可见面恢复且无交集叠加', async () => {
+  const dir = toolscopeS3Dir()
+  const store = new ToolscopeStore({ dataDir: dir })
+  const roster = s3RosterFixture()
+  roster.roles['scan-role'] = ['glob', 'grep']
+  const sid = 'session-s3-ac2b'
+  store.writeRole(sid, { role: 'scan-role', task: '检索并汇报', taskbook: 'x' })
+  const svc = fakeToolsService(S3_UNIVERSE)
+  const pipeline1 = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster, logger: { warn: () => {}, error: () => {} } })
+  const pipeline2 = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster, logger: { warn: () => {}, error: () => {} } })
+  try {
+    const agent = fakeAgent(sid, svc.scoped)
+    pipeline1.onCreated(agent)
+    assert.equal(sharedLiftTable().get(sid)?.gen, pipeline1.gen, 'gen1 表项在共享表（globalThis Symbol.for 跨代共享）')
+    assert.ok(!svc.scoped.tools.view().visible.has('write'), 'gen1 策略下 write 被收')
+    // 模拟换代时策略内容变化（preset 热修/表更新）：新代按新表放行 write/edit
+    roster.roles['scan-role'] = ['glob', 'grep', 'write', 'edit']
+    pipeline2.onCreated(agent) // 新代接管：必须提起旧代 restrict 再设新（防交集锁死）
+    assert.equal(svc.api.activeCount(), 1, '跨代无交集叠加（旧代已 lift）')
+    assert.equal(svc.api.disposed.length, 1, '旧代 disposer 被新代提起')
+    assert.equal(sharedLiftTable().get(sid)?.gen, pipeline2.gen, '表项换代')
+    const visible = [...svc.scoped.tools.view().visible].sort()
+    assert.ok(visible.includes('write') && visible.includes('edit'), 'write/edit 恢复可见（按新代策略，不被旧代交集锁死）')
+  } finally {
+    pipeline1.dispose()
+    pipeline2.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S3 AC2-5 dispose 清理：agent/disposed 后 disposer 已调+共享表无残留+二次 disposed 幂等', async () => {
+  const dir = toolscopeS3Dir()
+  const store = new ToolscopeStore({ dataDir: dir })
+  const roster = s3RosterFixture()
+  roster.roles['scan-role'] = ['glob']
+  const sid = 'session-s3-ac5'
+  store.writeRole(sid, { role: 'scan-role', task: 'x', taskbook: 'x' })
+  const svc = fakeToolsService(S3_UNIVERSE)
+  const { ctx, handlers, registered } = fakeEventCtx()
+  const pipeline = installToolscopePipeline({ ctx, store, roster, logger: { warn: () => {}, error: () => {} } })
+  try {
+    assert.deepEqual(registered.map((r) => r.event).sort(), ['agent/created', 'agent/disposed', 'session/disposed'], '三个生命周期事件全接线（global）')
+    const agent = fakeAgent(sid, svc.scoped)
+    handlers.get('agent/created')({ agent })
+    assert.equal(svc.api.activeCount(), 1, '已收缩')
+    handlers.get('agent/disposed')({ agent })
+    assert.equal(svc.api.activeCount(), 0, 'AC2-5：disposer 已调（无残留 restrict）')
+    assert.equal(sharedLiftTable().has(sid), false, '共享表无残留（跨代防线成立的前提）')
+    assert.equal(svc.api.visibleOf().size, S3_UNIVERSE.length, '可见面完全恢复')
+    handlers.get('agent/disposed')({ agent })
+    handlers.get('session/disposed')({ id: sid })
+    assert.equal(svc.api.disposed.length, 1, '二次 disposed 幂等（disposer 只调一次）')
+  } finally {
+    pipeline.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S3 AC2-6/AC2-9 交叉校验硬闸：任务引用被 deny 收掉⇒拒绝应用+缺失清单+restrict 未调用；差分对照（无该引用即应用）与关键词互红正例', async () => {
+  const dir = toolscopeS3Dir()
+  const roster = s3RosterFixture()
+  roster.roles['scan-role'] = ['glob']
+  const store = new ToolscopeStore({ dataDir: dir })
+  const svc = fakeToolsService(S3_UNIVERSE)
+  const pipeline = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster, logger: { warn: () => {}, error: () => {} } })
+  const emits = []
+  pipeline.notifier.emitFn = (p) => emits.push(p)
+  try {
+    // 负例（必红主体）：任务正文裸提 write（保守推导器不猜、宽松检测器抓到、deny 会收掉）
+    const sid1 = 'session-s3-ac6-neg'
+    store.writeRole(sid1, { role: 'scan-role', task: '把结果写入文件，并说明 write 的用法', taskbook: 'x' })
+    pipeline.onCreated(fakeAgent(sid1, svc.scoped))
+    assert.equal(svc.api.calls.length, 0, 'AC2-6：拒绝应用（restrict 未调用）')
+    assert.equal(emits.length, 1, '缺失清单广播恰一条')
+    assert.deepEqual(emits[0].missing, ['write'], '缺失清单=宽松检测器抓到的未覆盖引用')
+    assert.equal(emits[0].reason, 'ref-coverage')
+    // 差分对照（鉴别力证明）：同样的表与宇宙，去掉 write 引用 ⇒ 正常应用（write 确实被收）
+    const sid2 = 'session-s3-ac6-pos'
+    store.writeRole(sid2, { role: 'scan-role', task: '整理发现并汇报', taskbook: 'x' })
+    pipeline.onCreated(fakeAgent(sid2, svc.scoped))
+    assert.equal(svc.api.calls.length, 1, '无未覆盖引用 ⇒ 正常应用')
+    assert.ok(!svc.api.visibleOf().has('write'), '对照证明：write 在无引用时确会被收（拒绝来自覆盖闸，非误报）')
+    // 收拾 sid2 的 restrict（共享 fake 服务，防交集污染 sid3 断言）
+    const prevEntry = sharedLiftTable().get(sid2)
+    prevEntry?.dispose?.()
+    sharedLiftTable().delete(sid2)
+    // AC2-9 互红正例：族关键词路径（保守推导器）兜住显式需求 ⇒ 应用且保留
+    const sid3 = 'session-s3-ac9-pos'
+    store.writeRole(sid3, { role: 'scan-role', task: '需要编辑工具修正结论', taskbook: 'x' })
+    pipeline.onCreated(fakeAgent(sid3, svc.scoped))
+    assert.equal(svc.api.activeCount(), 1, '关键词路径：needed 含 write/edit ⇒ 应用收缩')
+    assert.ok(svc.api.visibleOf().has('write') && svc.api.visibleOf().has('edit'), '族表展开保住 write/edit（双向对账的保守侧生效）')
+  } finally {
+    pipeline.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S3 AC2-7/AC2-4：explore 默认收缩正例（真实 roster）——首请求可见面不含 write/edit/de_session；own 层豁免（agent_reply 恒可见且不入名单）', async () => {
+  const dir = toolscopeS3Dir()
+  const data = loadRosterData(POLICY_DIR)
+  assert.equal(data.error, null, `真实策略数据应无损坏：${data.error ?? ''}`)
+  const store = new ToolscopeStore({ dataDir: dir, presets: data.presets })
+  const sid = 'session-s3-ac7'
+  store.writeRole(sid, { role: 'explore', task: '在代码库中检索 auth 相关模式并汇报', taskbook: 'x' })
+  const svc = fakeToolsService(S3_UNIVERSE, ['agent_reply'])
+  const pipeline = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster: data.roster, logger: { warn: () => {}, error: () => {} } })
+  try {
+    pipeline.onCreated(fakeAgent(sid, svc.scoped))
+    const visible = [...svc.scoped.tools.view().visible].sort()
+    // P1 前置条件满足：参考基面含 de_session（探针报告盘点节），AC2-7 非恒红
+    assert.ok(S3_UNIVERSE.includes('de_session'), 'P1 前置：universe 含 de_session（条件化不恒红）')
+    assert.ok(!visible.includes('write'), 'AC2-7：write 被收')
+    assert.ok(!visible.includes('edit'), 'AC2-7：edit 被收')
+    assert.ok(!visible.includes('de_session'), 'AC2-7：de_session 被收')
+    for (const keep of ['read', 'glob', 'grep', 'pwsh', 'de_broadcast']) {
+      assert.ok(visible.includes(keep), `explore 保留 ${keep}（roster/coreBase）`)
+    }
+    assert.ok(visible.includes('agent_reply'), 'AC2-4：own 层豁免——收缩后 own 层仍可见')
+    const payloads = svc.api.calls
+    assert.equal(payloads.length, 1)
+    const named = [...(payloads[0].deny ?? []), ...(payloads[0].allow ?? [])]
+    assert.equal(named.includes('agent_reply'), false, 'AC2-4：own 层名不入 restrict 名单（P4：不在 restrictableNames，列入即 unknown 必拒）')
+  } finally {
+    pipeline.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S3 AC2-8：executor 席保留写类（真实 roster）', async () => {
+  const dir = toolscopeS3Dir()
+  const data = loadRosterData(POLICY_DIR)
+  const store = new ToolscopeStore({ dataDir: dir, presets: data.presets })
+  const sid = 'session-s3-ac8'
+  store.writeRole(sid, { role: 'executor', task: '实现 X 并跑测试', taskbook: 'x' })
+  const svc = fakeToolsService(S3_UNIVERSE)
+  const pipeline = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster: data.roster, logger: { warn: () => {}, error: () => {} } })
+  try {
+    pipeline.onCreated(fakeAgent(sid, svc.scoped))
+    const visible = [...svc.scoped.tools.view().visible]
+    for (const keep of ['write', 'edit', 'pwsh', 'read', 'glob', 'grep', 'todo_write', 'de_broadcast']) {
+      assert.ok(visible.includes(keep), `AC2-8：executor 保留 ${keep}`)
+    }
+    assert.ok(!visible.includes('agent_spawn'), 'executor 收掉未引用的派活类（agent_spawn 走 organizer 面）')
+  } finally {
+    pipeline.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S3 AC2-10 覆盖语义：grant 放权并入 needed / none 豁免跳过 / role×full 拒绝（禁整集替换）', async () => {
+  const dir = toolscopeS3Dir()
+  const roster = s3RosterFixture()
+  roster.roles['scan-role'] = ['glob']
+  const store = new ToolscopeStore({ dataDir: dir })
+  const svc = fakeToolsService(S3_UNIVERSE)
+  const pipeline = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster, logger: { warn: () => {}, error: () => {} } })
+  try {
+    // (a) grant 放权：显式 allow 并入 needed ⇒ grep 保留
+    const sid1 = 'session-s3-ac10a'
+    store.write(sid1, { sessionId: sid1, personaMode: 'role', role: 'scan-role', toolPolicy: { tier: 'grant', allow: ['grep'], deny: [] } })
+    pipeline.onCreated(fakeAgent(sid1, svc.scoped))
+    assert.ok(svc.api.visibleOf().has('grep'), 'grant 放权：grep 保留')
+    assert.equal(svc.api.activeCount(), 1)
+    // 收拾 sid1 的 restrict（共享 fake 服务，防污染后续分案的可见面断言）
+    const prevEntry = sharedLiftTable().get(sid1)
+    prevEntry?.dispose?.()
+    sharedLiftTable().delete(sid1)
+    // (b) tier none：豁免收缩（零 restrict 调用增量）
+    const callsBefore = svc.api.calls.length
+    const sid2 = 'session-s3-ac10b'
+    store.write(sid2, { sessionId: sid2, personaMode: 'role', role: 'scan-role', toolPolicy: { tier: 'none', allow: [], deny: [] } })
+    pipeline.onCreated(fakeAgent(sid2, svc.scoped))
+    assert.equal(svc.api.calls.length, callsBefore, 'none：不新增 restrict 调用')
+    assert.equal(svc.api.visibleOf().size, S3_UNIVERSE.length, 'none：全工具面')
+    // (c) role 轨禁整集替换：tier=full 拒绝（fail-open 不收缩）
+    const sid3 = 'session-s3-ac10c'
+    store.write(sid3, { sessionId: sid3, personaMode: 'role', role: 'scan-role', toolPolicy: { tier: 'full', allow: ['read'], deny: [] } })
+    pipeline.onCreated(fakeAgent(sid3, svc.scoped))
+    assert.equal(svc.api.calls.length, callsBefore, '禁整集替换：不应用（零 restrict 增量）')
+    const decision = decideToolscope({
+      policy: store.read(sid3), roster, restrictable: new Set(S3_UNIVERSE), personaText: '', taskText: '',
+    })
+    assert.equal(decision.action, 'refuse')
+    assert.equal(decision.reason, 'role-full-forbidden')
+  } finally {
+    pipeline.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S3 AC2-11 fail-open 核对：roster 不可用/缺角色 ⇒ 不收缩；构建期报告列未入库角色（2 缺失夹具）', async () => {
+  const dir = toolscopeS3Dir()
+  const roster = s3RosterFixture()
+  roster.roles['scan-role'] = ['glob']
+  const store = new ToolscopeStore({ dataDir: dir })
+  const svc = fakeToolsService(S3_UNIVERSE)
+  // (a) roster null（数据不可用）⇒ grant 跳过
+  const p1 = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster: null, logger: { warn: () => {}, error: () => {} } })
+  const sid1 = 'session-s3-ac11a'
+  store.writeRole(sid1, { role: 'scan-role', task: 'x', taskbook: 'x' })
+  p1.onCreated(fakeAgent(sid1, svc.scoped))
+  assert.equal(svc.api.calls.length, 0, 'roster 不可用：fail-open 不收缩')
+  p1.dispose()
+  // (b) 缺角色 ⇒ skip role-not-in-roster
+  const p2 = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster, logger: { warn: () => {}, error: () => {} } })
+  const sid2 = 'session-s3-ac11b'
+  store.writeRole(sid2, { role: 'ghost-role', task: 'x', taskbook: 'x' })
+  const decision = decideToolscope({ policy: store.read(sid2), roster, restrictable: new Set(S3_UNIVERSE), personaText: '', taskText: '' })
+  assert.equal(decision.action, 'skip')
+  assert.equal(decision.reason, 'role-not-in-roster')
+  p2.onCreated(fakeAgent(sid2, svc.scoped))
+  assert.equal(svc.api.calls.length, 0, '缺角色：不收缩')
+  p2.dispose()
+  // (c) 构建期报告列未入库角色（AC2-11 + G11）
+  const base = roster
+  const roleTable = { explore: ['read'], executor: ['read', 'write'] }
+  const fakeRoles = [
+    { id: 'explore', tier: 'LOW' }, { id: 'executor', tier: 'MEDIUM' },
+    { id: 'ghost-a', tier: 'LOW' }, { id: 'ghost-b', tier: 'HIGH' },
+  ]
+  const report = buildCoverageReport({ roles: fakeRoles, base, roleTable, generatedAt: '2026-10-26T00:00:00Z' })
+  assert.deepEqual(report.missingRoles, ['ghost-a', 'ghost-b'], '报告列未入库角色')
+  assert.ok(report.lines.join('\n').includes('未入库角色（运行期 fail-open 不收缩）：ghost-a、ghost-b'), '报告正文显式披露')
+})
+
+await testAsync('S3 G9 通知去重：同会话×同缺失集只发一次/缺失集变更再发/严重度升级重发/reset 清键', async () => {
+  const emits = []
+  const notifier = new DedupNotifier((p) => emits.push(p))
+  const key1 = refuseKey('session-x', ['write'])
+  assert.equal(notifier.notify(key1, { sessionId: 'session-x', missing: ['write'] }), true, '首发')
+  assert.equal(notifier.notify(key1, { sessionId: 'session-x', missing: ['write'] }), false, '同键去重（不重复广播）')
+  assert.equal(emits.length, 1)
+  const key2 = refuseKey('session-x', ['write', 'grep'])
+  assert.equal(notifier.notify(key2, { sessionId: 'session-x', missing: ['write', 'grep'] }), true, '缺失集变更=新类别键，再发')
+  assert.equal(notifier.notify(key1, { sessionId: 'session-x', missing: ['write'] }, 'critical'), true, '严重度升级允许重发')
+  assert.equal(emits.length, 3)
+  notifier.reset(key1)
+  assert.equal(notifier.notify(key1, { sessionId: 'session-x', missing: ['write'] }), true, 'reset 后同键可再发（条件解除语义）')
+  assert.notEqual(refuseKey('a', ['x']), refuseKey('b', ['x']), '会话维度参与类别键')
+})
+
+await testAsync('S3 漂移门（R9 机检）：真实 policies 数据形状合法+eval-coding 与 MINIMAL_TOOLSET_FULL 相等（转正一致性）+23 角色 roles 文件与内存重扫 deep-equal', async () => {
+  const data = loadRosterData(POLICY_DIR)
+  assert.equal(data.error, null, `数据加载无错误：${data.error ?? ''}`)
+  assert.equal(data.base.version, 1)
+  assert.deepEqual(data.base.coreBase, ['read', 'de_broadcast'], 'coreBase=设计钉死的 read+de_broadcast')
+  assert.deepEqual(data.presets['eval-coding'].tools, [...MINIMAL_TOOLSET_FULL], 'eval-coding 转正名单与兜底常量相等（单一事实源漂移门）')
+  assert.ok(Array.isArray(data.presets['read-only'].tools) && data.presets['read-only'].tools.length >= 3, 'read-only 档在位（≥3 元素）')
+  assert.equal(Object.keys(data.roles).length, 23, '23 角色全入库')
+  for (const role of ROLES) {
+    const expected = scanRoleReferences(role, data.base)
+    assert.deepEqual(data.roles[role.id], expected.rostered, `漂移门：${role.id} 的 roles 文件与内存重扫一致（人格/模板变了须重跑 node tools/scan-role-toolrefs.mjs）`)
+  }
+  assert.equal(compareHostVersion('0.1.7-rc.2', '0.1.7-rc.2'), 'match')
+  assert.equal(compareHostVersion('0.1.7-rc.2', '0.2.0'), 'mismatch')
+  assert.equal(compareHostVersion('0.1.7-rc.2', null), 'unknown')
+})
+
+await testAsync('S3 AC2-1 read-only 预置档：wire 可见面不含 write∪exec∪dispatch 类（真实 presets 数据，12 名宇宙）', async () => {
+  const dir = toolscopeS3Dir()
+  const data = loadRosterData(POLICY_DIR)
+  const store = new ToolscopeStore({ dataDir: dir, presets: data.presets })
+  const sid = 'session-s3-ac1'
+  const readOnlyTools = data.presets['read-only'].tools
+  store.write(sid, {
+    sessionId: sid, personaMode: 'minimal', toolPolicy: { tier: 'full', allow: readOnlyTools, deny: [] },
+    replyChannel: 'org', orgId: null, preset: 'read-only',
+  })
+  const svc = fakeToolsService(S3_UNIVERSE, ['agent_reply'])
+  const pipeline = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster: data.roster, logger: { warn: () => {}, error: () => {} } })
+  try {
+    pipeline.onCreated(fakeAgent(sid, svc.scoped))
+    const visible = [...svc.scoped.tools.view().visible].sort()
+    for (const banned of ['write', 'edit', 'pwsh', 'agent_spawn', 'de_session', 'todo_write', 'memory']) {
+      assert.ok(!visible.includes(banned), `AC2-1：read-only 档不含 ${banned}（write/exec/dispatch 类）`)
+    }
+    for (const kept of readOnlyTools) {
+      assert.ok(visible.includes(kept), `read-only 档保留 ${kept}`)
+    }
+    assert.ok(visible.includes('agent_reply'), 'own 层 agent_reply 自动豁免可见（读类+agent_reply 语义）')
+    assert.equal(svc.api.calls.length, 1)
+    assert.deepEqual(svc.api.calls[0].allow, [...readOnlyTools], 'allow 按最终名透传（含 MCP 名同理；顺序=策略名单原序）')
+  } finally {
+    pipeline.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S3 留存清扫（M13）：死会话按 mtime 有界清理、活会话永不清理、roster 无 retention 配置时零动作', async () => {
+  assert.deepEqual(
+    planRetentionSweep({
+      files: ['aaa1.toolscope.json', 'aaa2.toolscope.json', 'aaa3.toolscope.json', 'aaa4.toolscope.json'],
+      mtimeOf: (f) => Number(f.replace(/\D/g, '')),
+      sessionIdOf: (f) => `session-${f.replace(/\D/g, '')}`,
+      keep: new Set(['session-4']),
+      maxFiles: 2,
+    }),
+    ['aaa1.toolscope.json'],
+    '死会话按 mtime 新→旧保留 2 份，最旧被清；活会话保留',
+  )
+  assert.deepEqual(planRetentionSweep({ files: ['a.toolscope.json'], mtimeOf: () => 1, sessionIdOf: () => 's', keep: new Set(), maxFiles: 0 }), [], 'maxFiles=0 ⇒ 零动作')
+  // 管线集成：活会话（tier none 只注册存活）+2 个死文件 ⇒ maxFiles=1 只清最旧死文件
+  const dir = toolscopeS3Dir()
+  const roster = s3RosterFixture()
+  roster.retention = { maxFiles: 1 }
+  const store = new ToolscopeStore({ dataDir: dir })
+  const sessionsDir = join(dir, 'sessions')
+  mkdirSync(sessionsDir, { recursive: true })
+  const mk = (sid, name) => {
+    const p = join(sessionsDir, `${Buffer.from(sid, 'utf8').toString('base64url')}.toolscope.json`)
+    writeFileSync(p, '{}\n', 'utf8')
+    return p
+  }
+  const pDeadOld = mk('session-dead-old')
+  const pDeadNew = mk('session-dead-new')
+  const pLive = mk('session-s3-live')
+  const pForeign = join(sessionsDir, 'irrelevant.json')
+  writeFileSync(pForeign, '{"advisor":"config-shape"}\n', 'utf8')
+  const now = Date.now()
+  utimesSync(pDeadOld, new Date(now - 100000), new Date(now - 100000))
+  utimesSync(pDeadNew, new Date(now - 1000), new Date(now - 1000))
+  utimesSync(pLive, new Date(now), new Date(now))
+  const svc = fakeToolsService(S3_UNIVERSE)
+  const pipeline = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster, logger: { warn: () => {}, error: () => {} } })
+  try {
+    store.write('session-s3-live', { sessionId: 'session-s3-live', personaMode: 'role', role: 'scan-role', toolPolicy: { tier: 'none', allow: [], deny: [] } })
+    pipeline.onCreated(fakeAgent('session-s3-live', svc.scoped))
+    pipeline.onDisposed('session-some-dead-id')
+    assert.equal(existsSync(pLive), true, '活会话策略文件保留')
+    assert.equal(existsSync(pDeadOld), false, '最旧死文件被清（maxFiles=1）')
+    assert.equal(existsSync(pDeadNew), true, '较新死文件保留')
+    assert.equal(existsSync(pForeign), true, '只清 .toolscope.json 后缀（同目录 advisor 配置文件不误删）')
+  } finally {
+    pipeline.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('S3 install 接线：enabled=false 或缺 ctx.on ⇒ null（插件其余能力不受影响）；dispose 解除全部监听', async () => {
+  assert.equal(resolveConfig({}).toolscopeEnabled, true, '缺省开（用户裁决基线）')
+  assert.equal(resolveConfig({ toolscopeEnabled: false }).toolscopeEnabled, false, '消融开关可关')
+  const dir = toolscopeS3Dir()
+  const store = new ToolscopeStore({ dataDir: dir })
+  const roster = s3RosterFixture()
+  assert.equal(installToolscopePipeline({ ctx: {}, store, roster, logger: { warn: () => {}, error: () => {} } }), null, '缺 ctx.on ⇒ null（advisor wiring 同款降级）')
+  assert.equal(installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster, enabled: false, logger: { warn: () => {}, error: () => {} } }), null, 'enabled=false ⇒ null（消融臂）')
+  const { ctx, handlers } = fakeEventCtx()
+  const pipeline = installToolscopePipeline({ ctx, store, roster, logger: { warn: () => {}, error: () => {} } })
+  assert.equal(handlers.size, 3)
+  pipeline.dispose()
+  assert.equal(handlers.size, 0, 'dispose 解除全部监听')
+  assert.equal(sharedLiftTable().size, 0, 'dispose 后共享表清空（无跨代残留）')
+  rmSync(dir, { recursive: true, force: true })
 })
 
 // ── settings 接线：三档模型运行时配置（设置页同源） ───────────────────────
