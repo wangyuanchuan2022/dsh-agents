@@ -17,7 +17,7 @@ import { composeTaskbook, preflight, stamp, dedupeEvidencePath } from '../lib/ta
 import { loadPersona, listPersonaFiles, splitFrontmatter } from '../lib/persona.js'
 import { listPresets, RoleSpawner } from '../lib/spawn.js'
 import { parseYamlMini, YamlMiniError } from '../lib/yaml-mini.js'
-import { loadDiskPreset, listDiskPresets, mountDiskPreset } from '../lib/disk-presets.js'
+import { loadDiskPreset, listDiskPresets, mountDiskPreset, importComponent } from '../lib/disk-presets.js'
 import { resolveConfig, apply, Config } from '../lib/index.js'
 import { ToolscopeStore, toolscopePath, normalizeToolscope, MINIMAL_TOOLSET_FULL, TOOLSCOPE_SCHEMA_VERSION } from '../lib/toolscope.js'
 import {
@@ -2616,8 +2616,15 @@ await testAsync('S5-PhaseB 选项③ 挂载契约：plugin 优先/apply 兜底/g
   )
 })
 
-await testAsync('S5-PhaseB 选项③ spawn 链：磁盘目录优先（宿主服务缺失也能挂载）——DSH_HOME fixture 全链', async () => {
-  const home = fileURLToPath(new URL('./.fixture-dsh-home/', import.meta.url))
+await testAsync('S5-PhaseB 选项③ importComponent 双路链：机器无关负例（不存在的组件名，直 import 与宿主根 resolve 双失败必须响亮抛错）', async () => {
+  await assert.rejects(
+    () => importComponent('@fake/nonexistent-component-xyz'),
+    (e) => String(e.message).includes('@fake/nonexistent-component-xyz'),
+    '双路失败的错误信息必须点名组件（供挂载层 fail-fast 取用）',
+  )
+})
+
+await testAsync('S5-PhaseB 选项③ spawn 链：磁盘目录优先（宿主服务缺失也能挂载）——DSH_HOME fixture 全链', async () => {  const home = fileURLToPath(new URL('./.fixture-dsh-home/', import.meta.url))
   const presetDir = join(home, '.agent-presets', 'disk-eval')
   mkdirSync(presetDir, { recursive: true })
   writeFileSync(join(presetDir, 'preset.yml'), 'name: Disk Eval\norder: 50\n', 'utf8')
