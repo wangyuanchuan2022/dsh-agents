@@ -83,7 +83,7 @@ B2 段（注入面裁剪 + 按需 help + 按会话单授，2026-10-28）条目�
 - `fc41b7c` — B0 终验措辞序（纯排版）。
 - `79657cc` — B1 S5 文档增量：README 三形态特性 / agent_reply 行 / B1 配置键 / 计数账；ARCHITECTURE 新增节 2.2 B1 增量。
 - `d57c1bf` — PhaseB 选项③ 文档增量：ARCHITECTURE 新增节 2.3 独立预设挂载；README 特性节与目录结构同步。
-- **B2 S4 文档同步（2026-10-28，commit 短哈希待补）**：README 三工具表补 `help` 与 `allowTools` 单授一句、特性节补注入面裁剪（面A 2663→2225）、测试计数 356→368；ARCHITECTURE 三工具小节补 help 单源/allowTools、`tools/` 19→20（新增 `opt-b2-s3-gate.mjs` 行）、测试断言 356→368、B1 工具描述增量账标注为历史快照；本文件 B2 条目见 Added/Changed（不预填哈希）。
+- **B2 S4 文档同步（2026-10-28，`8ded417`）**：README 三工具表补 `help` 与 `allowTools` 单授一句、特性节补注入面裁剪（面A 2663→2225）、测试计数 356→368；ARCHITECTURE 三工具小节补 help 单源/allowTools、`tools/` 19→20（新增 `opt-b2-s3-gate.mjs` 行）、测试断言 356→368、B1 工具描述增量账标注为历史快照；本文件 B2 条目见 Added/Changed（不预填哈希）。
 
 ### 注记
 
