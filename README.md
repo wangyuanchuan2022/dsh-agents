@@ -50,7 +50,7 @@ complete task brief — plus 25 workflow skills that orchestrate them end to end
 - **25 件工作流技能**（口径：`skills/` 下 25 个 SKILL.md = 25 个技能目录）：入口 2 + 流水线 4 + 协作 5 + 方法论 13 + 顾问 1。
 - **内置 advisor 顾问是被动机制、宿主侧工具面为零**——每个 turn 后自动评审主会话可见消息，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**，不派活也不会被 `agent_spawn` 触发；模型完全手动指定、无任何兜底。V3 已实现 repository-aware 评审：只读检索（文件树/git/搜索 + 符号精读）、agentic 工具循环（模型自调只读检索工具，不占宿主工具位）、决策保护（`docs/DECISIONS.md`）、规则预筛（普通聊天零 token）、停止五类与 blocker 证据下限。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。
 - **11 份评审清单**按扩展名/专项路由（go / ts / python / kotlin / rust / csharp / cpp / sql / pytorch / a11y / performance）。
-- **三种派活形态与 per-session 工具面（R3-B1）**——`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填、**独立预设挂载**（独立插件定位：宿主 `agentPresets` 服务缺失时磁盘装载路独立成立，不依赖宿主 registry）：解析序 = 磁盘目录 `~/.dsh/.agent-presets/` 优先（零依赖 YAML 子集解析 + 组件级挂载契约，未知键/未知组件 fail-fast 列名；组件导入宿主包根兜底）→ 宿主 registry 兜底；解析失败 fail-fast 拒绝派活并列可用清单（零孤儿会话），存在性校验双路兼容 bundle 迁移的 registry-only 预设）；**role 轨默认工具面收缩**（构建期扫 23 角色人格产 per-role 引用表，运行期 restrict 收缩：交集防叠 + 跨代 lift 防线 + 双向对账 fail-open + 收缩生效率读数组）；**极简回复通道**（minimal×org 会话注册 own 层 `agent_reply`：目标钉死 orgId、schema 无 target 参数、唤醒白名单 + 滑动窗口频控 + 连降熔断；投递与派活决策审计同落 `reply-audit.jsonl`（尺寸阈值轮转有界留存））。静态注入面零增长（口径B 1993/2181/2183 锚定），工具描述增量单独计量（合计 ≤400B 上界）。
+- **三种派活形态与 per-session 工具面（R3-B1）**——`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填、**独立预设挂载**（独立插件定位：宿主 `agentPresets` 服务缺失时磁盘装载路独立成立，不依赖宿主 registry）：解析序 = 磁盘目录 `~/.dsh/.agent-presets/` 优先（零依赖 YAML 子集解析 + 组件级挂载契约，未知键/未知组件 fail-fast 列名；组件导入宿主包根兜底）→ 宿主 registry 兜底；解析失败 fail-fast 拒绝派活并列可用清单（零孤儿会话），存在性校验双路兼容 bundle 迁移的 registry-only 预设）；**role 轨默认工具面收缩**（构建期扫 23 角色人格产 per-role 引用表，运行期 restrict 收缩：交集防叠 + 跨代 lift 防线 + 双向对账 fail-open + 收缩生效率读数组）；**极简回复通道**（minimal×org 会话注册 own 层 `agent_reply`：目标钉死 orgId、schema 无 target 参数、唤醒白名单 + 滑动窗口频控 + 连降熔断；投递与派活决策审计同落 `reply-audit.jsonl`（尺寸阈值轮转有界留存））。静态注入面零增长（口径B 1993/2181/2183 锚定），工具描述增量单独计量（合计 ≤400B 上界）。**B2 注入面裁剪**：三工具工具级 description 裁为三行 catalog（各 ≤90 码点），全量语义走 `agent_roles action='help'` 按需披露（迁移前原文逐字静态存档 + 活 action 参数表现拼）；面A 工具面 2663 → 2225 码点（工具级 783 → 255）。
 - **两个确定性机检工具**：`crgate`（评审证据链 freeze/anchor/finalize）与 `publish-scan`（发布前脱敏六类扫描 + 三值裁定）。
 - **配置错就报错**——未知档位、未知角色、半个路由、非法 `clarifyMode` 一律抛错，不静默兜底。
 
@@ -96,9 +96,9 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 
 | 工具 | 作用 |
 |---|---|
-| `agent_roles` | 角色目录 / 单角色详情 / **档位路由表体检**。动作：`list`（可按泳道、档位过滤）、`show`、`tiers`、`set`（改某档 provider+model，与设置页同源）、`reset`。 |
+| `agent_roles` | 角色目录 / 单角色详情 / **档位路由表体检**。动作：`list`（可按泳道、档位过滤）、`show`、`tiers`、`set`（改某档 provider+model，与设置页同源）、`reset`、`help`（三工具全量帮助；工具级描述只留 catalog 行，全量语义按需披露）。 |
 | `agent_taskbook` | **只合成任务书，不派活**：角色卡 + 职责边界 + 人格细则 + 任务 + 交付验收 + 澄清模式 + 汇报回收，附派活前置三问与本次路由解析结果。 |
-| `agent_spawn` | **一步派活**：解析档位 → 注入人格与任务书 → 创建标准 DSH 会话并立即开跑；`dryRun=true` 只回路由与任务书；`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填）；`tier` / `provider` / `model` 可越档但会记入返回（可审计，不阻拦）。 |
+| `agent_spawn` | **一步派活**：解析档位 → 注入人格与任务书 → 创建标准 DSH 会话并立即开跑；`dryRun=true` 只回路由与任务书；`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填）；`tier` / `provider` / `model` 可越档但会记入返回（可审计，不阻拦）；**`allowTools` 按会话单授**额外工具最终注册名（如 `mcp__rea__rea_call`）——role 轨并入放权集、minimal 轨并入预设集（不替换），未知名不生效并在 created 期告警。 |
 | `agent_reply`（own 层） | **仅 minimal×org 会话可见**（agent/created 按策略注册，不占宿主工具位）：回复组织者——目标注册时钉死为策略文件 orgId（schema 无 target 参数）；缺省只投不唤醒，对方 idle 唤醒 / running 同回合注入；受滑动窗口频控与连降熔断约束（V3-2）。 |
 
 **边界**：本插件只**创建**会话，不负责 `wake` / `status` / `list` / `rename`——那些归 `de_session`。
@@ -250,7 +250,7 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 ## 测试
 
 ```bash
-node tests/run.mjs                    # 主测试（356 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
+node tests/run.mjs                    # 主测试（368 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ B2 注入面组（catalog 行/help 单源/allowTools 单授）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
 node tools/crgate.test.mjs            # 65 断言
 node tools/publish-scan.test.mjs      # 47 断言
 node tests/skill-sync-check.mjs       # 计数漂移门 + .gitattributes 门（文档里的技能件数必须等于磁盘实测）

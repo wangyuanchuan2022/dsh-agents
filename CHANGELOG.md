@@ -8,6 +8,8 @@
 
 本节覆盖 R3-B0（死重清除）与 R3-B1 全程（2026-10-26 → 2026-10-27，`fc41b7c`..`e522b9b`）。
 
+B2 段（注入面裁剪 + 按需 help + 按会话单授，2026-10-28）条目见下方 **B2 ①/②/③**——代码与测试落于 `b745068`（S1+S1.5+S2），门/读数/文档落于本文件同批的 S3+S4 commit。
+
 ### Added
 
 **B1 ① 极简条件人格（minimal 派活形态）**
@@ -37,8 +39,27 @@
 
 - `40f5fad` — 三件落地：`lib/yaml-mini.js` 最小 YAML 子集解析器（嵌套 map/seq、单引号 / 整数 / 布尔、全行注释；flow / 双引号 / 多行标量 / TAB / 锚点 / 标签 fail-fast 列行号）+ `lib/disk-presets.js` 磁盘装载（`listDiskPresets` / `loadDiskPreset` / `mountDiskPreset`：未知键列名、目录存在即权威损坏不回落宿主、组件级挂载契约）+ spawn 链解析序（磁盘目录优先 → 宿主 registry 兜底 → 双路不可得 fail-fast）。
 
+**B2 ① 注入面裁剪与按需 help 单源（catalog 行 + `agent_roles action='help'`）**
+
+- 三工具工具级 description 裁为手工 catalog 行（各 ≤90 码点，实测 90/78/87）；常驻只留路由决策信息（分工互指 / 何时用 / 查 tiers·只创建·dryRun 三条安全指针），全量语义按需披露。面A 工具面 **2663 → 2225 码点**（Δ−438），工具级 **783 → 255**。
+- 新增 `STATIC_ARCHIVE`（迁移前工具级原文逐字存档，267/191/325 码点）+ `composeHelp(活 definitions)` 纯函数：help 全量 = 3 段存档原文 + 活 action 参数表现拼；走既有 `message` 字段返回，**不新增参数、不扩 output.schema**。
+- `rolesTool` 增 `action='help'` 分支；未知 action 合法清单增补 `help`；help/未知 action 各写一条只读审计行（`kind:'help'` / `kind:'tool-error'`，fail-open：审计缺失或抛错绝不影响工具返回）。
+- 合同测试：catalog ≤90 + 必备子串、PROMISES 正向断言、Q1/Q2 反向漂移门、Q3 存档 sha256 fixture（3/3）、9 变异体注入必红（红→显式还原→绿）。
+
+**B2 ② `agent_spawn.allowTools` 按会话单授工具入口（R-13）**
+
+- 新参数 `allowTools`（数组，元素=工具最终注册名；形状校验 fail-fast，去重保序）：role 轨并入 grant 放权集；minimal 轨走 `extraAllow` **append**（不替换预设集，`input.allow` 替换语义保持）；created 期未知名 fail-closed 收缩照常 + `DedupNotifier` warning 告警（类别键与 refuse 分源）；输出披露 `allowedTools` + notes「单授 N 项」。
+- 面A 成本入档：`agent_spawn.paramDescs` 581 → 658（+77 = allowTools 描述码点）。
+
+**B2 ③ S3 净注入门（可失败机测）**
+
+- 新增 `tools/opt-b2-s3-gate.mjs`：G0 前锚锁定（S0 留档 2663/2663/5655、工具级 783、descCount 54；缺 `tools.items` 结构 ⇒ 解析 fail-closed，面D 文件冒充面A 基线直接红）/ G1 面A 净增 ≤0 / G2 裁剪到位（各 ≤90、合计 ≤255，零容差）/ G3 面D 不变式（1993/2181/2183 + meanTotal 6133 + maxTotal 6480，只码点）/ G4 参数级不缩水；G5 并列读数 H=1169、H_static=783、H_action=332、H_struct=54、回本轮数 R=3（估算口径）。`--selftest` 7/7（原样全绿 + MUT-G0..G5 六变异必红，含「只裁 1 字符」与「面D 冒充基线」）。读数档案 `agent-out/opt-b2-s3-readings.md`。
+
+
 ### Changed
 
+- **B2 工具面描述来源变更（2026-10-28）**：三工具 description 从迁移前全文改为 catalog 行；`agent_roles` 新增 `help` action。参数级 description、任务书渲染、persona、策略数据零改动（面A 参数级 1527 → 1617 的 +90 全部来自 action `help=` 增补 +13 与 `allowTools` 新增 +77）。
+- **测试账（B2）**：主套件 356 → 368（新增 12 用例，既有断言零删改）；`tools/` 19 → 20 文件（新增 `opt-b2-s3-gate.mjs`）。
 - `0aef7ff` — **B0** 人格正文全部 DSH 原生化收尾：18 行 / 8 文件实改（裸 CC 工具名 → DSH 原生指令 + inline「对应原 X」注记），body_hash 刷新 23/23。
 - `2b8b7a6` — **B0** 任务书删原第八节「Claude Code → DSH 工具映射」：七节定型（节号空洞保留）、兜底句「未列工具视作不可用」移入职责与边界节、run.mjs 反向断言钉死。
 - `2d013dc` — **基线行为变更**：role 轨会话默认按构建期推导的 per-role 引用表收缩工具面（fail-open 全路径保障；`toolscopeEnabled=false` 整链停用可回退）。
@@ -62,10 +83,11 @@
 - `fc41b7c` — B0 终验措辞序（纯排版）。
 - `79657cc` — B1 S5 文档增量：README 三形态特性 / agent_reply 行 / B1 配置键 / 计数账；ARCHITECTURE 新增节 2.2 B1 增量。
 - `d57c1bf` — PhaseB 选项③ 文档增量：ARCHITECTURE 新增节 2.3 独立预设挂载；README 特性节与目录结构同步。
+- **B2 S4 文档同步（2026-10-28，commit 短哈希待补）**：README 三工具表补 `help` 与 `allowTools` 单授一句、特性节补注入面裁剪（面A 2663→2225）、测试计数 356→368；ARCHITECTURE 三工具小节补 help 单源/allowTools、`tools/` 19→20（新增 `opt-b2-s3-gate.mjs` 行）、测试断言 356→368、B1 工具描述增量账标注为历史快照；本文件 B2 条目见 Added/Changed（不预填哈希）。
 
 ### 注记
 
 - **四轮 fail-fast 拦截链（Phase B 端到端彩排，全程零孤儿会话）**：逐次拦截类型——① 缺省预设 `minimal` 本机不存在（列可用清单，防线正确）；② registry 与 `~/.dsh/.agent-presets/` 两套清单分裂拦「Unknown agent preset: minimal-eval」→ 转用户裁决（选项③）；③ 组件导入失败拦（→ `6000ab9`）；④ 用户手写预设 persona 行字段错（`text` ≠ schema 必填 `prefix`）被宿主 schema 校验拦；⑤ 存在性校验误拦 bundle 预设（→ `e522b9b`）。第四轮重派全链达标（2026-10-27，registry 兜底路 + bundle 挂载）：minimal 会话自持 write/edit 亲自完成三步产出、审计零 role-spawn 行、agent_reply 恰一条且 idle 唤醒、九门回归零扰动。
 - **宿主侧裁决性发现**：宿主官方技能文档明示 `~/.dsh/.agent-presets/` 为 legacy 格式（"Nothing reads that directory any more"）；正解 = 自建预设做成 bundle 安装（`dsh plugin add`）经宿主 registry 挂载。插件磁盘装载路保留为宿主服务缺失时的独立兜底。
-- **主套件计数演进**：346 → 347（`6a38224`）→ 350（`b4b8ee4`）→ 355（`40f5fad`）→ 356（`6000ab9`；`e522b9b` 维持），终态 356/0。
-- **静态注入面零增长**：净注入口径B 1993/2181/2183 历次实测与锚逐字一致（S1→S5 五次 + Phase B 彩排后复跑）；工具描述增量单独计量，合计 ≤400B 上界（严格口径 309B / 全口径 360B）。
+- **主套件计数演进**：346 → 347（`6a38224`）→ 350（`b4b8ee4`）→ 355（`40f5fad`）→ 356（`6000ab9`；`e522b9b` 维持）→ **368（B2 S2，2026-10-28，`b745068`）**，终态 368/0。
+- **静态注入面零增长**：净注入口径B 1993/2181/2183 历次实测与锚逐字一致（S1→S5 五次 + Phase B 彩排后复跑）；工具描述增量单独计量，合计 ≤400B 上界（严格口径 309B / 全口径 360B）——**B2 起该账为历史快照**：三工具工具级描述裁为 catalog 行后面A 由 2663 降至 2225 码点（工具级 783→255），面D 口径B 仍 1993/2181/2183 零变化，净门见 `tools/opt-b2-s3-gate.mjs`。
