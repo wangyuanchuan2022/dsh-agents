@@ -34,6 +34,11 @@ import {
   planRetentionSweep, POLICY_DIR, detectHostVersion, checkHostVersion, HOST_PACKAGE_NAME,
 } from '../lib/toolscope-roster.js'
 import { efficiencyReadings, replayEntries, EFFICIENCY_THRESHOLD } from '../tools/toolscope-efficiency.mjs'
+// B2（S1/S1.5/S2）：catalog 行 + help 单源 + 审计 + 按会话单授。新增独立 import 行
+//（不改既有 import——AC2-2「既有断言零修改」的 diff 纪律：tests/run.mjs 只增不删）。
+import { rolesTool, taskbookTool, spawnTool, CATALOG, STATIC_ARCHIVE, composeHelp } from '../lib/index.js'
+import { grantMissingKey } from '../lib/toolscope-pipeline.js'
+import { createHash } from 'node:crypto'
 import { createTiersApi, CONFIG_SCHEMA } from '../lib/settings.js'
 import { CONFIG_ENDPOINT, createConfigHandler } from '../lib/http-config.js'
 import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync, utimesSync } from 'node:fs'
@@ -3302,6 +3307,348 @@ test('独立门 usage-probe --selftest：24 断言（≥3 元素夹具）+ 三�
 })
 test('独立门 session-guard --selftest：夹具 7 元素 4 态 + 注入必红 3/3（变异副本动态 import）', () => {
   gateScript('../tools/session-guard.mjs', ['--selftest'])
+})
+
+// ══ B2（S1 + S1.5 + S2）：catalog 行 / help 单源 / 审计 / 按会话单授 ═════════
+// 分面口径（防 C1 复现）：本段只测**工具面**。面A = tools/measure-injection-surface.mjs
+// 的读数口径（3 个静态工厂的 description 字符串）；面D = 任务书面口径。两者不同面、
+// 不得互证——本段不拿任务书读数当工具面基线。
+// 变异体↔断言类别映射见交付报告；MUT-5/MUT-6/MUT-9 以「注入必红模拟」形式常驻本段。
+
+/** B2：三个活 definition（纯工厂，不依赖宿主；AC1-1/AC1-2/PROMISES/Q 门共用）。 */
+function b2ToolDefs() {
+  const config = resolveConfig({})
+  return {
+    agent_roles: rolesTool({}, config),
+    agent_taskbook: taskbookTool({}, config),
+    agent_spawn: spawnTool({}, config, null, () => null),
+  }
+}
+
+/** 码点计数（[...str].length——emoji/代理对按 1 计，与面A 口径一致）。 */
+const b2Cp = (s) => [...s].length
+
+/**
+ * PROMISES 12 条（catalog 行承诺 → 锚；source 分域：static=STATIC_ARCHIVE 对应工具段，
+ * live=当前活 action 参数表）。来源文本合起来必须是 composeHelp() 全文的子串。
+ */
+const B2_PROMISES = [
+  { id: 'P1', claim: 'agent_roles 有 list/show/tiers/set/reset 五动作', source: 'live', anchors: [/list=[^；]*；show=[^；]*；tiers=[^；]*；set=[^；]*；reset=/] },
+  { id: 'P2', claim: '档位三档 LOW/MEDIUM/HIGH', source: 'static', tool: 'agent_roles', anchors: [/LOW\/MEDIUM\/HIGH/] },
+  { id: 'P3', claim: 'spawn 前先核对档位/角色', source: 'static', tool: 'agent_roles', anchors: [/派活前先用本工具确认角色 id 与档位/] },
+  { id: 'P4', claim: "全量入口 = action='help'", source: 'live', anchors: [/help=/] },
+  { id: 'P5', claim: 'taskbook 按角色合成任务书', source: 'static', tool: 'agent_taskbook', anchors: [/按角色合成任务书/] },
+  { id: 'P6', claim: 'taskbook 不创建会话', source: 'static', tool: 'agent_taskbook', anchors: [/不创建会话/] },
+  { id: 'P7', claim: 'taskbook 用途=派前审/转交取全文', source: 'static', tool: 'agent_taskbook', anchors: [/派活前先审任务书/, /转交他人执行时取全文/] },
+  { id: 'P8', claim: '直接派活用 agent_spawn', source: 'static', tool: 'agent_taskbook', anchors: [/要直接派活请用 agent_spawn/] },
+  { id: 'P9', claim: 'spawn 按角色创建子会话并派任务书', source: 'static', tool: 'agent_spawn', anchors: [/按角色创建子会话并派发任务书/] },
+  { id: 'P10', claim: 'spawn 只创建；wake/status 走 de_session', source: 'static', tool: 'agent_spawn', anchors: [/本工具只创建，不负责 wake\/status/, /de_session/] },
+  { id: 'P11', claim: 'spawn 预览=dryRun=true', source: 'static', tool: 'agent_spawn', anchors: [/dryRun=true 时只回任务书与路由/] },
+  { id: 'P12', claim: "他指 help 指针指向 agent_roles action='help'", source: 'live', anchors: [/help=/] },
+]
+
+/** PROMISES 来源文本：static→对应存档段；live→活 action 参数表（缺失返回 null，断言必红）。 */
+function b2PromiseText(promise, defs) {
+  if (promise.source === 'static') return STATIC_ARCHIVE[promise.tool] ?? null
+  return defs.agent_roles?.parameters?.properties?.action?.description ?? null
+}
+
+/** 真实 roster 的 restrictable 宇宙（classMap 全名 ∪ coreBase ∪ 样本；AC1.5-1 指路形态）。 */
+function b2RealUniverse(extra = []) {
+  const data = loadRosterData(POLICY_DIR)
+  assert.equal(data.error, null, `真实策略数据应无损坏：${data.error ?? ''}`)
+  return { data, universe: new Set([...Object.values(data.roster.classMap).flat(), ...data.roster.coreBase, ...extra]) }
+}
+
+await testAsync('B2 S1 AC1-1/AC2-1：catalog 三行 ≤90 码点 + 必备安全子串 + 注册面逐字等于 CATALOG（m5）', () => {
+  const defs = b2ToolDefs()
+  const lens = Object.fromEntries(Object.entries(defs).map(([n, d]) => [n, b2Cp(d.description)]))
+  assert.ok(Math.max(...Object.values(lens)) <= 90, `catalog 行超 90 码点：${JSON.stringify(lens)}`)
+  for (const toolName of Object.keys(CATALOG)) {
+    assert.equal(defs[toolName].description, CATALOG[toolName], `注册面 description ≠ CATALOG.${toolName}（注册面无残留）`)
+  }
+  // 必备子串：安全语义在工具级描述层的三条（查 tiers / 不创建会话 / 只创建）+ 全量入口指针
+  const required = {
+    agent_roles: ['LOW/MEDIUM/HIGH', 'tiers', "action='help'"],
+    agent_taskbook: ['不创建会话', "agent_roles action='help'"],
+    agent_spawn: ['只创建', 'dryRun', "agent_roles action='help'"],
+  }
+  for (const [toolName, subs] of Object.entries(required)) {
+    for (const sub of subs) assert.ok(defs[toolName].description.includes(sub), `${toolName} 缺必备子串「${sub}」`)
+  }
+})
+
+await testAsync('B2 S1 AC2-1：PROMISES 12 条逐条命中（static 对存档段 / live 对活 action 表）+ 来源 ⊆ help 全文', () => {
+  const defs = b2ToolDefs()
+  const helpText = composeHelp(defs)
+  assert.equal(B2_PROMISES.length, 12, 'PROMISES 必须 12 条')
+  for (const promise of B2_PROMISES) {
+    const text = b2PromiseText(promise, defs)
+    assert.equal(typeof text, 'string', `${promise.id} 来源文本缺失（source=${promise.source} tool=${promise.tool ?? '—'}）`)
+    for (const anchor of promise.anchors) assert.match(text, anchor, `${promise.id} 未命中：${promise.claim}`)
+    assert.ok(helpText.includes(text), `${promise.id} 来源文本不在 composeHelp() 全文内（帮助载体须承载静态承诺）`)
+  }
+  for (const [toolName, text] of Object.entries(STATIC_ARCHIVE)) {
+    assert.ok(helpText.includes(text), `help 全文缺 STATIC_ARCHIVE.${toolName} 逐字段落`)
+  }
+})
+
+await testAsync('B2 S2 AC2-1/AC2-4：反向漂移门 Q1/Q2/Q3 全绿 + 注入必红模拟（MUT-5 / MUT-6）', () => {
+  const defs = b2ToolDefs()
+  const helpText = composeHelp(defs)
+  const liveEnum = defs.agent_roles.parameters.properties.action.enum
+  // Q1：live action enum 每个值必须出现在 help 全文
+  const q1Violations = (enumValues, help) => enumValues.filter((v) => !help.includes(v))
+  assert.deepEqual(q1Violations(liveEnum, helpText), [], `Q1：live enum 有值未进 help 全文（${liveEnum.join(',')}）`)
+  // MUT-5（注入必红）：假 definition 的 enum 多一值（=「enum 增长而 help 未刷」场景）⇒ Q1 必须非空
+  assert.deepEqual(q1Violations([...liveEnum, 'future-action'], helpText), ['future-action'], 'MUT-5：Q1 抓不到「enum 增长而 help 未刷」')
+  // Q2：catalog 行必须列出 live enum 每个值
+  const q2Violations = (enumValues, catalogLine) => enumValues.filter((v) => !catalogLine.includes(v))
+  assert.deepEqual(q2Violations(liveEnum, CATALOG.agent_roles), [], 'Q2：catalog 行少列 live enum 值')
+  // MUT-6（注入必红）：catalog 行去掉一个 enum 值 ⇒ Q2 必须非空
+  const staleCatalog = CATALOG.agent_roles.replace('reset，', '')
+  assert.ok(q2Violations(liveEnum, staleCatalog).includes('reset'), 'MUT-6：Q2 抓不到「catalog 行少列 enum 值」')
+  // Q3：3 段 sha256(text) 前 8 位大写 ≡ fixture（改存档必须显式改 fixture）
+  const fixture = JSON.parse(readFileSync(new URL('./fixtures/b2-help-archive.sha256.json', import.meta.url), 'utf8'))
+  assert.equal(Object.keys(fixture.entries).length, 3, 'fixture 必须 3 段')
+  for (const [toolName, text] of Object.entries(STATIC_ARCHIVE)) {
+    const digest = createHash('sha256').update(text, 'utf8').digest('hex').slice(0, fixture.digestPrefix).toUpperCase()
+    assert.equal(digest, fixture.entries[toolName], `Q3：${toolName} 存档指纹 ≠ fixture（禁止静默改档；改档必须同步改 fixture）`)
+  }
+})
+
+await testAsync('B2 S1 AC1-3：apply 注册面的 help 与 composeHelp(活 definition) 同源 + 三段存档齐全 + H 有界', async () => {
+  const { ctx, tools } = fakeCtx()
+  apply(ctx, {})
+  const registered = Object.fromEntries([...tools])
+  const tool = tools.get('agent_roles')
+  const helpRes = await tool.execute({ action: 'help' })
+  assert.equal(helpRes.ok, true)
+  assert.equal(typeof helpRes.now, 'number')
+  assert.equal(helpRes.message, composeHelp(registered), 'help message 必须等于 composeHelp(活 definitions)（同源，禁自比自）')
+  for (const [toolName, text] of Object.entries(STATIC_ARCHIVE)) {
+    assert.ok(helpRes.message.includes(text), `help 缺 STATIC_ARCHIVE.${toolName} 逐字段落`)
+  }
+  const h = b2Cp(helpRes.message)
+  const staticSum = Object.values(STATIC_ARCHIVE).reduce((n, text) => n + b2Cp(text), 0)
+  assert.ok(h > staticSum, `H(${h}) 必须大于三段存档之和(${staticSum})——活参数表与结构必须在场`)
+  assert.ok(h < 1600, `H 超告警阈值 1600（实得 ${h}）——按设计回组织者`)
+  // 承载路径：既有 output.render 消费 message（不扩 schema、不新增参数）
+  const rendered = tool.output.render({}, helpRes)
+  assert.ok(Array.isArray(rendered) && rendered[0].text.includes('dsh-agents 三工具全量帮助'), 'renderRoles 未消费 help 的 message')
+})
+
+await testAsync('B2 S1 AC1-4：未知 action fail-fast 未破（合法清单含 help）+ tool-error 审计行', async () => {
+  const config = resolveConfig({})
+  const records = []
+  const def = rolesTool({}, config, null, { getDecisionAudit: () => (r) => records.push(r) })
+  const bad = await def.execute({ action: 'xyz' })
+  assert.equal(bad.ok, false)
+  assert.ok(bad.message.includes('未知 action'), 'fail-fast 丢「未知 action」')
+  assert.ok(bad.message.includes('help'), 'fail-fast 合法清单缺 help')
+  assert.equal(records.length, 1, '未知 action 恰写一条 tool-error 审计行')
+  assert.equal(records[0].kind, 'tool-error')
+  assert.equal(records[0].reason, 'unknown-action')
+  assert.equal(records[0].action, 'xyz')
+})
+
+await testAsync('B2 S1 AC1-5：help 审计行正断言 + 真实 writer kind 覆盖 + fail-open（writer 抛/getter 抛 → help 仍 ok）', async () => {
+  const config = resolveConfig({})
+  const records = []
+  const def = rolesTool({}, config, null, { getDecisionAudit: () => (r) => records.push(r) })
+  const helpRes = await def.execute({ action: 'help' })
+  assert.equal(records.length, 1, 'help 恰写一条审计行')
+  assert.equal(records[0].kind, 'help')
+  assert.equal(records[0].tool, 'agent_roles')
+  assert.equal(records[0].action, 'help')
+  assert.equal(records[0].tools, 3)
+  assert.equal(records[0].helpCodepoints, b2Cp(helpRes.message))
+  // 真实 writer：record.kind 必须覆盖 writer 缺省 kind:'spawn'（lib/agent-reply.js:80）
+  const dir = fileURLToPath(new URL('./.fixture-b2-audit/', import.meta.url))
+  mkdirSync(dir, { recursive: true })
+  try {
+    const file = join(dir, 'reply-audit.jsonl')
+    const real = rolesTool({}, config, null, { getDecisionAudit: () => spawnDecisionAuditWriter(file) })
+    assert.equal((await real.execute({ action: 'help' })).ok, true)
+    const line = JSON.parse(readFileSync(file, 'utf8').trim())
+    assert.equal(line.kind, 'help', `真实 writer 落盘 kind 应为 help（实得 ${line.kind}——record 未覆盖缺省值）`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+  // fail-open 两条路径：writer 抛错 / getter 抛错——help 返回绝不受影响，且响亮留痕
+  const origError = console.error
+  const stray = []
+  console.error = (...a) => stray.push(a.join(' '))
+  try {
+    const boomWriter = rolesTool({}, config, null, { getDecisionAudit: () => () => { throw new Error('audit boom') } })
+    const boomGetter = rolesTool({}, config, null, { getDecisionAudit: () => { throw new Error('getter boom') } })
+    const r1 = await boomWriter.execute({ action: 'help' })
+    const r2 = await boomGetter.execute({ action: 'help' })
+    assert.equal(r1.ok, true, 'MUT-8 判别点：审计抛错时 help 必须仍 ok（fail-open）')
+    assert.equal(r2.ok, true, '审计 getter 抛错时 help 必须仍 ok（fail-open）')
+    assert.equal(b2Cp(r1.message), b2Cp(helpRes.message), 'fail-open 不得改变 help 载荷')
+  } finally {
+    console.error = origError
+  }
+  assert.equal(stray.filter((s) => s.includes('fail-open')).length, 2, `fail-open 必须响亮留痕 2 条（实得 ${stray.length}）`)
+})
+
+await testAsync('B2 S2 AC1.5-1/10.5 B1 边界：help 载体阴性/阳性对照 + 单授即可得载体（断言一律 result.names）', () => {
+  const { data, universe } = b2RealUniverse(['mcp__rea__rea_call'])
+  const policyOf = (allow, taskText) => ({
+    personaMode: 'role', role: 'explore', task: taskText,
+    toolPolicy: { tier: 'grant', allow, deny: [] },
+  })
+  // 阴性（边界态）：任务正文只含 agent_spawn ⇒ agent_roles 被收（help 载体不可达=预期行为，KB-2）
+  const negText = '用 `agent_spawn` 建会话'
+  const neg = decideToolscope({ policy: policyOf([], negText), roster: data.roster, restrictable: universe, personaText: '', taskText: negText })
+  assert.equal(neg.action, 'deny')
+  assert.ok(neg.needed.includes('agent_spawn'), '阴性态 needed 应含 agent_spawn')
+  assert.ok(neg.names.includes('agent_roles'), '阴性态：收缩集 names 应含 agent_roles（help 载体不可达）')
+  assert.ok(neg.names.includes('agent_taskbook'), '阴性态：收缩集 names 应含 agent_taskbook')
+  assert.equal(neg.deny, undefined, 'deny 字段只存在于 refuse 分支——本断言钉死字段口径（use names）')
+  // MUT-9（注入必红模拟）：任务文本改成含 agent_roles ⇒ 上面「names 含 agent_roles」断言必红
+  const mutText = '用 `agent_spawn` 建会话，需要时查 `agent_roles`'
+  const mut = decideToolscope({ policy: policyOf([], mutText), roster: data.roster, restrictable: universe, personaText: '', taskText: mutText })
+  assert.equal(mut.names.includes('agent_roles'), false, 'MUT-9：文本含 agent_roles 后 names 不再含它（原阴性断言非恒真）')
+  // 阳性对照：正文含 agent_roles ⇒ 载体可达
+  const posText = '查看角色目录 `agent_roles` 后再决定'
+  const pos = decideToolscope({ policy: policyOf([], posText), roster: data.roster, restrictable: universe, personaText: '', taskText: posText })
+  assert.equal(pos.action, 'deny')
+  assert.equal(pos.names.includes('agent_roles'), false, '阳性对照：引用 agent_roles 时收缩集不含它（help 可达）')
+  // 10.5（R-9 落点）：按会话单授 agent_roles 也能拿载体（不改 coreBase/不加 own 层）
+  const plainText = '本会话只做检索'
+  const granted = decideToolscope({ policy: policyOf(['agent_roles'], plainText), roster: data.roster, restrictable: universe, personaText: '', taskText: plainText })
+  assert.equal(granted.action, 'deny')
+  assert.equal(granted.names.includes('agent_roles'), false, '10.5：单授 agent_roles 后收缩集不含它（载体可达阳性路径）')
+  assert.deepEqual(granted.grantMissing, [], '已知名单不得进 grantMissing')
+})
+
+await testAsync('B2 S2 AC1.5-1 role 轨单授生效：spawn(allowTools) → 策略文件 allow + decide 收缩集不含该名 + 输出披露', async () => {
+  const env = minimalEnvSetup()
+  try {
+    const { ctx, tools } = fakeCtx({ workspaceRegistry: undefined })
+    apply(ctx, {})
+    const res = await tools.get('agent_spawn').execute({ role: 'explore', task: '在代码库中检索 auth 相关模式', allowTools: ['mcp__rea__rea_call'] })
+    assert.equal(res.ok, true, `role 轨 spawn 应成功：${res.message ?? ''}`)
+    const record = JSON.parse(readFileSync(toolscopePath(join(env.dir, 'data'), res.sessionId), 'utf8'))
+    assert.equal(record.toolPolicy.tier, 'grant')
+    assert.deepEqual(record.toolPolicy.allow, ['mcp__rea__rea_call'], 'role 轨 allow = 单授名单（并入放权集）')
+    assert.deepEqual(res.toolscope.allowedTools, ['mcp__rea__rea_call'], '输出披露 toolscope.allowedTools')
+    assert.ok((res.notes ?? []).some((n) => n.includes('单授 1 项')), 'notes 应披露「单授 1 项」')
+    const { data, universe } = b2RealUniverse(['mcp__rea__rea_call'])
+    const decision = decideToolscope({ policy: record, roster: data.roster, restrictable: universe, personaText: '', taskText: record.task ?? '' })
+    assert.equal(decision.action, 'deny')
+    assert.equal(decision.names.includes('mcp__rea__rea_call'), false, '收缩集 result.names 不得含单授名')
+    assert.deepEqual(decision.grantMissing, [], '已知名单不得进 grantMissing')
+  } finally {
+    minimalEnvTeardown(env)
+  }
+})
+
+await testAsync('B2 S2 AC1.5-2 minimal 轨单授并集（不替换）：allow = 预设集 + 单授，零丢项', async () => {
+  const env = minimalEnvSetup()
+  try {
+    const { ctx, tools } = fakeCtx({ workspaceRegistry: undefined })
+    apply(ctx, {})
+    const res = await tools.get('agent_spawn').execute({
+      personaMode: 'minimal', task: '只做检索并汇报', provider: 'p0', model: 'm0', allowTools: ['mcp__rea__rea_call'],
+    })
+    assert.equal(res.ok, true, `minimal spawn 应成功：${res.message ?? ''}`)
+    const record = JSON.parse(readFileSync(toolscopePath(join(env.dir, 'data'), res.sessionId), 'utf8'))
+    assert.equal(record.toolPolicy.tier, 'full')
+    const data = loadRosterData(POLICY_DIR)
+    const expected = [...data.presets['eval-coding'].tools, 'mcp__rea__rea_call']
+    assert.deepEqual(record.toolPolicy.allow, expected, 'minimal 轨必须「预设集 ∪ 单授」（append，不得替换/丢项）')
+    const decision = decideToolscope({ policy: record, roster: data.roster, restrictable: new Set(expected), personaText: '', taskText: '' })
+    assert.equal(decision.action, 'allow')
+    assert.ok(decision.names.includes('mcp__rea__rea_call'), '单授名应进 allow 名单')
+  } finally {
+    minimalEnvTeardown(env)
+  }
+})
+
+await testAsync('B2 S2 AC1.5-3 未知名不 fail-open：grantMissing 决策体 + 集成路径 warning（恰一次/同键去重）+ 收缩照常', () => {
+  const dir = toolscopeS3Dir()
+  mkdirSync(dir, { recursive: true })
+  const roster = s3RosterFixture()
+  roster.roles['scan-role'] = ['glob']
+  const store = new ToolscopeStore({ dataDir: dir })
+  const sid = 'session-b2-grant-missing'
+  store.writeRole(sid, { role: 'scan-role', task: '整理发现', taskbook: 'x', allow: ['glob', 'no_such_tool'] })
+  const svc = fakeToolsService(S3_UNIVERSE)
+  const pipeline = installToolscopePipeline({ ctx: fakeEventCtx().ctx, store, roster, logger: { warn: () => {}, error: () => {} } })
+  const emits = []
+  pipeline.notifier.emitFn = (p) => emits.push(p)
+  try {
+    // 决策体字段（契约面）
+    const decision = decideToolscope({ policy: store.read(sid), roster, restrictable: new Set(S3_UNIVERSE), personaText: '', taskText: '整理发现' })
+    assert.equal(decision.action, 'deny', '未知名不改变收缩动作（fail-closed 照常）')
+    assert.deepEqual(decision.grantMissing, ['no_such_tool'], 'grantMissing = 未知名清单（结构化披露）')
+    assert.equal(decision.names.includes('no_such_tool'), false, '未知名不在宇宙 ⇒ 不因单授进收缩集')
+    // 集成路径接线（直调 DedupNotifier 不算验证接线）
+    const agent = fakeAgent(sid, svc.scoped)
+    pipeline.onCreated(agent)
+    assert.equal(svc.api.calls.length, 1, '收缩必须照常应用（fail-closed，不得 fail-open）')
+    assert.equal(emits.length, 1, `集成路径应恰发 1 条 warning（实得 ${emits.length}）`)
+    assert.equal(emits[0].kind, 'toolscope-grant-missing')
+    assert.equal(emits[0].sessionId, sid)
+    assert.deepEqual(emits[0].grantMissing, ['no_such_tool'])
+    assert.equal(emits[0].level, 'warning')
+    assert.ok(pipeline.notifier.seen.has(grantMissingKey(sid, ['no_such_tool'])), '类别键 = 会话 × grantMissing')
+    assert.equal(pipeline.audit().length > 0, true, '运行期审计仍记录该会话决策')
+    // 同键重复触发不再 emit（DedupNotifier 语义）
+    pipeline.onCreated(agent)
+    assert.equal(emits.length, 1, '同键重复触发不得重发')
+  } finally {
+    pipeline.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await testAsync('B2 S2 AC1.5-4 形状校验：非数组/非字符串/空串/坏形状 fail-fast；重复去重保序（≥3 元素）', async () => {
+  const env = minimalEnvSetup()
+  try {
+    const { ctx, tools } = fakeCtx({ workspaceRegistry: undefined })
+    apply(ctx, {})
+    const spawn = tools.get('agent_spawn')
+    const base = { role: 'executor', task: '实现 X' }
+    const nonArray = await spawn.execute({ ...base, allowTools: 'x' })
+    assert.equal(nonArray.ok, false)
+    assert.ok(nonArray.message.includes('allowTools'), '非数组必须明确报 allowTools')
+    const nonString = await spawn.execute({ ...base, allowTools: [123] })
+    assert.equal(nonString.ok, false, '元素非字符串必须拒')
+    const empty = await spawn.execute({ ...base, allowTools: [''] })
+    assert.equal(empty.ok, false, '空串必须拒')
+    const badShape = await spawn.execute({ ...base, allowTools: ['bad name!'] })
+    assert.equal(badShape.ok, false, '坏形状必须拒')
+    assert.ok(badShape.message.includes('形状'), '坏形状报错须点名「形状」')
+    // 去重保序（≥3 元素输入）
+    const okRes = await spawn.execute({ ...base, allowTools: ['zebra-tool', 'mcp__rea__rea_call', 'zebra-tool', 'alpha.tool'] })
+    assert.equal(okRes.ok, true, `合法名单应通过：${okRes.message ?? ''}`)
+    const record = JSON.parse(readFileSync(toolscopePath(join(env.dir, 'data'), okRes.sessionId), 'utf8'))
+    assert.deepEqual(record.toolPolicy.allow, ['zebra-tool', 'mcp__rea__rea_call', 'alpha.tool'], '去重保序')
+  } finally {
+    minimalEnvTeardown(env)
+  }
+})
+
+await testAsync('B2 S2 AC1.5-5 缺省零回归：不传 allowTools 时 role 轨策略 allow=[]（运行时文件判定，非 git diff）', async () => {
+  const env = minimalEnvSetup()
+  try {
+    const { ctx, tools } = fakeCtx({ workspaceRegistry: undefined })
+    apply(ctx, {})
+    const res = await tools.get('agent_spawn').execute({ role: 'executor', task: '实现 X' })
+    assert.equal(res.ok, true)
+    const record = JSON.parse(readFileSync(toolscopePath(join(env.dir, 'data'), res.sessionId), 'utf8'))
+    assert.deepEqual(record.toolPolicy.allow, [], '缺省不单授时 allow 必须为空（零行为增量）')
+    assert.deepEqual(res.toolscope.allowedTools, [])
+    assert.equal((res.notes ?? []).some((n) => n.includes('单授')), false, '未单授时不得出现「单授」note')
+    const decision = decideToolscope({ policy: record, roster: loadRosterData(POLICY_DIR).roster, restrictable: new Set(S3_UNIVERSE), personaText: '', taskText: record.task ?? '' })
+    assert.deepEqual(decision.grantMissing, [], '未单授时 grantMissing 恒 []')
+  } finally {
+    minimalEnvTeardown(env)
+  }
 })
 
 // ── 汇总 ──────────────────────────────────────────────────────────────────

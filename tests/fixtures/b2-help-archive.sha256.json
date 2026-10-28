@@ -1,0 +1,11 @@
+{
+  "algorithm": "sha256",
+  "digestPrefix": 8,
+  "digestCase": "upper",
+  "note": "B2 help 工具级存档指纹（STATIC_ARCHIVE 逐段 sha256 前 8 位大写）。改存档文本必须显式改本文件——Q3 门复算，禁止静默改档。",
+  "entries": {
+    "agent_roles": "1C42DF7D",
+    "agent_taskbook": "FE1A3B67",
+    "agent_spawn": "42FFA38E"
+  }
+}
