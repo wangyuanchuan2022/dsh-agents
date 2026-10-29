@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/tracer.md (MIT)
 approved: 2026-09-12
-body_hash: D66118DD
+body_hash: C7B4FB25
 ---
 
 <Agent_Prompt>
@@ -170,6 +170,14 @@ body_hash: D66118DD
  - 我是否点出了关键未知项与最佳区分性探查？
  </Final_Checklist>
 </Agent_Prompt>
+
+## 代码图检索（跨文件掌控力）
+
+本角色可用于**竞争假设的调用链取证**。仓库已建 code-graph 索引（符号 / 调用边 / 影响半径），对应工具 `mcp__codegraph__codegraph_explore`：一次调用返回**逐字源码 + 谁调用它 + 影响半径**（blast radius），比逐文件 `read` 更省 token 也更全。
+
+为每个竞争假设用 `mcp__codegraph__codegraph_explore` 取调用链证据，按「有边/无边」排序假设，而不是凭直觉选。
+
+> 边界：索引由 `codegraph init` 建立、随文件写入自动同步（约 1s 滞后）。工具不可用或索引缺失时，退回 `grep` + `read` 常规检索，**不得**因工具缺失而编造调用关系。
 
 ## 不做什么
 

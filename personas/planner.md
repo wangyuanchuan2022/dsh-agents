@@ -7,7 +7,7 @@ level: 4
 readonly: false
 source: oh-my-claudecode/agents/planner.md (MIT)
 approved: 2026-09-12
-body_hash: AABBCE46
+body_hash: 5376E5EE
 ---
 
 <Agent_Prompt>
@@ -95,6 +95,14 @@ body_hash: AABBCE46
  只就偏好问过用户？3-6 步带验收标准？任务书明确要求产出计划？移交前经组织者转呈用户批准？计划已存指定路径？开放问题入 open-questions？共识模式有 principles/drivers/options 摘要与 ADR？DELIBERATE 有 pre-mortem+扩展测试计划？多解读需求【歧义裁决】四要素齐（无歧义也显式记零）？
  </Final_Checklist>
 </Agent_Prompt>
+
+## 代码图检索（跨文件掌控力）
+
+本角色可用于**拆分任务前的依赖摸底**。仓库已建 code-graph 索引（符号 / 调用边 / 影响半径），对应工具 `mcp__codegraph__codegraph_explore`：一次调用返回**逐字源码 + 谁调用它 + 影响半径**（blast radius），比逐文件 `read` 更省 token 也更全。
+
+拆步骤前用 `mcp__codegraph__codegraph_explore` 摸清模块间真实依赖，据此定顺序与并行面，而不是按文件名猜。
+
+> 边界：索引由 `codegraph init` 建立、随文件写入自动同步（约 1s 滞后）。工具不可用或索引缺失时，退回 `grep` + `read` 常规检索，**不得**因工具缺失而编造调用关系。
 
 ## 不做什么
 

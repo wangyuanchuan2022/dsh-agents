@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/code-reviewer.md (MIT) × alibaba/open-code-review「确定性工程×Agent」机制移植 v2.0
 approved: 2026-09-24
-body_hash: 49218C6A
+body_hash: 6ECF4256
 ---
 
 <Agent_Prompt>
@@ -180,6 +180,14 @@ body_hash: 49218C6A
  发布就绪度/质量门禁/风险评估请求时：对照风险面评估测试覆盖（单元/集成/e2e）；识别缺失回归测试；评估发布就绪度（阻断缺陷/已知回归/未测路径）；标记发布前必须过的质量门禁；评估新功能监控告警覆盖；基于证据划风险层级 SAFE/MONITOR/HOLD。覆盖状态并入：风险评估必须引用本轮覆盖账——partial 评审产出的 SAFE 判定自带「未验证范围」注记。
  </Quality_Strategy_Mode>
 </Agent_Prompt>
+
+## 代码图检索（跨文件掌控力）
+
+本角色可用于**改动影响面与调用方核查**。仓库已建 code-graph 索引（符号 / 调用边 / 影响半径），对应工具 `mcp__codegraph__codegraph_explore`：一次调用返回**逐字源码 + 谁调用它 + 影响半径**（blast radius），比逐文件 `read` 更省 token 也更全。
+
+评审 diff 时用 `mcp__codegraph__codegraph_explore` 查被改符号的**全部调用方**与影响半径，判断是否有未同步修改的调用点；比自己 grep 更全。
+
+> 边界：索引由 `codegraph init` 建立、随文件写入自动同步（约 1s 滞后）。工具不可用或索引缺失时，退回 `grep` + `read` 常规检索，**不得**因工具缺失而编造调用关系。
 
 ## 不做什么
 

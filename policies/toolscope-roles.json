@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-26T08:30:58.646Z",
+  "generatedAt": "2026-10-29T15:16:56.912Z",
   "generator": "tools/scan-role-toolrefs.mjs",
   "rosterVersion": 1,
   "scanFace": "persona + taskbook §七(reportLines/fewShotLines) + readonly-whitelist; detector=loose(negation-aware) - scanIgnore",
@@ -7,6 +7,7 @@
     "explore": [
       "glob",
       "grep",
+      "mcp__codegraph__codegraph_explore",
       "pwsh",
       "read"
     ],
@@ -18,18 +19,22 @@
     "planner": [
       "ask_user_question",
       "de_broadcast",
+      "mcp__codegraph__codegraph_explore",
+      "read",
       "write"
     ],
     "architect": [
       "de_broadcast",
       "glob",
       "grep",
+      "mcp__codegraph__codegraph_explore",
       "pwsh",
       "read"
     ],
     "debugger": [
       "edit",
       "grep",
+      "mcp__codegraph__codegraph_explore",
       "pwsh",
       "read"
     ],
@@ -38,6 +43,7 @@
       "edit",
       "glob",
       "grep",
+      "mcp__codegraph__codegraph_explore",
       "pwsh",
       "read",
       "todo_write",
@@ -51,6 +57,7 @@
     "tracer": [
       "glob",
       "grep",
+      "mcp__codegraph__codegraph_explore",
       "pwsh",
       "read",
       "skill"
@@ -72,23 +79,28 @@
     "code-reviewer": [
       "de_broadcast",
       "grep",
+      "mcp__codegraph__codegraph_explore",
       "pwsh",
       "read"
     ],
     "security-reviewer": [
       "de_broadcast",
       "grep",
+      "mcp__codegraph__codegraph_explore",
       "pwsh",
       "read"
     ],
     "critic": [
       "glob",
       "grep",
+      "mcp__codegraph__codegraph_explore",
       "pwsh",
       "read"
     ],
     "code-simplifier": [
-      "pwsh"
+      "mcp__codegraph__codegraph_explore",
+      "pwsh",
+      "read"
     ],
     "silent-failure-hunter": [
       "grep",
@@ -107,6 +119,7 @@
       "de_broadcast",
       "edit",
       "grep",
+      "mcp__codegraph__codegraph_explore",
       "pwsh",
       "read",
       "write"

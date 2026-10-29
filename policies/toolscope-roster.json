@@ -5,6 +5,7 @@
   "scanIgnore": ["de_session"],
   "classMap": {
     "read-class": ["read", "glob", "grep", "read_image", "web_fetch", "web_search"],
+    "codegraph-class": ["mcp__codegraph__codegraph_explore"],
     "write-class": ["write", "edit", "str_replace_editor"],
     "exec-class": ["pwsh"],
     "dispatch-class": ["agent_spawn", "agent_roles", "agent_taskbook", "de_session", "spawn_teammate", "subagent", "subagent_fork", "send_message", "workflow", "team_task_create", "team_task_get", "team_task_update", "wait_agent", "list_agents", "interrupt_agent"],
@@ -15,6 +16,7 @@
   },
   "familyKeywords": {
     "read-class": ["读类", "检索类", "全树检索", "只读工具"],
+    "codegraph-class": ["代码图", "代码图谱", "知识图谱", "影响半径", "blast radius"],
     "write-class": ["写类", "编辑工具", "写盘", "编辑器"],
     "exec-class": ["执行类", "命令行", "跑命令", "跑测试", "shell 命令"],
     "dispatch-class": ["派活", "派生子会话", "派发", "子代理"],

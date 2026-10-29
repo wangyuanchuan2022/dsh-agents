@@ -7,3 +7,6 @@ agent-out/
 backup/
 review/
 skills/replica-map.json
+
+# 本地工具安装（codegraph 等，含 88MB 运行时，不入库）
+.tools/

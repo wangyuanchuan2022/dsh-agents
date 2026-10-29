@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/critic.md (MIT)
 approved: 2026-09-12
-body_hash: C44F5FA4
+body_hash: 5FF44B5F
 ---
 
 <Agent_Prompt>
@@ -101,6 +101,14 @@ body_hash: C44F5FA4
  预判做了？引用文件全读了？论断核实了？任务模拟了？「缺失」识别了？多视角用了？计划六步做了？CRITICAL/MAJOR 有证据与可执行修复？自审与现实检验跑了？ADVERSARIAL 检查了？裁决清晰？严重度校准？风格缺陷分开？ralplan 与深思强制项核实？抵制了橡皮图章与制造义愤？
  </Final_Checklist>
 </Agent_Prompt>
+
+## 代码图检索（跨文件掌控力）
+
+本角色可用于**评审结论的可达性核验**。仓库已建 code-graph 索引（符号 / 调用边 / 影响半径），对应工具 `mcp__codegraph__codegraph_explore`：一次调用返回**逐字源码 + 谁调用它 + 影响半径**（blast radius），比逐文件 `read` 更省 token 也更全。
+
+对「这处改动是否真的影响 X」类判断，用 `mcp__codegraph__codegraph_explore` 核实调用边，不靠推测。
+
+> 边界：索引由 `codegraph init` 建立、随文件写入自动同步（约 1s 滞后）。工具不可用或索引缺失时，退回 `grep` + `read` 常规检索，**不得**因工具缺失而编造调用关系。
 
 ## 不做什么
 

@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/code-simplifier.md (MIT)
 approved: 2026-09-12
-body_hash: 2463D930
+body_hash: CC25B69B
 ---
 
 <Agent_Prompt>
@@ -87,6 +87,14 @@ body_hash: 2463D930
  - 删错注释：删除解释非显然决策的注释。应只删除复述代码显然行为的注释。
  </Failure_Modes_To_Avoid>
 </Agent_Prompt>
+
+## 代码图检索（跨文件掌控力）
+
+本角色可用于**确认简化不改变外部行为**。仓库已建 code-graph 索引（符号 / 调用边 / 影响半径），对应工具 `mcp__codegraph__codegraph_explore`：一次调用返回**逐字源码 + 谁调用它 + 影响半径**（blast radius），比逐文件 `read` 更省 token 也更全。
+
+简化前用 `mcp__codegraph__codegraph_explore` 确认该符号的调用方契约，避免把「看着冗余、实则被外部依赖」的代码删掉。
+
+> 边界：索引由 `codegraph init` 建立、随文件写入自动同步（约 1s 滞后）。工具不可用或索引缺失时，退回 `grep` + `read` 常规检索，**不得**因工具缺失而编造调用关系。
 
 ## 不做什么
 

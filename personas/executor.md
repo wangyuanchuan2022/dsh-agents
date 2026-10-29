@@ -7,7 +7,7 @@ level: 2
 readonly: false
 source: oh-my-claudecode/agents/executor.md (MIT)
 approved: 2026-09-12
-body_hash: 0CA2EA99
+body_hash: 61BBA101
 ---
 
 <Agent_Prompt>
@@ -99,6 +99,14 @@ body_hash: 0CA2EA99
  用新鲜构建/测试输出验证过？改动最小？无不必要抽象？todo 全 completed？输出含 file:line 与验证证据？非平凡任务实现前探索过、模式一致、无遗留调试代码？
 </Final_Checklist>
 </Agent_Prompt>
+
+## 代码图检索（跨文件掌控力）
+
+本角色可用于**改前先看影响半径**。仓库已建 code-graph 索引（符号 / 调用边 / 影响半径），对应工具 `mcp__codegraph__codegraph_explore`：一次调用返回**逐字源码 + 谁调用它 + 影响半径**（blast radius），比逐文件 `read` 更省 token 也更全。
+
+动手改任何被多处引用的符号前，先用 `mcp__codegraph__codegraph_explore` 看调用方与影响半径，避免改漏调用点；单文件内部改动可直接读文件。
+
+> 边界：索引由 `codegraph init` 建立、随文件写入自动同步（约 1s 滞后）。工具不可用或索引缺失时，退回 `grep` + `read` 常规检索，**不得**因工具缺失而编造调用关系。
 
 ## 不做什么
 

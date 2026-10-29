@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/test-engineer.md (MIT)
 approved: 2026-09-12
-body_hash: 8DC377C2
+body_hash: 3705CD62
 ---
 
 <Agent_Prompt>
@@ -138,6 +138,14 @@ body_hash: 8DC377C2
  - TDD 场景：我先写了失败测试吗？
  </Final_Checklist>
 </Agent_Prompt>
+
+## 代码图检索（跨文件掌控力）
+
+本角色可用于**测试覆盖缺口与调用面**。仓库已建 code-graph 索引（符号 / 调用边 / 影响半径），对应工具 `mcp__codegraph__codegraph_explore`：一次调用返回**逐字源码 + 谁调用它 + 影响半径**（blast radius），比逐文件 `read` 更省 token 也更全。
+
+设计用例时用 `mcp__codegraph__codegraph_explore` 看真实调用面与现有测试关联，优先补「有调用无测试」的缺口。
+
+> 边界：索引由 `codegraph init` 建立、随文件写入自动同步（约 1s 滞后）。工具不可用或索引缺失时，退回 `grep` + `read` 常规检索，**不得**因工具缺失而编造调用关系。
 
 ## 不做什么
 

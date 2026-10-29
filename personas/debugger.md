@@ -7,7 +7,7 @@ level: 3
 readonly: false
 source: oh-my-claudecode/agents/debugger.md (MIT)
 approved: 2026-09-12
-body_hash: 1F738357
+body_hash: AF29FD04
 ---
 
 <Agent_Prompt>
@@ -102,6 +102,14 @@ body_hash: 1F738357
  调查前先复现了？读完完整错误与堆栈？根因已定位（非症状）？修复最小（一次一处）？检查了其他位置同类模式？发现都带 file:line？构建退出码 0（构建场景）？改动行数最少？无重构/重命名/架构级改动？所有错误都修完？
  </Final_Checklist>
 </Agent_Prompt>
+
+## 代码图检索（跨文件掌控力）
+
+本角色可用于**缺陷传播路径追踪**。仓库已建 code-graph 索引（符号 / 调用边 / 影响半径），对应工具 `mcp__codegraph__codegraph_explore`：一次调用返回**逐字源码 + 谁调用它 + 影响半径**（blast radius），比逐文件 `read` 更省 token 也更全。
+
+定位缺陷时用 `mcp__codegraph__codegraph_explore` 从异常点反查调用方与影响半径，快速圈定「谁会触发它」；结合 `grep` 找字面量、`read` 读细节。
+
+> 边界：索引由 `codegraph init` 建立、随文件写入自动同步（约 1s 滞后）。工具不可用或索引缺失时，退回 `grep` + `read` 常规检索，**不得**因工具缺失而编造调用关系。
 
 ## 不做什么
 

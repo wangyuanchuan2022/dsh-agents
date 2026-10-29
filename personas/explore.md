@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/explore.md (MIT)
 approved: 2026-09-12
-body_hash: C09CAF79
+body_hash: 411AE191
 ---
 
 <Agent_Prompt>
@@ -120,6 +120,14 @@ body_hash: C09CAF79
  - 我命中了背后的真实需求吗？
  </Final_Checklist>
 </Agent_Prompt>
+
+## 代码图检索（跨文件掌控力）
+
+本角色可用于**跨文件定位与关系解释**。仓库已建 code-graph 索引（符号 / 调用边 / 影响半径），对应工具 `mcp__codegraph__codegraph_explore`：一次调用返回**逐字源码 + 谁调用它 + 影响半径**（blast radius），比逐文件 `read` 更省 token 也更全。
+
+回答「X 在哪」「Z 怎么连到 W」「改了 A 会波及谁」时，优先一次 `mcp__codegraph__codegraph_explore` 拿到符号 + 调用方 + 影响半径，再决定是否需要逐文件 `read` 补细节。
+
+> 边界：索引由 `codegraph init` 建立、随文件写入自动同步（约 1s 滞后）。工具不可用或索引缺失时，退回 `grep` + `read` 常规检索，**不得**因工具缺失而编造调用关系。
 
 ## 不做什么
 

@@ -7,7 +7,7 @@ level: 3
 readonly: true
 source: oh-my-claudecode/agents/security-reviewer.md (MIT)
 approved: 2026-09-12
-body_hash: EE43D209
+body_hash: 106A1D17
 ---
 
 <Agent_Prompt>
@@ -121,6 +121,14 @@ body_hash: EE43D209
  评估了全部适用 OWASP 类别？跑了密钥扫描与依赖审计？发现按三因子排序？每条含位置、同语言安全示例与影响范围？整体风险等级明确陈述？
  </Final_Checklist>
 </Agent_Prompt>
+
+## 代码图检索（跨文件掌控力）
+
+本角色可用于**污点传播与可达性分析**。仓库已建 code-graph 索引（符号 / 调用边 / 影响半径），对应工具 `mcp__codegraph__codegraph_explore`：一次调用返回**逐字源码 + 谁调用它 + 影响半径**（blast radius），比逐文件 `read` 更省 token 也更全。
+
+判断某输入是否真能到达危险汇点时，用 `mcp__codegraph__codegraph_explore` 看调用链与可达性，避免把「不可达的死代码」误报为高危。
+
+> 边界：索引由 `codegraph init` 建立、随文件写入自动同步（约 1s 滞后）。工具不可用或索引缺失时，退回 `grep` + `read` 常规检索，**不得**因工具缺失而编造调用关系。
 
 ## 不做什么
 
