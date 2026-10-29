@@ -256,7 +256,7 @@ dsh-agents/
 | `alias-contract-gate.mjs` | **B6 档位别名契约门**：A1 双向一致（TIER_ALIASES ↔ normalizeTier ↔ TIERS）/ A2 角色字段一致（`normalizeTier(omcModel)===tier` **或**已登记带理由例外——现存 2 条：harness-optimizer、rag-reviewer）/ A3 人格 frontmatter `omc_model` 逐字一致 23/23 / A4 文档面未登记别名 / A5 契约两节正文 sha256 == fixture（改契约必同步改 fixture）/ A6 零命中防护 | `--selftest` 7/7（含「改契约不动 fixture」）；已挂 `npm test` |
 | `constraint-audit.mjs` | **B5 约束结构化审计门**：G1 覆盖完整（条款 108 行 + 四档/定级合法）/ G2 ENFORCED 必须可验证（引用的闸门文件存在 + 断言标识可寻）/ G3 N/A 占比 ≤ 40% / G4 P0 必有可落地整改 / G5 零命中防护 | `--selftest` 6/6；已挂 `npm test` |
 | `verifiability-check.mjs` | **B7 可复核性矩阵门**：V1 断言条数下限 + 分节一致 / V2 五列齐全 + 复现路径可执行形态 / V3 口径必标（实测或估算）/ V4 引用仓内路径 existsSync / V5 零命中防护 + 阳性对照；另有 X1 断言「矩阵声明的实测读数必须真出现在命令输出里」 | `--selftest` 6/6；已挂 `npm test` |
-| `constraint-mutation-verify.mjs` | **B5 X-3 闸门鉴别力实测器**：对 PARTIAL 条款构造单变量变异（只改产品代码、绝不改测试）→ 跑**该条款自己的闸门入口** → 断言必红 → 按原字节还原并校验 sha256；登记表 7 条（5 条有鉴别力 / 2 条已登记零鉴别力缺口）；`--selftest` 5/5、`--list`、`--only <条款>`；还原失败 → exit 3 | `--selftest` 5/5；实测 7/7 达期望、变异零残留（7 文件 `git diff --quiet HEAD` 全过） |
+| `constraint-mutation-verify.mjs` | **B5 X-3 闸门鉴别力实测器**：对 PARTIAL 条款构造单变量变异（只改产品代码、绝不改测试）→ 跑**该条款自己的闸门入口** → 断言必红 → 按原字节还原并校验 sha256；登记表 **44 条**（覆盖全部 PARTIAL；43 条有鉴别力 / 1 条零鉴别力缺口 C-101）；`--selftest` 5/5、`--list`、`--only <条款>`；还原失败 → exit 3 | `--selftest` 5/5；组织者整批复跑 44/44 达期望、还原失败 0、变异零残留 |
 | `approved.json` | assemble-review 的批准记录（数据文件） | — |
 
 **tools/ 面设计纪律**：全部机检脚本**注入必红**（把坏样本喂进去断言变红——只验证「好文件过门」的闸门是半成品）；输出排空后再退出；「无意见」唯一合法形态是空输出+exit 0。
