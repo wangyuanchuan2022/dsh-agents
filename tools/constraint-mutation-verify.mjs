@@ -33,7 +33,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync, openSync, closeSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, openSync, closeSync, rmSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -450,8 +450,8 @@ export const MUTATIONS = [
     find: '（人格文件未安装）角色摘要',
     replace: '角色摘要',
     suite: ['tests/run.mjs'],
-    expect: 'green',
-    note: '**实测零鉴别力（2026-10-29）**：run.mjs:720 的该断言包在 `if (!persona.installed)` 分支里，而本仓 23/23 份 personas/*.md 全部已安装 → 缺省态断言是死码，删掉摘要标记主套件仍 377/0 全绿。**建议补**：用合成 role（id 不存在于 personas/）调 loadPersona，断言 installed===false + hash===null + text 含「人格文件未安装」；再配「已安装 role 该文案不得出现」的反向对照（阳性/阴性两臂）。',
+    expect: 'red',
+    note: '**缺口已补（2026-10-29）**：run.mjs:720 的该断言包在 `if (!persona.installed)` 分支里，而本仓 23/23 份 personas/*.md 全部已安装 → 缺省态断言是死码，删掉摘要标记主套件仍 377/0 全绿。**已补**：新增「合成 role 走真缺省分支 + 已安装 role 不得出现该文案」用例（阴性臂断言 installed=false/hash=null/file=null/文案在场/含角色名与职责；阳性臂断言已安装角色 installed=true/hash 存在/不含该文案）。',
   },
   {
     clause: 'C-102',
@@ -521,6 +521,16 @@ export function runSuite(argv = ['tests/run.mjs']) {
   const fd = openSync(outFile, 'w')
   let result = null
   try {
+    // ⚠️ 这里用 spawnSync = **同步阻塞**：阻塞期间 JS 事件循环停转，所以
+    // SIGINT/SIGTERM 的 JS 处理器**不可能**在此之前跑完（2026-10-29 实测：
+    // 就算装了钩子，SIGTERM 到达时进程正卡在 spawnSync 里，钩子根本没机会执行，
+    // 产品代码被留在变异态）。
+    //
+    // 因此中断安全**不能只靠 JS signal handler**，必须有第二道防线：
+    //   每次施加变异**之前**，先把「原字节 + 目标路径」写成一份恢复日志落到
+    //   `<tmpdir>/dsh-cmv-recovery-<pid>.json`（同步写，进程秒退也已在盘上）。
+    //   进程被强杀后，下一次运行（或人工）可据此恢复；正常路径会在还原后删掉它。
+    //   → 这是「崩溃安全」而非「中断安全」：不指望被打断的进程自救。
     result = spawnSync(process.execPath, argv.map((a) => join(ROOT, a)), {
       cwd: ROOT,
       stdio: ['ignore', fd, fd],
@@ -545,6 +555,142 @@ export function runSuite(argv = ['tests/run.mjs']) {
   return { ok, exit: result?.status ?? null, tail }
 }
 
+/**
+ * 中断 / 崩溃安全（两道防线，2026-10-29 实测两次事故后重写）。
+ *
+ * ## 事故
+ * 整批跑被 Ctrl-C / SIGTERM 打断后，`lib/taskbook.js` 残留变异、工作区被污染
+ * （两次：C-080 与 C-070 各一次），必须人工还原。
+ *
+ * ## 为什么「注册 signal handler」不够（第一版的错误修法）
+ * `runSuite` 用 `spawnSync` = **同步阻塞**，阻塞期间 JS 事件循环停转，
+ * signal 的 JS 处理器**根本没机会执行**。所以「中断安全不能指望被打断的进程自救」。
+ *
+ * ## 现在的两道防线
+ * 1. **崩溃安全（主防线）**：施加变异**之前**，先把 `{path, 原字节 base64}` 同步写进
+ *    `<tmpdir>/dsh-cmv-recovery-<pid>.json`。进程被强杀时这份恢复日志已在盘上，
+ *    下次启动会自动检测并还原（`recoverFromJournal()`）。
+ * 2. **正常/可捕获退出（辅防线）**：signal + exit 钩子尽力还原（能跑到就跑，
+ *    跑不到有防线 1 兜底）；还原成功后删除恢复日志。
+ *
+ * 恢复日志按 pid 命名，所以**并发跑两个实例不会互相踩**（各自只管自己的日志）。
+ */
+const IN_FLIGHT = new Map() // absPath -> 原字节 Buffer（运行时快照，供钩子用）
+
+/**
+ * 恢复日志目录：**仓库内固定位置**，不用 `os.tmpdir()`。
+ *
+ * 为什么不能用 tmpdir（2026-10-29 实测踩到）：本机沙箱给每个 node 进程分配
+ * **不同的临时目录**（`C:\Users\…\Temp\dsh-XXXXXX\`），所以 A 进程写的日志，
+ * B 进程在自己的 tmpdir 里**看不到** —— 崩溃自愈形同虚设（实测：SIGKILL 后
+ * 文件留在变异态、日志确实写了，但下一次启动扫描空目录，restored=0）。
+ *
+ * 改放仓库内 `agent-out/.cmv-recovery/`（gitignored、跨进程稳定、工作区内可写）。
+ * 仍然按 pid 命名，并发实例互不干扰。
+ */
+export const RECOVERY_DIR = join(ROOT, 'agent-out', '.cmv-recovery')
+
+/** 本进程的恢复日志路径（按 pid 唯一，防并发互踩）。 */
+export const RECOVERY_JOURNAL = join(RECOVERY_DIR, `recovery-${process.pid}.json`)
+
+/** 把在飞变异同步落进恢复日志（施加变异**前**调用 = 崩溃安全的关键）。 */
+function writeJournal(abs, original) {
+  const payload = {
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    file: abs,
+    originalBase64: Buffer.from(original).toString('base64'),
+  }
+  try { mkdirSync(RECOVERY_DIR, { recursive: true }); writeFileSync(RECOVERY_JOURNAL, JSON.stringify(payload)) } catch (error) {
+    console.error(`  [警告] 恢复日志写入失败（崩溃安全降级）：${error?.message ?? error}`)
+  }
+}
+
+/** 删除恢复日志（还原成功后调用）。 */
+function clearJournal() {
+  try { rmSync(RECOVERY_JOURNAL, { force: true }) } catch { /* 忽略 */ }
+}
+
+/**
+ * 检查并处理**上次**中断遗留的恢复日志（本进程启动时自动调用）。
+ *
+ * 若发现某个 recovery journal 描述的文件当前内容 ≠ 记录的原字节，
+ * 就按记录还原（这才是「上次被强杀留下的变异」）。
+ * 只处理**其他 pid** 的日志（自己的在本进程内已有内存快照）。
+ *
+ * @returns {{found:number, restored:number, details:string[]}}
+ */
+export function recoverFromJournal() {
+  const details = []
+  let found = 0
+  let restored = 0
+  let names = []
+  try { names = readdirSync(RECOVERY_DIR) } catch { return { found, restored, details } }
+  for (const name of names) {
+    if (!/^recovery-\d+\.json$/.test(name)) continue
+    const journalPath = join(RECOVERY_DIR, name)
+    const pidInName = Number(name.match(/-(\d+)\.json$/)[1])
+    if (pidInName === process.pid) continue // 本进程的日志由自己管
+    found++
+    try {
+      const journal = JSON.parse(readFileSync(journalPath, 'utf8'))
+      const original = Buffer.from(journal.originalBase64, 'base64')
+      const current = readFileSync(journal.file)
+      if (Buffer.compare(current, original) === 0) {
+        details.push(`${journal.file}：内容已等于原字节，无需还原`)
+      } else {
+        writeFileSync(journal.file, original)
+        restored++
+        details.push(`${journal.file}：已按 pid ${journal.pid} 的恢复日志还原（该进程被中断时留下了变异）`)
+      }
+      rmSync(journalPath, { force: true })
+    } catch (error) {
+      details.push(`${journalPath}：处理失败 —— ${error?.message ?? error}`)
+    }
+  }
+  return { found, restored, details }
+}
+
+/** 把在飞变异登记进全局表（applyMutation 内部调用）。 */
+function trackInFlight(abs, original) {
+  IN_FLIGHT.set(abs, original)
+}
+
+/** 还原所有在飞变异（幂等；signal/exit 钩子与正常路径共用）。 */
+export function restoreAllInFlight({ silent = false } = {}) {
+  let restored = 0
+  for (const [abs, original] of IN_FLIGHT) {
+    try {
+      writeFileSync(abs, original)
+      restored++
+      if (!silent) console.log(`  [中断还原] ${abs} 已按内存原字节还原`)
+    } catch (error) {
+      console.error(`  [中断还原失败] ${abs}：${error?.message ?? error} —— 请人工核查该文件！`)
+    }
+  }
+  IN_FLIGHT.clear()
+  if (restored > 0 || IN_FLIGHT.size === 0) clearJournal()
+  return restored
+}
+
+/** 安装中断钩子（幂等：只装一次）。 */
+let SIGNAL_HOOKS_INSTALLED = false
+export function installInterruptGuards() {
+  if (SIGNAL_HOOKS_INSTALLED) return
+  SIGNAL_HOOKS_INSTALLED = true
+  const handler = (signal) => {
+    const n = restoreAllInFlight()
+    if (n > 0) console.error(`\n[${signal}] 已还原 ${n} 个在飞变异 —— 工作区未被污染`)
+    else console.error(`\n[${signal}] 无在飞变异需要还原`)
+    process.exit(signal === 'SIGINT' ? 130 : 143)
+  }
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    try { process.on(sig, () => handler(sig)) } catch { /* 平台不支持该信号则跳过 */ }
+  }
+  // 兜底：正常/异常退出时也清一次（finally 已还原的情况下这里是 no-op）
+  process.on('exit', () => { restoreAllInFlight({ silent: true }) })
+}
+
 /** 应用一条变异（要求 find 恰好命中一次），返回原字节用于还原。 */
 export function applyMutation(m) {
   const abs = join(ROOT, m.file)
@@ -552,13 +698,18 @@ export function applyMutation(m) {
   const text = original.toString('utf8')
   const hits = text.split(m.find).length - 1
   if (hits !== 1) throw new Error(`变异点命中 ${hits} 次（要求恰好 1 次）：${m.clause} ${m.file} :: ${m.find.slice(0, 60)}`)
+  // 崩溃安全关键顺序：**先落恢复日志，再改文件**。
+  // 反过来（先改再记）在两步之间被强杀就会留下无从还原的残留。
+  writeJournal(abs, original)
   writeFileSync(abs, text.replace(m.find, m.replace))
+  trackInFlight(abs, original)          // ← 登记在飞变异，供 signal/exit 钩子用
   return { abs, original }
 }
 
 /** 按原字节还原并校验 sha256（失败 = exit 3 级告警）。 */
 export function restoreMutation(applied, expectedSha) {
   writeFileSync(applied.abs, applied.original)
+  IN_FLIGHT.delete(applied.abs)         // ← 已还原，从在飞表移除
   const after = sha256Of(applied.abs)
   return { restored: after === expectedSha, after, expectedSha }
 }
@@ -615,6 +766,70 @@ export function selftest() {
   const noop = MUTATIONS.filter((x) => x.find === x.replace)
   push('S5 find !== replace（防空转变异）', noop.length === 0, noop.length ? `空转 ${noop.length}` : '无空转')
 
+  // S6：中断钩子必须能还原在飞变异（2026-10-29 实测事故：整批跑被 Ctrl-C 打断后
+  // lib/taskbook.js 残留变异、工作区被污染，因为 finally 不执行）。
+  // 这里模拟「施加变异后不调用 restoreMutation，直接走 restoreAllInFlight」——
+  // 正是 signal handler 的路径。
+  {
+    const m = MUTATIONS[0]
+    const abs = join(ROOT, m.file)
+    const shaBefore = sha256Of(abs)
+    const applied = applyMutation(m)
+    const shaMut = sha256Of(abs)
+    // 不调 restoreMutation，直接模拟中断钩子
+    const n = restoreAllInFlight({ silent: true })
+    const shaAfter = sha256Of(abs)
+    const ok = shaMut !== shaBefore && n === 1 && shaAfter === shaBefore
+    push(
+      'S6 中断钩子能还原在飞变异（模拟 Ctrl-C 不留残留）',
+      ok,
+      `变异生效=${shaMut !== shaBefore} 还原条数=${n} 还原保真=${shaAfter === shaBefore}`,
+    )
+    // 兜底：万一 S6 自身失败也要把文件弄回原样
+    if (shaAfter !== shaBefore) {
+      writeFileSync(abs, applied.original)
+      console.error(`  ⚠️ S6 兜底还原 ${m.file}`)
+    }
+  }
+
+  // S7：崩溃安全日志必须能救命（模拟「进程在变异态被 SIGKILL 强杀」——
+  // 这种情况下 signal handler 与 finally 都跑不到，唯一出路是盘上的恢复日志）。
+  // 做法：手工造一份「别的 pid」的恢复日志 + 把目标文件改成变异态，然后调
+  // recoverFromJournal()，断言它把文件还原成日志里的原字节。
+  {
+    const m = MUTATIONS[0]
+    const abs = join(ROOT, m.file)
+    const shaBefore = sha256Of(abs)
+    const original = readFileSync(abs)
+    const fakePid = process.pid + 100000 // 造一个「别的进程」的 pid
+    const fakeJournal = join(RECOVERY_DIR, `recovery-${fakePid}.json`)
+    mkdirSync(RECOVERY_DIR, { recursive: true })
+    let ok = false
+    let detail = ''
+    try {
+      writeFileSync(fakeJournal, JSON.stringify({
+        pid: fakePid,
+        startedAt: new Date().toISOString(),
+        file: abs,
+        originalBase64: Buffer.from(original).toString('base64'),
+      }))
+      // 把文件改成「变异态」（模拟那个进程被杀时留下的状态）
+      writeFileSync(abs, original.toString('utf8').replace(m.find, m.replace))
+      const shaMutated = sha256Of(abs)
+      const rec = recoverFromJournal()
+      const shaAfter = sha256Of(abs)
+      ok = shaMutated !== shaBefore && shaAfter === shaBefore && rec.restored >= 1 && !existsSync(fakeJournal)
+      detail = `变异态=${shaMutated !== shaBefore} 还原=${shaAfter === shaBefore} restored=${rec.restored} 日志已清=${!existsSync(fakeJournal)}`
+    } finally {
+      try { rmSync(fakeJournal, { force: true }) } catch { /* 忽略 */ }
+      if (sha256Of(abs) !== shaBefore) {
+        writeFileSync(abs, original)
+        console.error(`  ⚠️ S7 兜底还原 ${m.file}`)
+      }
+    }
+    push('S7 崩溃恢复日志在 SIGKILL 场景下能还原（finally/signal 都跑不到时）', ok, detail)
+  }
+
   const failed = results.filter((x) => !x.ok)
   console.log(`  [selftest] ${results.length - failed.length}/${results.length} 达期望`)
   return failed.length === 0 ? 0 : 1
@@ -625,6 +840,14 @@ export function selftest() {
 // ---------------------------------------------------------------------------
 function main() {
   const argv = process.argv.slice(2)
+  // 中断钩子必须在任何变异施加之前装好（--selftest 也装：它同样会 applyMutation）
+  installInterruptGuards()
+  // 自愈：检查上次被强杀遗留的恢复日志并自动还原（崩溃安全的主防线）
+  const recovery = recoverFromJournal()
+  if (recovery.found > 0) {
+    console.log(`  [崩溃自愈] 发现 ${recovery.found} 份上次中断遗留的恢复日志，已还原 ${recovery.restored} 个文件`)
+    for (const d of recovery.details) console.log(`    - ${d}`)
+  }
   if (argv.includes('--selftest')) {
     console.log('== constraint-mutation-verify --selftest（框架自检，不跑主套件）==')
     return selftest()

@@ -1,8 +1,8 @@
 # ARCHITECTURE — dsh-agents 仓库全景（评审导览）
 
-> 本文面向**外部评审者**：逐部件说明本仓 165 个跟踪文件的职责、接线与质量账。
+> 本文面向**外部评审者**：逐部件说明本仓 167 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 165 文件，本文自身与 CHANGELOG.md 计入；2026-10-28 R3-B2 批次后更新：新增 `tools/opt-b2-s3-gate.mjs` 与 `tests/fixtures/b2-help-archive.sha256.json` 两件）。
+> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 167 文件，本文自身与 CHANGELOG.md 计入；2026-10-29 advisor 项目全景层批次后更新：新增 `lib/advisor/context/project-status.js` 与 `docs/PROJECT-STATUS.md` 两件）。
 > 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
 
 ---
@@ -13,12 +13,12 @@
 
 | 维度 | 数值 | 验证入口 |
 |---|---|---|
-| 跟踪文件 | 165 | `git ls-files` 计数 |
+| 跟踪文件 | 167 | `git ls-files` 计数 |
 | 角色 / 泳道 | 23（build 10 · review 6 · domain 7） | `agent_roles action=list` |
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
 | 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 24（机检脚本 15 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 377 + crgate 65 + publish-scan 53 + persona-gate 33 + taskbook-26a 11 + 隔离门自测 5 + LLM 回放 9 = 553（另有三道新门各带 selftest：注入面 7 / 别名 A1–A6 / 约束审计 G1–G5 / 可复核性 V1–V5） | `npm test` 串联 13 个入口 |
+| 测试断言 | 主套件 382 + crgate 65 + publish-scan 53 + persona-gate 33 + taskbook-26a 11 + 隔离门自测 5 + LLM 回放 9 = 558（另有三道新门各带 selftest：注入面 7 / 别名 A1–A6 / 约束审计 G1–G5 / 可复核性 V1–V5） | `npm test` 串联 13 个入口 |
 | 运行时依赖 | **2**（@deepseek-ai/schemastery + web-tree-sitter@0.27.0，均公开 registry 可装；后者为 B4 符号级检索引入，MIT） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -30,13 +30,13 @@
 dsh-agents/
 ├── package.json / package-lock.json   插件清单（dsh.bundle.patch + dsh.client 双半声明）
 ├── cordis.patch.yml                   宿主插件行 + 全部可配项（档位路由基底）
-├── lib/            (43)               插件运行时（三个宿主工具 + toolscope/reply 支撑模块 + advisor 子目录 26 件）
+├── lib/            (44)               插件运行时（三个宿主工具 + toolscope/reply 支撑模块 + advisor 子目录 27 件）
 ├── personas/       (34)               23 份角色人格 + checklists/ 11 份评审清单
 ├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
 ├── policies/       (2)                toolscope 策略数据（roster 基表 + 23 角色引用表）
 ├── tools/          (24)               独立 CLI 工具与机检脚本（不进宿主运行时）
 ├── tests/          (13)               主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针 + 隔离门/回放设施
-├── docs/           (7)                任务书模板正本 + advisor 契约正本 + 开源复用账本 + 设计原则正本 + 别名契约 + 约束审计 + 可复核性矩阵
+├── docs/           (8)                任务书模板正本 + advisor 契约正本 + 开源复用账本 + 设计原则正本 + 别名契约 + 约束审计 + 可复核性矩阵 + 项目全景
 ├── README.md                          使用向导（安装 / 快速开始 / 配置 / 已知限制）
 ├── CHANGELOG.md                       变更记录（Keep a Changelog 风格，Unreleased 节，条目挂 commit 短哈希）
 ├── ARCHITECTURE.md                    本文
@@ -57,7 +57,7 @@ dsh-agents/
 
 ---
 
-## 2. lib/ — 插件运行时（43 文件 = 顶层 17 + `advisor/` 26）
+## 2. lib/ — 插件运行时（44 文件 = 顶层 17 + `advisor/` 27）
 
 宿主加载入口是 `lib/index.js`；其余模块按职责单一划分。
 
@@ -88,7 +88,7 @@ dsh-agents/
 | `advisor/index.js` | **装配层**（S5 分层重构后）：配置解析 → 启动告警 → store+delivery 所有权 → 组装 assemble/ 四模块 → ctrl（snapshot/patchConfig/triggerReview）→ 端点 → 幂等 dispose；旧全局配置文件只停用不迁移 | 未知配置键 fail-loud；空 `advisorDataDir` 抛错；`runtimeSignature` 三态形态有源码级锁 |
 | `advisor/assemble/`（4） | S5 分层重构（F-4，只移动不改语义）：`session-views.js`（currentModel/isActiveSession/visibleMessageCount 三共享读取闭包 + resolveAdvisorModel 本体）/ `context-hooks.js`（检索面+三层上下文+预筛+工具循环钩子）/ `runtime-pool.js`（runtimes/signatures/runtimeStates 三 Map 独占）/ `wiring.js`（observer + 五段事件接线） | 注入严格单向 `index → 四模块`、四模块互不 import、不 import store.js/api.js、构造期零 IO；闭包环由「delivery/store 所有权上收 + 构造序 pool 先于 wiring」消解（接缝声明为维护侧过程物，未随仓分发） |
 | `advisor/retrieval/`（7） | V3 只读检索地基：`budget.js` 预算唯一源（Base 8KB 与检索段 40KB **并列独立**）· `path-policy.js` 越界/凭据/二进制/超大等 10 类拒绝（junction 用 `realpathSync.native` 防绕过）· `git.js` fd-stdio + 参数白名单 + 最小 env（剔除全部 `GIT_*`）· `symbols.js` 符号抽取（B4：web-tree-sitter AST，降级=正则启发式显式标注）· `walk`/`search`/`index` 遍历检索 | **只读边界源码级门**：写 API 禁令 + 9 条豁免条条活性；预算数字唯一源，测试码写死即红 |
-| `advisor/context/`（4） | V3 三层上下文装配：Conversation / Project（`docs/DECISIONS.md` 决策保护，advisor 只读）/ Repository（L1 文件树+Git+搜索，L2 精读由 `advisorContextMaxFiles` 控制可关） | Base 与 Repository 并列独立互不占用（总注入 ≤48KB）；缺层显式「不可用」不静默 |
+| `advisor/context/`（5） | V3 三层上下文装配：Conversation / Project（`docs/DECISIONS.md` 决策保护，advisor 只读）/ Repository（L1 文件树+Git+搜索，L2 精读由 `advisorContextMaxFiles` 控制可关）；**2026-10-29 新增 `project-status.js` 项目全景层**——读仓库根 `docs/PROJECT-STATUS.md`（单文件精确路径，≤100 行，与 ACI `read_file` 同口径），并入 Repository 池（**不动 Base 8KB 冻结口径**），且在 AC-62 门之前装配（普通聊天也能看到项目全景） | Base 与 Repository 并列独立互不占用（总注入 ≤48KB）；缺层显式「不可用」不静默 |
 | `advisor/decision/prefilter.js` | V3 规则预筛（分级）：user 消息完整规则 / assistant 只挡整轮纯 ACK / unknown fail-open 放行 | 拦截 = 漏评（代价高于多评一次），故判据收敛为整串 ACK 精确匹配；near-miss 反例入样本集 |
 
 **三个宿主工具**（由 index.js 注册，全部经宿主 schema 严格子集校验——`tests/boot-schema-check.mjs` 用宿主真实校验器跑六项全 PASS）：
@@ -121,7 +121,7 @@ dsh-agents/
 | 增量 | 落点 | 边界与取舍 |
 |---|---|---|
 | 只读检索地基 | `retrieval/`（7 文件） | 仓库遍历 / 搜索 / git 事实 / 路径策略 / 预算 / 符号。`spawnSync` 全程 fd-stdio + 最小 env；git 参数为**允许列表**（18 组注入载荷实测全拒） |
-| 三层上下文 | `context/`（4 文件） | Conversation + Project（决策保护）+ Repository（L1 + L2 可关）；上下文段**不进**持续会话历史 |
+| 三层上下文 | `context/`（5 文件） | Conversation + Project（决策保护）+ Repository（L1 + L2 可关）+ **项目全景**（`project-status.js`，2026-10-29：读 `docs/PROJECT-STATUS.md` ≤100 行，并入 Repository 池、AC-62 门之前装配）；上下文段**不进**持续会话历史 |
 | 规则预筛 | `decision/prefilter.js` | 按消息来源分级；判据收敛为**整串 ACK 精确匹配**（子串包含会误拦真实工作消息——评审实锤后修正） |
 | 测试基建 | `tests/isolation-gate.mjs` + `tests/advisor-llm-replay.mjs` | 进程边界双快照（防加载期写盘假绿）+ LLM 录制/回放；均已挂进 `npm test` 默认路径 |
 | 安全修复 | `path-policy.js` / `git.js` | junction 绕过 realpath（改 `realpathSync.native`）/ NTFS ADS / 大小写变体 / 8.3 短名 / `GIT_DIR` 环境劫持（最小 env）——均有注入必红 |
@@ -256,7 +256,7 @@ dsh-agents/
 | `alias-contract-gate.mjs` | **B6 档位别名契约门**：A1 双向一致（TIER_ALIASES ↔ normalizeTier ↔ TIERS）/ A2 角色字段一致（`normalizeTier(omcModel)===tier` **或**已登记带理由例外——现存 2 条：harness-optimizer、rag-reviewer）/ A3 人格 frontmatter `omc_model` 逐字一致 23/23 / A4 文档面未登记别名 / A5 契约两节正文 sha256 == fixture（改契约必同步改 fixture）/ A6 零命中防护 | `--selftest` 7/7（含「改契约不动 fixture」）；已挂 `npm test` |
 | `constraint-audit.mjs` | **B5 约束结构化审计门**：G1 覆盖完整（条款 108 行 + 四档/定级合法）/ G2 ENFORCED 必须可验证（引用的闸门文件存在 + 断言标识可寻）/ G3 N/A 占比 ≤ 40% / G4 P0 必有可落地整改 / G5 零命中防护 | `--selftest` 6/6；已挂 `npm test` |
 | `verifiability-check.mjs` | **B7 可复核性矩阵门**：V1 断言条数下限 + 分节一致 / V2 五列齐全 + 复现路径可执行形态 / V3 口径必标（实测或估算）/ V4 引用仓内路径 existsSync / V5 零命中防护 + 阳性对照；另有 X1 断言「矩阵声明的实测读数必须真出现在命令输出里」 | `--selftest` 6/6；已挂 `npm test` |
-| `constraint-mutation-verify.mjs` | **B5 X-3 闸门鉴别力实测器**：对 PARTIAL 条款构造单变量变异（只改产品代码、绝不改测试）→ 跑**该条款自己的闸门入口** → 断言必红 → 按原字节还原并校验 sha256；登记表 **44 条**（覆盖全部 PARTIAL；43 条有鉴别力 / 1 条零鉴别力缺口 C-101）；`--selftest` 5/5、`--list`、`--only <条款>`；还原失败 → exit 3 | `--selftest` 5/5；组织者整批复跑 44/44 达期望、还原失败 0、变异零残留 |
+| `constraint-mutation-verify.mjs` | **B5 X-3 闸门鉴别力实测器**：对 PARTIAL 条款构造单变量变异（只改产品代码、绝不改测试）→ 跑**该条款自己的闸门入口** → 断言必红 → 按原字节还原并校验 sha256；登记表 **44 条**（覆盖全部 PARTIAL；**44 条有鉴别力 / 0 缺口**，C-101 已补值断言）；`--selftest` 5/5、`--list`、`--only <条款>`；还原失败 → exit 3 | `--selftest` 5/5；组织者整批复跑 44/44 达期望、还原失败 0、变异零残留 |
 | `approved.json` | assemble-review 的批准记录（数据文件） | — |
 
 **tools/ 面设计纪律**：全部机检脚本**注入必红**（把坏样本喂进去断言变红——只验证「好文件过门」的闸门是半成品）；输出排空后再退出；「无意见」唯一合法形态是空输出+exit 0。
@@ -267,7 +267,7 @@ dsh-agents/
 
 | 文件 | 职责 | 当前账 |
 |---|---|---|
-| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + D-1a 档位差异化判别组 + **B1 三特性组**（AC1/AC2/AC3 断言 + spawn 决策并轨 + 生效率读数组 + M11 读取面 + 频控 config + 审计轮转 + 预设挂载/磁盘装载器）+ **B2 注入面组**（catalog 行/help 单源/PROMISES/Q1-Q3 漂移门/审计/allowTools 单授/面A 面D 边界）+ **动态 provider 组**（xd pool / codex connect 目录补全：入目录/声明式不被覆盖/单点失败不连坐+超时/completeDynamic 开关/并发上限 + 按模型名反查的动态兜底）+ 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **377 passed / 0 failed** |
+| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + D-1a 档位差异化判别组 + **B1 三特性组**（AC1/AC2/AC3 断言 + spawn 决策并轨 + 生效率读数组 + M11 读取面 + 频控 config + 审计轮转 + 预设挂载/磁盘装载器）+ **B2 注入面组**（catalog 行/help 单源/PROMISES/Q1-Q3 漂移门/审计/allowTools 单授/面A 面D 边界）+ **动态 provider 组**（xd pool / codex connect 目录补全：入目录/声明式不被覆盖/单点失败不连坐+超时/completeDynamic 开关/并发上限 + 按模型名反查的动态兜底）+ 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **378 passed / 0 failed** |
 | `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 375 |
 | `isolation-gate.mjs` | **进程边界双快照隔离门**：before 快照 → 动态 import 主套件 → after 快照 → 断言相等（防「加载期写盘被烘焙进基线」的假绿）；看门狗强制收口；`--selftest` 必红→必绿 | exit 0；selftest **5/5** |
 | `advisor-llm-replay.mjs` | **LLM 录制/回放设施**：录制端透明 passthrough → 落盘 fixture（不存请求正文）→ 回放逐块深比较；`ADVISOR_REPLAY_MISS`/`UNCONSUMED` 双侧 fail-closed | **9/9** |
@@ -284,7 +284,7 @@ dsh-agents/
 
 ```bash
 npm install                        # 公开 registry 可装（2 个运行时依赖）
-node tests/run.mjs                 # 377/0（含独立门接线组 + B1 三特性组 + B2 注入面组）
+node tests/run.mjs                 # 378/0（含独立门接线组 + B1 三特性组 + B2 注入面组）
 node tests/isolation-gate.mjs      # 隔离门（进程边界双快照）exit 0
 node tests/advisor-llm-replay.mjs  # 录制/回放闭环 9/9
 node tools/crgate.test.mjs         # 65/0
@@ -312,7 +312,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 | 门 | 账面 |
 |---|---|
-| 主套件 | 377/0（含独立门接线组 + B1 三特性组 + B2 注入面组） |
+| 主套件 | 378/0（含独立门接线组 + B1 三特性组 + B2 注入面组） |
 | 隔离门（isolation-gate） | exit 0（selftest 必红→必绿 5/5） |
 | LLM 回放（advisor-llm-replay） | 9/9 |
 | 计数漂移门（skill-sync-check） | PASS（阳性对照 PASS + 变异体 16/16 变红 + eol 一致） |

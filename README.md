@@ -48,7 +48,7 @@ complete task brief — plus 25 workflow skills that orchestrate them end to end
 - **任务书七节结构** + **派活前置三问**（副作用关键词 fail-closed 告警）。
 - **评审/验证席的上下文隔离（两层机制）**——**会话层**：每席都是全新会话，不继承派活方对话历史；**材料层**：`blind` 席（code-reviewer / security-reviewer）不得获得作者自评**与其他席位产出**，`isolated` 席（critic / code-simplifier / verifier）不得获得作者自评；任务书自动写入「上下文隔离契约」，并对下发的材料做**泄漏机检**（命中「我已经实现并验证过」「另一席说没问题」这类文本时 fail-closed 告警并回传 `isolationLeaks`）。
 - **25 件工作流技能**（口径：`skills/` 下 25 个 SKILL.md = 25 个技能目录）：入口 2 + 流水线 4 + 协作 5 + 方法论 13 + 顾问 1。
-- **内置 advisor 顾问是被动机制、宿主侧工具面为零**——每个 turn 后自动评审主会话可见消息，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**，不派活也不会被 `agent_spawn` 触发；模型完全手动指定、无任何兜底。V3 已实现 repository-aware 评审：只读检索（文件树/git/搜索 + 符号精读）、agentic 工具循环（模型自调只读检索工具，不占宿主工具位）、决策保护（`docs/DECISIONS.md`）、规则预筛（普通聊天零 token）、停止五类与 blocker 证据下限。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。
+- **内置 advisor 顾问是被动机制、宿主侧工具面为零**——每个 turn 后自动评审主会话可见消息，**不占 `agent_roles` / `agent_taskbook` / `agent_spawn` 三个工具位**，不派活也不会被 `agent_spawn` 触发；模型完全手动指定、无任何兜底。V3 已实现 repository-aware 评审：只读检索（文件树/git/搜索 + 符号精读）、agentic 工具循环（模型自调只读检索工具，不占宿主工具位）、决策保护（`docs/DECISIONS.md`）、规则预筛（普通聊天零 token）、停止五类与 blocker 证据下限。**项目全景层（2026-10-29）**：每轮注入仓库根 `docs/PROJECT-STATUS.md`（≤100 行，回答「要干什么/到哪了/下一步」），并入 Repository 池、**AC-62 门之前装配**（「继续」「下一步做什么」这类普通聊天也能看到全局），文件不可用时显式标「不可用」。契约见 [docs/advisor-contract.md](docs/advisor-contract.md)。
 - **11 份评审清单**按扩展名/专项路由（go / ts / python / kotlin / rust / csharp / cpp / sql / pytorch / a11y / performance）。
 - **三种派活形态与 per-session 工具面（R3-B1）**——`personaMode='minimal'` 极简派活（免角色、四行 brief、provider+model 必填、**独立预设挂载**（独立插件定位：宿主 `agentPresets` 服务缺失时磁盘装载路独立成立，不依赖宿主 registry）：解析序 = 磁盘目录 `~/.dsh/.agent-presets/` 优先（零依赖 YAML 子集解析 + 组件级挂载契约，未知键/未知组件 fail-fast 列名；组件导入宿主包根兜底）→ 宿主 registry 兜底；解析失败 fail-fast 拒绝派活并列可用清单（零孤儿会话），存在性校验双路兼容 bundle 迁移的 registry-only 预设）；**role 轨默认工具面收缩**（构建期扫 23 角色人格产 per-role 引用表，运行期 restrict 收缩：交集防叠 + 跨代 lift 防线 + 双向对账 fail-open + 收缩生效率读数组）；**极简回复通道**（minimal×org 会话注册 own 层 `agent_reply`：目标钉死 orgId、schema 无 target 参数、唤醒白名单 + 滑动窗口频控 + 连降熔断；投递与派活决策审计同落 `reply-audit.jsonl`（尺寸阈值轮转有界留存））。静态注入面零增长（口径B 1993/2181/2183 锚定），工具描述增量单独计量（合计 ≤400B 上界）。**B2 注入面裁剪**：三工具工具级 description 裁为三行 catalog（各 ≤90 码点），全量语义走 `agent_roles action='help'` 按需披露（迁移前原文逐字静态存档 + 活 action 参数表现拼）；面A 工具面 2663 → 2225 码点（工具级 783 → 255）。
 - **两个确定性机检工具**：`crgate`（评审证据链 freeze/anchor/finalize）与 `publish-scan`（发布前脱敏六类扫描 + 三值裁定）。
@@ -252,7 +252,7 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 ## 测试
 
 ```bash
-node tests/run.mjs                    # 主测试（377 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ B2 注入面组（catalog 行/help 单源/allowTools 单授）+ 动态 provider 组（xd pool / codex connect 目录补全 + 按模型名反查）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
+node tests/run.mjs                    # 主测试（378 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ B2 注入面组（catalog 行/help 单源/allowTools 单授）+ 动态 provider 组（xd pool / codex connect 目录补全 + 按模型名反查）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
 node tools/crgate.test.mjs            # 65 断言
 node tools/publish-scan.test.mjs      # 53 断言
 node tests/skill-sync-check.mjs       # 计数漂移门 + .gitattributes 门（文档里的技能件数必须等于磁盘实测）
@@ -291,7 +291,7 @@ dsh-agents/
     agent-reply.js         极简回复通道（agent_reply + 直投 + V3-2 频控熔断 + 审计轮转有界留存）
     yaml-mini.js           最小 YAML 子集解析器（磁盘预设装载器专用，超子集构造 fail-fast 列行号）
     disk-presets.js        磁盘预设装载器（~/.dsh/.agent-presets 装载 + 组件级挂载契约，独立插件自制挂载）
-    advisor/               (26) advisor 顾问：顶层 6（store/api/observer/runtime/delivery/index）+ assemble/ 4（S5 分层：session-views/context-hooks/runtime-pool/wiring）+ retrieval/ 7（只读检索+git+符号）+ context/ 4（三层装配）+ aci/ 3（agentic 工具循环）+ decision/ 1（规则预筛）+ grammars/ 1（vendor wasm）
+    advisor/               (27) advisor 顾问：顶层 6（store/api/observer/runtime/delivery/index）+ assemble/ 4（S5 分层：session-views/context-hooks/runtime-pool/wiring）+ retrieval/ 7（只读检索+git+符号）+ context/ 5（三层装配 + 项目全景 project-status）+ aci/ 3（agentic 工具循环）+ decision/ 1（规则预筛）+ grammars/ 1（vendor wasm）
   policies/                toolscope 策略数据（roster 基表手写 + 23 角色引用表机产）
   personas/                23 份人格正文（19 OMC + 4 ECC 系）
   personas/checklists/     11 份评审清单（语言 7 + 专项 4，按扩展名/专项路由）
@@ -303,6 +303,7 @@ dsh-agents/
   docs/constraint-audit.md 约束结构化审计正本（108 条款 × 四档结构化程度）
   docs/VERIFIABILITY.md    对外宣称数字的可复核性矩阵（44 条断言 × 可执行复现路径）
   docs/third-party-references.md 开源复用账本（AC-61：Aider / SWE-agent / OpenHands 三源六字段）
+  docs/PROJECT-STATUS.md   项目全景正本（≤100 行：要干什么 / 现在到哪 / 下一步做什么；advisor 每轮注入）
   tools/                   crgate / publish-scan / install-personas / assemble-review / scan-role-toolrefs / toolscope-efficiency / opt-r2-faced-probe / alias-contract-gate / constraint-audit / verifiability-check / constraint-mutation-verify 等机检与测量脚本
   tests/                   run.mjs + 宿主校验、烟测与探针
   .gitattributes           `* -text`：禁用换行转换，保住「git 干净 = 字节还原」

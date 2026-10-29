@@ -724,6 +724,37 @@ test('人格未安装时退化为摘要模式且不报错', () => {
   assert.ok(Array.isArray(listPersonaFiles()))
 })
 
+// 值断言补口（B5 X-3 实测缺口 C-101，2026-10-29）：
+// 上面那条测试名叫「人格未安装时退化为摘要模式」，但它是用 getRole('executor') 调的——
+// executor 的人格文件**存在**，persona.installed === true ⇒ `if (!persona.installed)` 整个
+// 分支永不进入，是**结构性死码**（X-3 变异实测：删掉摘要文案标记后主套件仍 377/0 全绿）。
+// 这里用**合成 role**（id 在 personas/ 里不存在）真正走到降级分支，并配阳性对照臂。
+test('C-101 补：合成 role 走真缺省分支 + 已安装 role 不得出现摘要文案（值断言）', () => {
+  // ① 阴性臂：合成 role（id 不在 personas/ 里）→ 必须走真正的降级路径
+  const ghostRole = {
+    id: 'ghost-no-persona-fixture',
+    name: 'Ghost',
+    description: 'fixture role with no persona file',
+    mission: 'exercise the degraded summary branch',
+    tier: 'LOW',
+  }
+  assert.equal(listPersonaFiles().some((f) => f.id === ghostRole.id), false, '前置：合成 role 不得有对应人格文件')
+  const ghost = loadPersona(ghostRole)
+  assert.equal(ghost.installed, false, '★缺人格文件时 installed 必须是 false')
+  assert.equal(ghost.hash, null, '★缺人格文件时 hash 必须是 null')
+  assert.equal(ghost.file, null, '★缺人格文件时 file 必须是 null')
+  assert.ok(ghost.text.includes('（人格文件未安装）角色摘要'), '★摘要模式必须自证「人格文件未安装」')
+  assert.ok(ghost.text.includes(ghostRole.name), '摘要须含角色名')
+  assert.ok(ghost.text.includes(ghostRole.mission), '摘要须含职责边界')
+
+  // ② 阳性对照臂：已安装 role 必须 installed=true 且**不含**该文案
+  //    （防「无论是否安装都渲染摘要标记」的假实现 —— 只验证阴性臂的断言是半成品）
+  const real = loadPersona(getRole('executor'))
+  assert.equal(real.installed, true, '阳性对照：executor 人格文件必须已安装')
+  assert.equal(typeof real.hash, 'string', '阳性对照：已安装时必须有人格哈希')
+  assert.equal(real.text.includes('人格文件未安装'), false, '阳性对照：已安装角色不得出现「未安装」文案')
+})
+
 test('时间戳格式（A4：秒精度，防同分钟默认路径撞车）', () => {
   assert.match(stamp(new Date(2026, 8, 12, 9, 5, 7)), /^20260912-090507$/)
 })
