@@ -33,29 +33,29 @@
 | R3 | 工作流技能 25 件（25 个 SKILL.md = 25 个技能目录） | README.md:50「25 件工作流技能（口径：skills/ 下 25 个 SKILL.md = 25 个技能目录）」；README.md:151 | 实测读数：25/25 | node --input-type=module -e "import{readdirSync}from'node:fs';const d=readdirSync('skills',{withFileTypes:true}).filter(e=>e.isDirectory());console.log(d.length+'/'+d.filter(x=>readdirSync('skills/'+x.name).includes('SKILL.md')).length)" |
 | R4 | skills/ 目录下共 29 个文件（含 README.md、replica-map.json、2 份 references） | README.md:151「目录下共 29 个文件」；ARCHITECTURE.md:198「在盘 29 个文件」 | 实测读数：29 | node --input-type=module -e "import{readdirSync}from'node:fs';const w=d=>{let n=0;for(const e of readdirSync(d,{withFileTypes:true}))n+=e.isDirectory()?w(d+'/'+e.name):1;return n};console.log(w('skills'))" |
 | R5 | 评审清单 11 份（语言 7 + 专项 4） | README.md:52「11 份评审清单」；README.md:297「11 份评审清单（语言 7 + 专项 4）」 | 实测读数：11 | node --input-type=module -e "import{readdirSync}from'node:fs';console.log(readdirSync('personas/checklists').filter(f=>f.endsWith('.md')).length)" |
-| R6 | 只读角色实测 12 个（README 说「9 个角色」为文档漂移，见漂移清单 DR1） | README.md:47「上游标注 disallowedTools: Write, Edit 的 9 个角色（…）」 | 实测读数：12 | node --input-type=module -e "import{ROLES}from'./lib/roles.js';console.log(ROLES.filter(r=>r.readonly===true).length)" |
-| R7 | 档位分布实测 HIGH 10 · MEDIUM 11 · LOW 2（README 写「HIGH 11 · MEDIUM 10」为漂移，见 DR2） | README.md:117「合计：HIGH 11 · MEDIUM 10 · LOW 2」 | 实测读数：10/11/2 | node --input-type=module -e "import{ROLES}from'./lib/roles.js';const c={HIGH:0,MEDIUM:0,LOW:0};for(const r of ROLES)c[r.tier]++;console.log(c.HIGH+'/'+c.MEDIUM+'/'+c.LOW)" |
+| R6 | 只读角色共 12 个（9 个上游 disallowedTools + 3 个批次3 本仓裁决只读） | README.md:47「代码里标 `readonly` 的共 12 个：其中 9 个上游标注 disallowedTools…另 3 个为批次3 移植时本仓裁决只读」 | 实测读数：12 | node --input-type=module -e "import{ROLES}from'./lib/roles.js';console.log(ROLES.filter(r=>r.readonly===true).length)" |
+| R7 | 档位分布 HIGH 10 · MEDIUM 11 · LOW 2 | README.md:117「合计：HIGH 10 · MEDIUM 11 · LOW 2 = 23 个角色」 | 实测读数：10/11/2 | node --input-type=module -e "import{ROLES}from'./lib/roles.js';const c={HIGH:0,MEDIUM:0,LOW:0};for(const r of ROLES)c[r.tier]++;console.log(c.HIGH+'/'+c.MEDIUM+'/'+c.LOW)" |
 | R8 | 主测试 375 passed / 0 failed | README.md:255「node tests/run.mjs # 主测试（375 passed / 0 failed）」；ARCHITECTURE.md:266 | 实测读数：375/0 | node tests/run.mjs \| node --input-type=module -e "import{readFileSync}from'node:fs';const m=readFileSync(0,'utf8').match(/([0-9]+) passed, ([0-9]+) failed/);console.log(m[1]+'/'+m[2])" |
 | R9 | crgate 自测 65 断言 | README.md:247「node tools/crgate.test.mjs（65 断言）」；README.md:256 | 实测读数：65/0 | node tools/crgate.test.mjs \| node --input-type=module -e "import{readFileSync}from'node:fs';const t=readFileSync(0,'utf8');console.log(t.match(/([0-9]+) passed/)[1]+'/'+t.match(/([0-9]+) failed/)[1])" |
 | R10 | publish-scan 自测 53 断言（B5 审计修复后 47 → 53） | README.md:248「publish-scan.test.mjs … 53 断言」；README.md:257「# 53 断言」 | 实测读数：passed=53 | node tools/publish-scan.test.mjs \| node --input-type=module -e "import{readFileSync}from'node:fs';const m=readFileSync(0,'utf8').match(/passed=([0-9]+)/);console.log('passed='+m[1])" |
-| R11 | README「已知限制」9 条（ARCHITECTURE 写「完整 8 条」为漂移，见 DR4） | README.md:309「## 已知限制」下编号列表；ARCHITECTURE.md:342「完整 8 条见 README」 | 实测读数：9 | node --input-type=module -e "import{readFileSync}from'node:fs';const t=readFileSync('README.md','utf8');const s=t.slice(t.indexOf('## 已知限制'));const m=s.match(/^[0-9]+[.] /gm);console.log(m?m.length:0)" |
+| R11 | README「已知限制」9 条，ARCHITECTURE 同口径「完整 9 条」 | README.md:309「## 已知限制」下编号列表；ARCHITECTURE.md:342「完整 9 条见 README」 | 实测读数：9 | node --input-type=module -e "import{readFileSync}from'node:fs';const t=readFileSync('README.md','utf8');const s=t.slice(t.indexOf('## 已知限制'));const m=s.match(/^[0-9]+[.] /gm);console.log(m?m.length:0)" |
 | R12 | 机检工具表列 4 个工具（crgate / publish-scan / install-personas / assemble-review） | README.md:245-250「## 机检工具」表 | 实测读数：4 | node --input-type=module -e "import{readFileSync}from'node:fs';const t=readFileSync('README.md','utf8');const s=t.slice(t.indexOf('## 机检工具'),t.indexOf('## 测试'));const P=String.fromCharCode(124);console.log(s.split('\n').filter(l=>l.startsWith(P)&&l.includes('tools/')).length)" |
 
 ## ARCHITECTURE.md（16 断言）
 
 | # | 断言 | 来源（文档:节或行） | 证据（数值/位置） | 复现路径（可执行命令） |
 |---|---|---|---|---|
-| A1 | 跟踪文件 157 | ARCHITECTURE.md:16（关键数字表「跟踪文件 157」）；ARCHITECTURE.md:5 | 实测读数：157 | git ls-files -- docs/ lib/ tools/ tests/ personas/ skills/ policies/ scripts/ package.json package-lock.json cordis.patch.yml README.md ARCHITECTURE.md CHANGELOG.md LICENSE THIRD-PARTY-NOTICES.md .gitattributes .gitignore .publish-scan-allow.json \| node --input-type=module -e "import{readFileSync}from'node:fs';console.log(readFileSync(0,'utf8').split('\n').filter(Boolean).length)" |
+| A1 | 跟踪文件 164 | ARCHITECTURE.md:16（关键数字表「跟踪文件 164」）；ARCHITECTURE.md:5 | 实测读数：164 | git ls-files -- docs/ lib/ tools/ tests/ personas/ skills/ policies/ scripts/ package.json package-lock.json cordis.patch.yml README.md ARCHITECTURE.md CHANGELOG.md LICENSE THIRD-PARTY-NOTICES.md .gitattributes .gitignore .publish-scan-allow.json \| node --input-type=module -e "import{readFileSync}from'node:fs';console.log(readFileSync(0,'utf8').split('\n').filter(Boolean).length)" |
 | A2 | 角色 / 泳道 23（build 10 · review 6 · domain 7） | ARCHITECTURE.md:17 | 实测读数：23/10/6/7 | node --input-type=module -e "import{ROLES}from'./lib/roles.js';const c={build:0,review:0,domain:0};for(const r of ROLES)c[r.lane]++;console.log(ROLES.length+'/'+c.build+'/'+c.review+'/'+c.domain)" |
 | A3 | 工作流技能 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | ARCHITECTURE.md:18；ARCHITECTURE.md:202-229 分组小节 | 实测读数：25=25 | node --input-type=module -e "import{readdirSync}from'node:fs';const d=readdirSync('skills',{withFileTypes:true}).filter(e=>e.isDirectory());const m=d.filter(x=>readdirSync('skills/'+x.name).includes('SKILL.md')).length;console.log(m+'='+[2,4,5,13,1].reduce((a,b)=>a+b,0))" |
 | A4 | 评审清单 11（语言 7 + 专项 4） | ARCHITECTURE.md:19；ARCHITECTURE.md:192-194 | 实测读数：11/7/4 | node --input-type=module -e "import{readdirSync}from'node:fs';const a=readdirSync('personas/checklists').filter(f=>f.endsWith('.md'));const spec=['sql','pytorch','a11y','performance'].filter(s=>a.includes(s+'.md')).length;console.log(a.length+'/'+(a.length-spec)+'/'+spec)" |
 | A5 | 确定性工具：宿主注册 3（+ own 层 agent_reply），`tools/` 共 23 | ARCHITECTURE.md:20；ARCHITECTURE.md:235 | 实测读数：3/23 | node --input-type=module -e "import{CATALOG}from'./lib/index.js';import{readdirSync}from'node:fs';console.log(Object.keys(CATALOG).length+'/'+readdirSync('tools',{withFileTypes:true}).filter(e=>e.isFile()).length)" |
 | A6 | 测试断言合计 551 = 主套件 375 + crgate 65 + publish-scan 53 + persona-gate 33 + taskbook-26a 11 + 隔离门自测 5 + LLM 回放 9 | ARCHITECTURE.md:21；ARCHITECTURE.md:309-319（§7.1 质量账逐门） | 实测读数：551 | node --input-type=module -e "import{readFileSync}from'node:fs';const t=readFileSync('ARCHITECTURE.md','utf8');const m=t.match(/主套件 ([0-9]+) \+ crgate ([0-9]+) \+ publish-scan ([0-9]+) \+ persona-gate ([0-9]+) \+ taskbook-26a ([0-9]+) \+ 隔离门自测 ([0-9]+) \+ LLM 回放 ([0-9]+)/);console.log(m?m.slice(1).reduce((a,b)=>a+Number(b),0):'NOMATCH')" |
-| A7 | 运行时依赖实测 2 个（schemastery + web-tree-sitter）——**ARCHITECTURE 写「1」为漂移**，见 DR3 | ARCHITECTURE.md:22（关键数字表「运行时依赖 1」） | 实测读数：2 | node --input-type=module -e "import{readFileSync}from'node:fs';console.log(Object.keys(JSON.parse(readFileSync('package.json','utf8')).dependencies).length)" |
+| A7 | 运行时依赖 2 个（@deepseek-ai/schemastery + web-tree-sitter@0.27.0） | ARCHITECTURE.md:22（关键数字表「运行时依赖 2」） | 实测读数：2 | node --input-type=module -e "import{readFileSync}from'node:fs';console.log(Object.keys(JSON.parse(readFileSync('package.json','utf8')).dependencies).length)" |
 | A8 | lib/ 43 文件 = 顶层 17 + advisor/ 26 | ARCHITECTURE.md:60；ARCHITECTURE.md:33 | 实测读数：43/17/26 | node --input-type=module -e "import{readdirSync}from'node:fs';const w=d=>{let n=0;for(const e of readdirSync(d,{withFileTypes:true}))n+=e.isDirectory()?w(d+'/'+e.name):1;return n};console.log(w('lib')+'/'+readdirSync('lib',{withFileTypes:true}).filter(e=>e.isFile()).length+'/'+w('lib/advisor'))" |
 | A9 | personas/ 34 文件 = 23 份角色人格 + checklists/ 11 份 | ARCHITECTURE.md:34；ARCHITECTURE.md:172「## 3. personas/ — 角色人格（34 文件）」 | 实测读数：34/23/11 | node --input-type=module -e "import{readdirSync}from'node:fs';const md=d=>readdirSync(d).filter(f=>f.endsWith('.md')).length;console.log((md('personas')+md('personas/checklists'))+'/'+md('personas')+'/'+md('personas/checklists'))" |
 | A10 | skills/ 在盘 29 文件、其中 28 个在 git 跟踪内 | ARCHITECTURE.md:198「在盘 29 个文件 …；其中 28 个在 git 跟踪内」 | 实测读数：29/28 | git ls-files -- skills/ \| node --input-type=module -e "import{readFileSync,readdirSync}from'node:fs';const w=d=>{let n=0;for(const e of readdirSync(d,{withFileTypes:true}))n+=e.isDirectory()?w(d+'/'+e.name):1;return n};console.log(w('skills')+'/'+readFileSync(0,'utf8').split('\n').filter(Boolean).length)" |
-| A11 | tools/ 23 文件 = 机检脚本 14 + 测量/读取 6 + 负向自测 2 + 数据 1 | ARCHITECTURE.md:235；ARCHITECTURE.md:37 | 实测读数：23/14/6/2/1 | node --input-type=module -e "import{readdirSync}from'node:fs';const f=readdirSync('tools',{withFileTypes:true}).filter(e=>e.isFile()).map(e=>e.name);const data=f.filter(n=>n.endsWith('.json'));const neg=['crgate.test.mjs','publish-scan.test.mjs'];const measure=['measure-injection-surface.mjs','measure-decay.mjs','zstd-read.mjs','usage-probe.mjs','opt-r2-faced-probe.mjs','toolscope-efficiency.mjs'];const m=f.filter(n=>measure.includes(n));const g=f.filter(n=>neg.includes(n));console.log(f.length+'/'+(f.length-data.length-g.length-m.length)+'/'+m.length+'/'+g.length+'/'+data.length)" |
+| A11 | tools/ 24 文件 = 机检脚本 15 + 测量/读取 6 + 负向自测 2 + 数据 1 | ARCHITECTURE.md:236；ARCHITECTURE.md:37 | 实测读数：24/15/6/2/1 | node --input-type=module -e "import{readdirSync}from'node:fs';const f=readdirSync('tools',{withFileTypes:true}).filter(e=>e.isFile()).map(e=>e.name);const data=f.filter(n=>n.endsWith('.json'));const neg=['crgate.test.mjs','publish-scan.test.mjs'];const measure=['measure-injection-surface.mjs','measure-decay.mjs','zstd-read.mjs','usage-probe.mjs','opt-r2-faced-probe.mjs','toolscope-efficiency.mjs'];const m=f.filter(n=>measure.includes(n));const g=f.filter(n=>neg.includes(n));console.log(f.length+'/'+(f.length-data.length-g.length-m.length)+'/'+m.length+'/'+g.length+'/'+data.length)" |
 | A12 | tests/ 13 文件 | ARCHITECTURE.md:38；ARCHITECTURE.md:262「## 6. tests/ — 测试与验收门（13 文件）」 | 实测读数：13 | node --input-type=module -e "import{readdirSync}from'node:fs';console.log(readdirSync('tests',{withFileTypes:true}).filter(e=>e.isFile()).length)" |
 | A13 | 隔离门自测 5 场景（5/5 达期望） | ARCHITECTURE.md:268「selftest 5/5」；ARCHITECTURE.md:314 | 实测读数：场景：5/5 | node tests/isolation-gate.mjs --selftest |
 | A14 | 计数漂移门变异体 16/16 达期望 | ARCHITECTURE.md:270「变异体 16/16 达到期望」；ARCHITECTURE.md:314 | 实测读数：变异体：16/16 | node tests/skill-sync-check.mjs --selftest |
@@ -112,16 +112,17 @@
 
 ## 文档漂移清单（本表不改文档，只登记真值）
 
-以下 5 处对外表述与当前工作树实测不符。按用户铁律**不得改共享写域**，此处只登记，
-交组织者收尾统一处置（修文档或修数字，二选一，需组织者裁定）：
+以下 5 处对外表述曾与工作树实测不符，**均已于 2026-10-29 由组织者收尾修订完毕**（状态列 = 当前状态）：
 
-| # | 位置 | 文档表述 | 实测值 | 差额 | 影响 |
+| # | 位置 | 原表述 | 实测值 | 差额 | 处置 |
 |---|---|---|---|---|---|
-| DR1 | README.md:47 | 只读角色「9 个角色」（列了 9 个 id） | 12 | +3 | `lib/roles.js` 里 `readonly:true` 共 12 个；README 列表缺 silent-failure-hunter / spec-miner / rag-reviewer 三个 ECC 角色（ARCHITECTURE.md:180-184 的档位表已含它们，两文档自相矛盾） |
-| DR2 | README.md:117 | 「HIGH 11 · MEDIUM 10 · LOW 2 = 23」 | HIGH 10 · MEDIUM 11 · LOW 2 | 两档互换 | 总数 23 正确，但 HIGH/MEDIUM 各差 1；ARCHITECTURE.md:180-182 的分档与实测一致（README 的错） |
-| DR3 | ARCHITECTURE.md:22 | 「运行时依赖 1（@deepseek-ai/schemastery）」 | 2（+ web-tree-sitter 0.27.0） | +1 | B4 符号解析引入 web-tree-sitter 后此行未更新；CHANGELOG / THIRD-PARTY-NOTICES 已记载该依赖 |
-| DR4 | ARCHITECTURE.md:342 | 「完整 8 条见 README「已知限制」」 | 9 | +1 | README 已知限制现有 9 条（第 9 条为 minimal 预设可得性） |
-| DR5 | ARCHITECTURE.md:123 | 「`retrieval/`（6 文件）」 | 7 | +1 | 实际 `lib/advisor/retrieval/` 7 文件（budget/git/index/path-policy/search/symbols/walk）；同文 ARCHITECTURE.md:90 写的是「（7）」——同文自相矛盾 |
+| DR1 | README.md:47 | 只读角色「9 个角色」（列了 9 个 id） | 12 | +3 | ✅ 已修订：改为「标 `readonly` 共 12 个：9 个上游 disallowedTools + 3 个批次3 本仓裁决只读」，并逐一点名（`lib/roles.js` 里 `readonly:true` 共 12） |
+| DR2 | README.md:117 | 「HIGH 11 · MEDIUM 10 · LOW 2 = 23」 | HIGH 10 · MEDIUM 11 · LOW 2 | 两档互换 | ✅ 已修订：改为「HIGH 10 · MEDIUM 11 · LOW 2 = 23」 |
+| DR3 | ARCHITECTURE.md:22 | 「运行时依赖 1（@deepseek-ai/schemastery）」 | 2（+ web-tree-sitter 0.27.0） | +1 | ✅ 已修订：关键数字表改「2」，并同步第 282/285 行「装 1 个运行时依赖」→「2 个」 |
+| DR4 | ARCHITECTURE.md:342 | 「完整 8 条见 README「已知限制」」 | 9 | +1 | ✅ 已修订：改为「完整 9 条」 |
+| DR5 | ARCHITECTURE.md:123 | 「`retrieval/`（6 文件）」 | 7 | +1 | ✅ 已修订：改为「（7 文件）」并补「符号」职责；与同文 :90 的「（7）」一致 |
+
+> 这五处由本表 R6/R7/R11/A7 与漂移清单共同发现，**发现者=B7 席，修订者=组织者**（B7 按纪律不改共享写域）。修订后 R6/R7/R11/A7 四行已同步改为「文档与实测一致」口径。
 
 另有两处**时点差异**不算漂移，但评审者需注意：
 - `docs/design-principles.md:79`「lib/ 全部 36 个 `.js`、时钟 27 处」是 `master@6d0f71d` 的盘点值；
@@ -133,8 +134,8 @@
 
 - **最小抽查集**（建议 ≥10 条，覆盖五种载体）：R1（角色数）、R3（技能数）、R8（主套件 375）、
   R10（publish-scan 53）、C2（面A 2225）、T1（catalog 90/78/87）、T2（help H 1169）、
-  D3/D4（历史时点时钟口径）、A1（跟踪文件 157）、A7（运行时依赖，**已知漂移**）、
-  R6/R7（只读角色 / 档位分布，**已知漂移**）。
+  D3/D4（历史时点时钟口径，**非漂移**）、A1（跟踪文件 164）、A7（运行时依赖 2）、
+  R6/R7（只读角色 12 / 档位分布 10·11·2）——后四行原为漂移点，2026-10-29 已随文档修订对齐。
 - **机检优先**：`node tools/verifiability-check.mjs`（静态 V1–V5）+ `--execute`（X1 逐条真跑核对读数）
   + `--selftest`（5 变异体注入必红）。门绿只证明「登记完整 + 路径可执行 + 读数可复现」，
   **不证明数字本身仍然正确** —— 数字正确性由 X1 逐条真跑与人工抽查共同承担。

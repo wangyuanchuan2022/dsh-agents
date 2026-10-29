@@ -12,6 +12,13 @@ B2 段（注入面裁剪 + 按需 help + 按会话单授，2026-10-28）条目�
 
 ### Added
 
+**B5 X-3 补做：PARTIAL 闸门「违反即变红」逐条变异实测（2026-10-29）**
+
+- 新增 `tools/constraint-mutation-verify.mjs`：对 `docs/constraint-audit.md` 的 PARTIAL 条款构造**单变量变异**（只改产品代码 `lib/`·`tools/`，**绝不改测试**）→ 跑**该条款自己的闸门入口** → 断言必红 → 按内存原字节还原并校验 sha256。五条纪律：单点替换必须恰好命中 1 次（0 次/多次即抛错 fail-closed）、逐条跑它自己的闸门、还原保真校验（不等即 exit 3）、fd-stdio 跑子进程（禁管道捕获）、`find !== replace` 防空转。`--selftest` 5/5、`--list`、`--only <条款>`。
+- **实测 7 条全部达期望，变异零残留**（7 个被变异文件 `git diff --quiet HEAD` 全通过）：**5 条 PARTIAL 闸门经证实有真实鉴别力**（C-013 persona-gate baseline / C-014 toolscope fail-closed deny / C-018 publish-scan secrets=critical / C-051 advisor seq 水位门 / C-056 advisor 回合计数冷却）；**2 条确认为零鉴别力缺口**（C-064 任务书「报告落盘」条款、C-107 `lastReviewedSeq` 哨兵 -1）。
+- **新增方法论缺口（已回灌审计正本 §7.1）**：**「闸门入口错位」会把有牙齿的闸门误判成没牙齿**——本工具初版让所有变异都跑 `tests/run.mjs`，导致 C-013/C-018 被误判「零鉴别力」，而它们的闸门实际在 `tools/verify-imp26.mjs` 与 `tools/publish-scan.test.mjs`（都不在 run.mjs 链上）。判据：先确认条款的闸门在哪条命令里，再谈鉴别力。
+- 未做：44 条 PARTIAL 中只实测 7 条（12 条 P0+PARTIAL 中的 5 条 + 2 个缺口样本），**不是全量**；两条缺口的修法（4 条值断言）已给建议但未实施，交裁定。
+
 **R3-B5/B6/B7 三道结构化闸门 + 两项实测缺陷修复（2026-10-29）**
 
 **B5 约束结构化审计**（`docs/constraint-audit.md` 291 行 + `tools/constraint-audit.mjs`）

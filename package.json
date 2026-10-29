@@ -25,7 +25,9 @@
     "gate:injection": "node tools/opt-b2-s3-gate.mjs --selftest",
     "gate:alias": "node tools/alias-contract-gate.mjs",
     "gate:constraints": "node tools/constraint-audit.mjs",
-    "gate:verifiability": "node tools/verifiability-check.mjs"
+    "gate:verifiability": "node tools/verifiability-check.mjs",
+    "gate:constraint-mutation": "node tools/constraint-mutation-verify.mjs",
+    "gate:constraint-mutation:selftest": "node tools/constraint-mutation-verify.mjs --selftest"
   },
   "license": "MIT",
   "dependencies": {

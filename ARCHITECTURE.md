@@ -1,25 +1,25 @@
 # ARCHITECTURE — dsh-agents 仓库全景（评审导览）
 
-> 本文面向**外部评审者**：逐部件说明本仓 164 个跟踪文件的职责、接线与质量账。
+> 本文面向**外部评审者**：逐部件说明本仓 165 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 164 文件，本文自身与 CHANGELOG.md 计入；2026-10-28 R3-B2 批次后更新：新增 `tools/opt-b2-s3-gate.mjs` 与 `tests/fixtures/b2-help-archive.sha256.json` 两件）。
+> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 165 文件，本文自身与 CHANGELOG.md 计入；2026-10-28 R3-B2 批次后更新：新增 `tools/opt-b2-s3-gate.mjs` 与 `tests/fixtures/b2-help-archive.sha256.json` 两件）。
 > 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
 
 ---
 
 ## 0. 一句话与关键数字
 
-**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、23 个确定性机检与测量脚本、三层测试链、per-session 工具面收缩、极简派活/回复通道与独立预设装载器（R3-B1）。
+**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、24 个确定性机检与测量脚本、三层测试链、per-session 工具面收缩、极简派活/回复通道与独立预设装载器（R3-B1）。
 
 | 维度 | 数值 | 验证入口 |
 |---|---|---|
-| 跟踪文件 | 164 | `git ls-files` 计数 |
+| 跟踪文件 | 165 | `git ls-files` 计数 |
 | 角色 / 泳道 | 23（build 10 · review 6 · domain 7） | `agent_roles action=list` |
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
-| 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 23（机检脚本 14 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
+| 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 24（机检脚本 15 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
 | 测试断言 | 主套件 375 + crgate 65 + publish-scan 53 + persona-gate 33 + taskbook-26a 11 + 隔离门自测 5 + LLM 回放 9 = 551（另有三道新门各带 selftest：注入面 7 / 别名 A1–A6 / 约束审计 G1–G5 / 可复核性 V1–V5） | `npm test` 串联 13 个入口 |
-| 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
+| 运行时依赖 | **2**（@deepseek-ai/schemastery + web-tree-sitter@0.27.0，均公开 registry 可装；后者为 B4 符号级检索引入，MIT） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
 ---
@@ -34,7 +34,7 @@ dsh-agents/
 ├── personas/       (34)               23 份角色人格 + checklists/ 11 份评审清单
 ├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
 ├── policies/       (2)                toolscope 策略数据（roster 基表 + 23 角色引用表）
-├── tools/          (23)               独立 CLI 工具与机检脚本（不进宿主运行时）
+├── tools/          (24)               独立 CLI 工具与机检脚本（不进宿主运行时）
 ├── tests/          (13)               主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针 + 隔离门/回放设施
 ├── docs/           (7)                任务书模板正本 + advisor 契约正本 + 开源复用账本 + 设计原则正本 + 别名契约 + 约束审计 + 可复核性矩阵
 ├── README.md                          使用向导（安装 / 快速开始 / 配置 / 已知限制）
@@ -120,7 +120,7 @@ dsh-agents/
 
 | 增量 | 落点 | 边界与取舍 |
 |---|---|---|
-| 只读检索地基 | `retrieval/`（6 文件） | 仓库遍历 / 搜索 / git 事实 / 路径策略 / 预算。`spawnSync` 全程 fd-stdio + 最小 env；git 参数为**允许列表**（18 组注入载荷实测全拒） |
+| 只读检索地基 | `retrieval/`（7 文件） | 仓库遍历 / 搜索 / git 事实 / 路径策略 / 预算 / 符号。`spawnSync` 全程 fd-stdio + 最小 env；git 参数为**允许列表**（18 组注入载荷实测全拒） |
 | 三层上下文 | `context/`（4 文件） | Conversation + Project（决策保护）+ Repository（L1 + L2 可关）；上下文段**不进**持续会话历史 |
 | 规则预筛 | `decision/prefilter.js` | 按消息来源分级；判据收敛为**整串 ACK 精确匹配**（子串包含会误拦真实工作消息——评审实锤后修正） |
 | 测试基建 | `tests/isolation-gate.mjs` + `tests/advisor-llm-replay.mjs` | 进程边界双快照（防加载期写盘假绿）+ LLM 录制/回放；均已挂进 `npm test` 默认路径 |
@@ -232,7 +232,7 @@ dsh-agents/
 
 ---
 
-## 5. tools/ — 独立 CLI 与机检（23 文件 = 机检脚本 14 + 测量/读取 6 + 负向自测 2 + 数据 1）
+## 5. tools/ — 独立 CLI 与机检（24 文件 = 机检脚本 15 + 测量/读取 6 + 负向自测 2 + 数据 1）
 
 | 文件 | 职责 | 自测 |
 |---|---|---|
@@ -256,6 +256,7 @@ dsh-agents/
 | `alias-contract-gate.mjs` | **B6 档位别名契约门**：A1 双向一致（TIER_ALIASES ↔ normalizeTier ↔ TIERS）/ A2 角色字段一致（`normalizeTier(omcModel)===tier` **或**已登记带理由例外——现存 2 条：harness-optimizer、rag-reviewer）/ A3 人格 frontmatter `omc_model` 逐字一致 23/23 / A4 文档面未登记别名 / A5 契约两节正文 sha256 == fixture（改契约必同步改 fixture）/ A6 零命中防护 | `--selftest` 7/7（含「改契约不动 fixture」）；已挂 `npm test` |
 | `constraint-audit.mjs` | **B5 约束结构化审计门**：G1 覆盖完整（条款 108 行 + 四档/定级合法）/ G2 ENFORCED 必须可验证（引用的闸门文件存在 + 断言标识可寻）/ G3 N/A 占比 ≤ 40% / G4 P0 必有可落地整改 / G5 零命中防护 | `--selftest` 6/6；已挂 `npm test` |
 | `verifiability-check.mjs` | **B7 可复核性矩阵门**：V1 断言条数下限 + 分节一致 / V2 五列齐全 + 复现路径可执行形态 / V3 口径必标（实测或估算）/ V4 引用仓内路径 existsSync / V5 零命中防护 + 阳性对照；另有 X1 断言「矩阵声明的实测读数必须真出现在命令输出里」 | `--selftest` 6/6；已挂 `npm test` |
+| `constraint-mutation-verify.mjs` | **B5 X-3 闸门鉴别力实测器**：对 PARTIAL 条款构造单变量变异（只改产品代码、绝不改测试）→ 跑**该条款自己的闸门入口** → 断言必红 → 按原字节还原并校验 sha256；登记表 7 条（5 条有鉴别力 / 2 条已登记零鉴别力缺口）；`--selftest` 5/5、`--list`、`--only <条款>`；还原失败 → exit 3 | `--selftest` 5/5；实测 7/7 达期望、变异零残留（7 文件 `git diff --quiet HEAD` 全过） |
 | `approved.json` | assemble-review 的批准记录（数据文件） | — |
 
 **tools/ 面设计纪律**：全部机检脚本**注入必红**（把坏样本喂进去断言变红——只验证「好文件过门」的闸门是半成品）；输出排空后再退出；「无意见」唯一合法形态是空输出+exit 0。
@@ -279,10 +280,10 @@ dsh-agents/
 
 **复现命令**（clone 后）：
 
-**第一组——任何 Node 环境即可复现（五门，公开 registry 装 1 个运行时依赖）：**
+**第一组——任何 Node 环境即可复现（五门，公开 registry 装 2 个运行时依赖）：**
 
 ```bash
-npm install                        # 公开 registry 可装（1 个运行时依赖）
+npm install                        # 公开 registry 可装（2 个运行时依赖）
 node tests/run.mjs                 # 375/0（含独立门接线组 + B1 三特性组 + B2 注入面组）
 node tests/isolation-gate.mjs      # 隔离门（进程边界双快照）exit 0
 node tests/advisor-llm-replay.mjs  # 录制/回放闭环 9/9
@@ -291,7 +292,7 @@ node tools/publish-scan.test.mjs   # 53/0
 node tools/verify-imp26.mjs        # 33/0
 node tests/skill-sync-check.mjs    # 计数漂移门 + .gitattributes + eol 门（零依赖纯 fs）
 node tests/body-hash-check.mjs     # persona body_hash 一致性门（--selftest 函数级变异 7/7）
-npm test                           # 串联 13 个入口：主套件 + 隔离门 + 回放 + 计数门 + boot + crgate(65) + publish-scan(53) + persona-gate(33) + taskbook-26a(11) + 注入面门(7) + 别名门 + 约束审计门 + 可复核性门（2026-10-29 前仅串 5 个，其余靠人手动跑——B5 审计 D-1 实测暴露）
+npm test                           # 串联 13 个入口：主套件 + 隔离门 + 回放 + 计数门 + boot + crgate(65) + publish-scan(53) + persona-gate(33) + taskbook-26a(11) + 注入面门(7) + 别名门 + 约束审计门 + 可复核性门（2026-10-29 前仅串 5 个，其余靠人手动跑——B5 审计 D-1 实测暴露）。闸门鉴别力实测器 ``tools/constraint-mutation-verify.mjs`` **不**在 npm test 链上（要跑 7 次主套件约 7 分钟），按需单跑或 ``npm run gate:constraint-mutation``
 ```
 
 **第二组——需本机已安装 DSH 宿主（安装态验证，外部评审者无宿主时跳过）：**
@@ -339,7 +340,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 ### 7.4 已知限制
 
-完整 8 条见 README「已知限制」。核心三条：只读角色的工具面约束是「机制层（B1 per-session 收缩，fail-open）+ 文字层（任务书条款）」双轨，均非环境级隔离（exec 外联不受约束、策略文件同机可写面=advisor 同款信任边界）；人格文件缺失时角色退化摘要模式运行；上下文隔离是「硬会话层 + 软材料层」（材料层靠机检告警而非阻断）。
+完整 9 条见 README「已知限制」。核心三条：只读角色的工具面约束是「机制层（B1 per-session 收缩，fail-open）+ 文字层（任务书条款）」双轨，均非环境级隔离（exec 外联不受约束、策略文件同机可写面=advisor 同款信任边界）；人格文件缺失时角色退化摘要模式运行；上下文隔离是「硬会话层 + 软材料层」（材料层靠机检告警而非阻断）。
 
 **B1 开放问题状态（2026-10-26 S5 后，正本 `agent-out/opt-b1-design.md` §七）**：
 

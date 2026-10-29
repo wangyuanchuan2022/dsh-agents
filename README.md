@@ -44,7 +44,7 @@ complete task brief — plus 25 workflow skills that orchestrate them end to end
 
 - **23 个专职角色，3 条泳道**——build（构建与分析 10）· review（评审与质量闸门 6）· domain（领域专家 7）；其中 19 个移植自 OMC，4 个为批次3 新建（rag-reviewer / silent-failure-hunter / spec-miner / harness-optimizer）。
 - **三档模型路由**（LOW / MEDIUM / HIGH ← haiku / sonnet / opus），档位可被用户层覆盖（设置页或 `agent_roles set`），解析优先级明确、可查来源。可选范围**不限于声明式 provider**：xd pool 与 codex connect 这类「只注册 adapter、模型目录来自远端 catalog」的 provider 也会被补全进三档下拉与 `agent_roles action=tiers` 体检（宿主通用 API `llm.listModels`，有界并发 + 单项超时，声明式 provider 永不被远端覆盖）。
-- **只读角色有明确边界**——上游标注 `disallowedTools: Write, Edit` 的 **9 个角色**（explore · analyst · architect · verifier · code-reviewer · security-reviewer · critic · document-specialist · scientist）在任务书里写成只读顾问条款，任务书同时注明这只是文字约束（见[已知限制](#已知限制)）。
+- **只读角色有明确边界**——代码里标 `readonly` 的共 **12 个**：其中 **9 个**上游标注 `disallowedTools: Write, Edit`（explore · analyst · architect · verifier · code-reviewer · security-reviewer · critic · document-specialist · scientist），另 **3 个**为批次3 移植时本仓裁决只读（spec-miner · silent-failure-hunter · rag-reviewer）。它们都在任务书里写成只读顾问条款，任务书同时注明这只是文字约束（见[已知限制](#已知限制)）。
 - **任务书七节结构** + **派活前置三问**（副作用关键词 fail-closed 告警）。
 - **评审/验证席的上下文隔离（两层机制）**——**会话层**：每席都是全新会话，不继承派活方对话历史；**材料层**：`blind` 席（code-reviewer / security-reviewer）不得获得作者自评**与其他席位产出**，`isolated` 席（critic / code-simplifier / verifier）不得获得作者自评；任务书自动写入「上下文隔离契约」，并对下发的材料做**泄漏机检**（命中「我已经实现并验证过」「另一席说没问题」这类文本时 fail-closed 告警并回传 `isolationLeaks`）。
 - **25 件工作流技能**（口径：`skills/` 下 25 个 SKILL.md = 25 个技能目录）：入口 2 + 流水线 4 + 协作 5 + 方法论 13 + 顾问 1。
@@ -114,7 +114,7 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 | **LOW** | explore 🔒 | — | writer |
 
 🔒 = 只读角色（上游 `disallowedTools: Write, Edit`），任务书中写成只读顾问条款。
-合计：HIGH 11 · MEDIUM 10 · LOW 2 = **23 个角色**。
+合计：HIGH 10 · MEDIUM 11 · LOW 2 = **23 个角色**。
 
 档位映射分两层：
 
@@ -303,7 +303,7 @@ dsh-agents/
   docs/constraint-audit.md 约束结构化审计正本（108 条款 × 四档结构化程度）
   docs/VERIFIABILITY.md    对外宣称数字的可复核性矩阵（44 条断言 × 可执行复现路径）
   docs/third-party-references.md 开源复用账本（AC-61：Aider / SWE-agent / OpenHands 三源六字段）
-  tools/                   crgate / publish-scan / install-personas / assemble-review / scan-role-toolrefs / toolscope-efficiency / opt-r2-faced-probe 等机检与测量脚本
+  tools/                   crgate / publish-scan / install-personas / assemble-review / scan-role-toolrefs / toolscope-efficiency / opt-r2-faced-probe / alias-contract-gate / constraint-audit / verifiability-check / constraint-mutation-verify 等机检与测量脚本
   tests/                   run.mjs + 宿主校验、烟测与探针
   .gitattributes           `* -text`：禁用换行转换，保住「git 干净 = 字节还原」
   LICENSE                  MIT
