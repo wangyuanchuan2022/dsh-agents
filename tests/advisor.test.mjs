@@ -739,6 +739,37 @@ export function testObserverIdempotency(t) {
     assert.equal(h.ledger.calls.length, 1, '★同一 user/message 重放不得二次评审')
   })
 
+  // 值断言补口（B5 X-3 实测缺口 C-107，2026-10-29）：
+  // design-principles 1.3 的「-1 哨兵」参照（lib/advisor/store.js:390-391 EMPTY_SEEN）逐字点名了
+  // 「初值取 0 会让重启后第一条 seq=0 事件被静默漏评」，但**没有任何断言看管这个哨兵值本身**——
+  // X-3 变异实测：把 -1 改成 0，主套件仍 375/0 全绿（零鉴别力缺口）。
+  // 这里补值断言：全新会话（seen 文件不存在）读出的 lastReviewedSeq 必须严格是 -1，
+  // 且语义可由「seq=0 的事件必须被放行」二次确认（不只看常量，看行为）。
+  t('C-107 补：全新会话的 lastReviewedSeq 哨兵必须是 -1（seq=0 才能放行）', () => {
+    const dir = tempDir('c107-sentinel')
+    try {
+      const store = new AdvisorStore({ dataDir: dir })
+      // ① 值断言：seen 文件不存在 → 哨兵必须是 -1（不是 0、不是 undefined）
+      const fresh = store.readSeen('s-never-seen')
+      assert.equal(fresh.lastReviewedSeq, -1, '★全新会话的 lastReviewedSeq 必须是 -1（取 0 会让 seq=0 事件静默漏评）')
+      assert.deepEqual(fresh.reviewed, [], '全新会话的 reviewed 必须是空数组')
+
+      // ② 行为断言：哨兵语义必须真的让 seq=0 放行（若哨兵是 0，`0 <= 0` 会拦掉它）
+      const h = steppedHarness({
+        loadSeen: (id) => store.readSeen(id),
+        saveSeen: (id, state) => store.writeSeen(id, state),
+      })
+      h.feed(...turnGroup('t-zero', 0))
+      assert.equal(h.ledger.calls.length, 1, '★seq=0 的首个可评审回合必须被放行（-1 哨兵的语义验证）')
+
+      // ③ 反向断言：损坏的 seen 文件回落到 -1（不回落成 0）
+      const badPath = sessionSeenPath(dir, 's-corrupt')
+      mkdirSync(dirname(badPath), { recursive: true })
+      writeFileSync(badPath, '{ this is not json')
+      assert.equal(store.readSeen('s-corrupt').lastReviewedSeq, -1, '损坏的 seen 文件必须回落 -1 而不是 0')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
   t('C7 disposeSession 只清内存：seen 文件必须留在盘上', () => {
     const dir = tempDir('c7')
     try {

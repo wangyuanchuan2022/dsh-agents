@@ -263,6 +263,43 @@ test('泳道默认交付要求随泳道变化', () => {
   assert.ok(buildText.includes('证据'))
 })
 
+// 值断言补口（B5 X-3 实测缺口 C-064，2026-10-29）：
+// 上面那条只断言「『报告落盘』四个字出现在任务书里」——把 lib/taskbook.js 的整行条款删掉，
+// 主套件仍 375/0 全绿（X-3 变异实测确认的零鉴别力缺口）。原因是「报告落盘」四字还出现在
+// 别处（如 §五 汇总句），只查子串等于没查。这里补**逐字值断言**：每条泳道交付条款的正文
+// 必须逐字在场，且删除整行必红（变异验证见 tools/constraint-mutation-verify.mjs 的 C-064）。
+test('泳道交付条款必须逐字在场（值断言，补 B5 X-3 缺口 C-064）', () => {
+  const table = resolveTierTable(undefined)
+  const compose = (roleId) => {
+    const role = getRole(roleId)
+    return composeTaskbook({ role, persona: loadPersona(role), route: resolveRoute({ role, tierTable: table }), task: 't' })
+  }
+  // review 泳道（critic）：三条交付要求逐字在场
+  const reviewText = compose('critic')
+  for (const line of [
+    '- 报告落盘：write 写入任务书指定路径（评审类只读，禁止改动被评审对象）。',
+    '- 每条发现三段式：`文件:行号` + 分级（P0/P1/P2）+ 【改进点】（映射到具体文件/动作）。',
+    '- 目的：从产出反推可执行改进点，不是打分或泛泛评价。',
+  ]) assert.ok(reviewText.includes(line), `review 泳道交付条款必须逐字在场：${line}`)
+
+  // build 泳道（executor）：两条逐字在场（防「产出落盘」只匹配到别处）
+  const buildText = compose('executor')
+  for (const line of [
+    '- 产出落盘：写入任务书指定路径（未指定见缺省决策表），**不要只在聊天里输出**。',
+    '- 证据：每条结论附可核验依据（文件:行号 / 命令+原始输出）。',
+  ]) assert.ok(buildText.includes(line), `build 泳道交付条款必须逐字在场：${line}`)
+
+  // domain 泳道（test-engineer）：两条逐字在场
+  const domainText = compose('test-engineer')
+  for (const line of [
+    '- 产出落盘：结果写入任务书指定路径；只输出到聊天不算完成。',
+    '- 证据：命令、输入、原始输出片段一并给出，便于复核。',
+  ]) assert.ok(domainText.includes(line), `domain 泳道交付条款必须逐字在场：${line}`)
+
+  // 反向断言：三泳道条款互不串味（review 的条款不得出现在 build 文本里）
+  assert.ok(!buildText.includes('- 目的：从产出反推可执行改进点'), 'build 泳道不得混入 review 泳道条款')
+})
+
 // ── ③b 任务书模板 v3 增量条款（§3a/§5.1/§5.2/§7.1/§4.1/§6.1/§8.1） ───────────
 test('v3 §3a：statusQuo 提供时渲染现状盘点（含对账说明行），缺省时完全不渲染', () => {
   const role = getRole('executor')

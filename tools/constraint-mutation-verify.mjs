@@ -117,8 +117,8 @@ export const MUTATIONS = [
     find: "- 报告落盘：write 写入任务书指定路径（评审类只读，禁止改动被评审对象）。",
     replace: "- （本行已删除）",
     suite: ['tests/run.mjs'],
-    expect: 'green',
-    note: '**已登记缺口**：B5 实测主套件 375/0 全绿、零鉴别力——任务书渲染有断言但只断言「节标题在场」，不断言具体条款在场。',
+    expect: 'red',
+    note: '**缺口已补（2026-10-29）**：新增「泳道交付条款必须逐字在场」值断言后，删整行必红（原为主套件 375/0 零鉴别力）。',
   },
   {
     clause: 'C-107',
@@ -127,8 +127,8 @@ export const MUTATIONS = [
     find: 'lastReviewedSeq: -1 }',
     replace: 'lastReviewedSeq: 0 }',
     suite: ['tests/run.mjs'],
-    expect: 'green',
-    note: '**已登记缺口**：B5 实测主套件 375/0 全绿——design-principles 1.3 逐字点名了这个形态，但没有任何断言看管 -1 哨兵本身。',
+    expect: 'red',
+    note: '**缺口已补（2026-10-29）**：新增「全新会话 lastReviewedSeq 必须 -1」值断言后，-1→0 必红（原为主套件 375/0 零鉴别力）。',
   },
 ]
 

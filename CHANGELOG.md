@@ -15,7 +15,8 @@ B2 段（注入面裁剪 + 按需 help + 按会话单授，2026-10-28）条目�
 **B5 X-3 补做：PARTIAL 闸门「违反即变红」逐条变异实测（2026-10-29）**
 
 - 新增 `tools/constraint-mutation-verify.mjs`：对 `docs/constraint-audit.md` 的 PARTIAL 条款构造**单变量变异**（只改产品代码 `lib/`·`tools/`，**绝不改测试**）→ 跑**该条款自己的闸门入口** → 断言必红 → 按内存原字节还原并校验 sha256。五条纪律：单点替换必须恰好命中 1 次（0 次/多次即抛错 fail-closed）、逐条跑它自己的闸门、还原保真校验（不等即 exit 3）、fd-stdio 跑子进程（禁管道捕获）、`find !== replace` 防空转。`--selftest` 5/5、`--list`、`--only <条款>`。
-- **实测 7 条全部达期望，变异零残留**（7 个被变异文件 `git diff --quiet HEAD` 全通过）：**5 条 PARTIAL 闸门经证实有真实鉴别力**（C-013 persona-gate baseline / C-014 toolscope fail-closed deny / C-018 publish-scan secrets=critical / C-051 advisor seq 水位门 / C-056 advisor 回合计数冷却）；**2 条确认为零鉴别力缺口**（C-064 任务书「报告落盘」条款、C-107 `lastReviewedSeq` 哨兵 -1）。
+- **实测 7 条全部达期望，变异零残留**（7 个被变异文件 `git diff --quiet HEAD` 全通过）：**5 条 PARTIAL 闸门经证实有真实鉴别力**（C-013 persona-gate baseline / C-014 toolscope fail-closed deny / C-018 publish-scan secrets=critical / C-051 advisor seq 水位门 / C-056 advisor 回合计数冷却）；**2 条原为零鉴别力缺口**（C-064 任务书「报告落盘」条款、C-107 `lastReviewedSeq` 哨兵 -1）——**已补值断言并验证变红**（见下条）。
+- **两条缺口已补齐（2026-10-29）**：① C-064 → `tests/run.mjs` 新增「泳道交付条款必须逐字在场」用例（三泳道 7 条交付条款逐字断言 + 泳道互不串味反向断言；原断言只查「报告落盘」四字，该四字在别处也出现，等于没查）；② C-107 → `tests/advisor.test.mjs` 新增「全新会话的 lastReviewedSeq 哨兵必须是 -1」（值断言 + seq=0 放行的行为断言 + 损坏文件回落 -1 反向断言）。主套件 **375 → 377/0**；变异登记表 C-064/C-107 期望由 `green` 改 `red`，**7/7 全部实测变红**。
 - **新增方法论缺口（已回灌审计正本 §7.1）**：**「闸门入口错位」会把有牙齿的闸门误判成没牙齿**——本工具初版让所有变异都跑 `tests/run.mjs`，导致 C-013/C-018 被误判「零鉴别力」，而它们的闸门实际在 `tools/verify-imp26.mjs` 与 `tools/publish-scan.test.mjs`（都不在 run.mjs 链上）。判据：先确认条款的闸门在哪条命令里，再谈鉴别力。
 - 未做：44 条 PARTIAL 中只实测 7 条（12 条 P0+PARTIAL 中的 5 条 + 2 个缺口样本），**不是全量**；两条缺口的修法（4 条值断言）已给建议但未实施，交裁定。
 
@@ -128,5 +129,5 @@ B2 段（注入面裁剪 + 按需 help + 按会话单授，2026-10-28）条目�
 
 - **四轮 fail-fast 拦截链（Phase B 端到端彩排，全程零孤儿会话）**：逐次拦截类型——① 缺省预设 `minimal` 本机不存在（列可用清单，防线正确）；② registry 与 `~/.dsh/.agent-presets/` 两套清单分裂拦「Unknown agent preset: minimal-eval」→ 转用户裁决（选项③）；③ 组件导入失败拦（→ `6000ab9`）；④ 用户手写预设 persona 行字段错（`text` ≠ schema 必填 `prefix`）被宿主 schema 校验拦；⑤ 存在性校验误拦 bundle 预设（→ `e522b9b`）。第四轮重派全链达标（2026-10-27，registry 兜底路 + bundle 挂载）：minimal 会话自持 write/edit 亲自完成三步产出、审计零 role-spawn 行、agent_reply 恰一条且 idle 唤醒、九门回归零扰动。
 - **宿主侧裁决性发现**：宿主官方技能文档明示 `~/.dsh/.agent-presets/` 为 legacy 格式（"Nothing reads that directory any more"）；正解 = 自建预设做成 bundle 安装（`dsh plugin add`）经宿主 registry 挂载。插件磁盘装载路保留为宿主服务缺失时的独立兜底。
-- **主套件计数演进**：346 → 347（`6a38224`）→ 350（`b4b8ee4`）→ 355（`40f5fad`）→ 356（`6000ab9`；`e522b9b` 维持）→ 368（B2 S2，2026-10-28，`b745068`）→ 375（动态 provider 接入三档选择范围，2026-10-29，`41ad468`）→ **375 维持（B5/B6/B7 三道新门未并入主套件，各走独立 selftest），终态 375/0**；`npm test` 串联入口 5 → 13（`0e0942a`）。
+- **主套件计数演进**：346 → 347（`6a38224`）→ 350（`b4b8ee4`）→ 355（`40f5fad`）→ 356（`6000ab9`；`e522b9b` 维持）→ 368（B2 S2，2026-10-28，`b745068`）→ 375（动态 provider 接入三档选择范围，2026-10-29，`41ad468`）→ 375 维持（B5/B6/B7 三道新门未并入主套件，各走独立 selftest）→ **377（B5 X-3 补两条值断言：任务书泳道交付条款逐字在场 + `lastReviewedSeq` 哨兵 -1），终态 377/0**；`npm test` 串联入口 5 → 13（`0e0942a`）。
 - **静态注入面零增长**：净注入口径B 1993/2181/2183 历次实测与锚逐字一致（S1→S5 五次 + Phase B 彩排后复跑）；工具描述增量单独计量，合计 ≤400B 上界（严格口径 309B / 全口径 360B）——**B2 起该账为历史快照**：三工具工具级描述裁为 catalog 行后面A 由 2663 降至 2225 码点（工具级 783→255），面D 口径B 仍 1993/2181/2183 零变化，净门见 `tools/opt-b2-s3-gate.mjs`。

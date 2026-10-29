@@ -18,7 +18,7 @@
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
 | 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 24（机检脚本 15 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 375 + crgate 65 + publish-scan 53 + persona-gate 33 + taskbook-26a 11 + 隔离门自测 5 + LLM 回放 9 = 551（另有三道新门各带 selftest：注入面 7 / 别名 A1–A6 / 约束审计 G1–G5 / 可复核性 V1–V5） | `npm test` 串联 13 个入口 |
+| 测试断言 | 主套件 377 + crgate 65 + publish-scan 53 + persona-gate 33 + taskbook-26a 11 + 隔离门自测 5 + LLM 回放 9 = 553（另有三道新门各带 selftest：注入面 7 / 别名 A1–A6 / 约束审计 G1–G5 / 可复核性 V1–V5） | `npm test` 串联 13 个入口 |
 | 运行时依赖 | **2**（@deepseek-ai/schemastery + web-tree-sitter@0.27.0，均公开 registry 可装；后者为 B4 符号级检索引入，MIT） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -267,7 +267,7 @@ dsh-agents/
 
 | 文件 | 职责 | 当前账 |
 |---|---|---|
-| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + D-1a 档位差异化判别组 + **B1 三特性组**（AC1/AC2/AC3 断言 + spawn 决策并轨 + 生效率读数组 + M11 读取面 + 频控 config + 审计轮转 + 预设挂载/磁盘装载器）+ **B2 注入面组**（catalog 行/help 单源/PROMISES/Q1-Q3 漂移门/审计/allowTools 单授/面A 面D 边界）+ **动态 provider 组**（xd pool / codex connect 目录补全：入目录/声明式不被覆盖/单点失败不连坐+超时/completeDynamic 开关/并发上限 + 按模型名反查的动态兜底）+ 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **375 passed / 0 failed** |
+| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + D-1a 档位差异化判别组 + **B1 三特性组**（AC1/AC2/AC3 断言 + spawn 决策并轨 + 生效率读数组 + M11 读取面 + 频控 config + 审计轮转 + 预设挂载/磁盘装载器）+ **B2 注入面组**（catalog 行/help 单源/PROMISES/Q1-Q3 漂移门/审计/allowTools 单授/面A 面D 边界）+ **动态 provider 组**（xd pool / codex connect 目录补全：入目录/声明式不被覆盖/单点失败不连坐+超时/completeDynamic 开关/并发上限 + 按模型名反查的动态兜底）+ 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **377 passed / 0 failed** |
 | `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 375 |
 | `isolation-gate.mjs` | **进程边界双快照隔离门**：before 快照 → 动态 import 主套件 → after 快照 → 断言相等（防「加载期写盘被烘焙进基线」的假绿）；看门狗强制收口；`--selftest` 必红→必绿 | exit 0；selftest **5/5** |
 | `advisor-llm-replay.mjs` | **LLM 录制/回放设施**：录制端透明 passthrough → 落盘 fixture（不存请求正文）→ 回放逐块深比较；`ADVISOR_REPLAY_MISS`/`UNCONSUMED` 双侧 fail-closed | **9/9** |
@@ -284,7 +284,7 @@ dsh-agents/
 
 ```bash
 npm install                        # 公开 registry 可装（2 个运行时依赖）
-node tests/run.mjs                 # 375/0（含独立门接线组 + B1 三特性组 + B2 注入面组）
+node tests/run.mjs                 # 377/0（含独立门接线组 + B1 三特性组 + B2 注入面组）
 node tests/isolation-gate.mjs      # 隔离门（进程边界双快照）exit 0
 node tests/advisor-llm-replay.mjs  # 录制/回放闭环 9/9
 node tools/crgate.test.mjs         # 65/0
@@ -312,7 +312,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 | 门 | 账面 |
 |---|---|
-| 主套件 | 375/0（含独立门接线组 + B1 三特性组 + B2 注入面组） |
+| 主套件 | 377/0（含独立门接线组 + B1 三特性组 + B2 注入面组） |
 | 隔离门（isolation-gate） | exit 0（selftest 必红→必绿 5/5） |
 | LLM 回放（advisor-llm-replay） | 9/9 |
 | 计数漂移门（skill-sync-check） | PASS（阳性对照 PASS + 变异体 16/16 变红 + eol 一致） |
