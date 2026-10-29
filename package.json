@@ -11,13 +11,21 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node tests/run.mjs && node tests/isolation-gate.mjs && node tests/advisor-llm-replay.mjs && node tests/skill-sync-check.mjs && node tests/boot-schema-check.mjs",
+    "test": "node tests/run.mjs && node tests/isolation-gate.mjs && node tests/advisor-llm-replay.mjs && node tests/skill-sync-check.mjs && node tests/boot-schema-check.mjs && node tools/crgate.test.mjs && node tools/publish-scan.test.mjs && node tools/verify-imp26.mjs && node tools/taskbook-26a-negative.mjs && node tools/opt-b2-s3-gate.mjs --selftest && node tools/alias-contract-gate.mjs && node tools/constraint-audit.mjs && node tools/verifiability-check.mjs",
     "test:unit": "node tests/run.mjs",
     "gate:isolation": "node tests/isolation-gate.mjs",
     "gate:isolation:selftest": "node tests/isolation-gate.mjs --selftest",
     "gate:replay": "node tests/advisor-llm-replay.mjs",
     "gate:counts": "node tests/skill-sync-check.mjs",
-    "gate:boot": "node tests/boot-schema-check.mjs"
+    "gate:boot": "node tests/boot-schema-check.mjs",
+    "gate:crgate": "node tools/crgate.test.mjs",
+    "gate:publish-scan": "node tools/publish-scan.test.mjs",
+    "gate:persona": "node tools/verify-imp26.mjs",
+    "gate:taskbook26a": "node tools/taskbook-26a-negative.mjs",
+    "gate:injection": "node tools/opt-b2-s3-gate.mjs --selftest",
+    "gate:alias": "node tools/alias-contract-gate.mjs",
+    "gate:constraints": "node tools/constraint-audit.mjs",
+    "gate:verifiability": "node tools/verifiability-check.mjs"
   },
   "license": "MIT",
   "dependencies": {

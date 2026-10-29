@@ -12,6 +12,28 @@ B2 段（注入面裁剪 + 按需 help + 按会话单授，2026-10-28）条目�
 
 ### Added
 
+**R3-B5/B6/B7 三道结构化闸门 + 两项实测缺陷修复（2026-10-29）**
+
+**B5 约束结构化审计**（`docs/constraint-audit.md` 291 行 + `tools/constraint-audit.mjs`）
+- 把「提示词级纪律」逐条盘点到「有没有机器闸门看管」：抽样 4 个载体共 **108 条款**（AGENTS.md 47 / design-principles 15 / task-brief-v3 37 / README 已知限制 9），按四档结构化程度（ENFORCED 2 · PARTIAL 44 · MANUAL 22 · N/A 40=37.0%）与 P0/P1/P2 定级（P0=14）逐条给判据与 `文件:行号`。
+- 核心发现：**PARTIAL 绝大多数只覆盖「指令已下达」，不覆盖「指令被遵守」**——主套件大量断言是 `assert.ok(text.includes(...))`。四个真改代码的变异实测佐证：MUT-A/B 有鉴别力（373/2、374/1），而 MUT-C（`store.js:91` 哨兵 `-1`→`0`，design-principles 1.3 点名的静默漏评形态）与 MUT-D（删任务书「报告落盘」硬条款）**主套件 375/0 全绿、零鉴别力**。
+- 闸门 G1–G5（覆盖完整 / ENFORCED 必须可验证 / N/A 占比上限 / P0 必有可落地整改 / 零命中防护）+ `--selftest` 6/6。
+
+**B6 档位别名契约字节级 enforced**（`docs/alias-contract.md` + `tools/alias-contract-gate.mjs` + `tests/fixtures/alias-contract.sha256.json`）
+- 沿用 routing-suite 教训（别名 4 对字节漂移、文档自述「保持同步」而 SHA256 全不同）：把 `TIER_ALIASES` / 角色 `omcModel` / 人格 `omc_model` / 文档表述四处一致性做成 A1–A6 闸门 + 契约正文 sha256 指纹门（改契约必须同步改 fixture）。
+- **两处真实例外按裁决登记而非抹平**：`harness-optimizer`（tier HIGH / omcModel sonnet，底本 sonnet 批次3 上调）、`rag-reviewer`（tier HIGH / omcModel sonnet，DP-7 上调）——契约形态是「相等，或登记在带理由例外表」。`lib/roles.js` 一字未改。
+- `--selftest` 7/7（含「改契约不动 fixture」「例外理由清空」）；另有 10 项 fail-closed 演练（fixture 缺失/格式错/陈旧例外/冗余例外等）。
+
+**B7 VERIFIABILITY 矩阵**（`docs/VERIFIABILITY.md` + `tools/verifiability-check.mjs`）
+- 44 条对外宣称断言 × 五列（断言 / 来源 / 证据 / 可执行复现路径 / 口径），覆盖 README、ARCHITECTURE、CHANGELOG、工具描述、docs 五个载体；实测 44 / 估算 0，每条附能真跑的命令。
+- 闸门 V1–V5 + X1（矩阵声明的实测读数必须真出现在命令输出里，防「声称实测但跑不出该数」）+ `--selftest` 6/6。
+
+**两项实测缺陷修复（由 B5 审计挖出，已复现并锁回归）**
+- **D-2（安全级）**：`tools/publish-scan.mjs` 对超过 `maxFileBytes`（缺省 1MiB）的文件直接 `stats.skippedLarge++; return` —— 文件被静默跳过、不进 findings，于是**含真实 `sk-` 密钥的 1.1MiB 文件判 `PASS`**（实测对照：同内容 49B → FAIL / 1.1MiB → PASS）。这与全局闸门规范「输入超限按安全事件显式拒绝」正相反。修复：超限改记 `category='limits'` 的 critical finding ⇒ verdict 必然 FAIL；仍不回读超限内容（防大文件进内存/报告）。新增回归 T16a–T16e 五条成对断言（对照小文件必 FAIL + 超限必 FAIL + limits 类 + snippet 空），publish-scan 自测 47 → **53**；变异实测（把 fail-closed 改回静默 return）三断言精确变红，还原后字节 sha256 一致。
+- **D-1（账实不符）**：`ARCHITECTURE.md:21` 声明「`npm test` 串联全部入口」与实测不符（旧 `test` 只串 5 个，crgate 65 / publish-scan 53 / persona-gate 33 / taskbook-26a 11 / 注入面门 7 全未接入）。修复方向是**让声明变真**：`package.json` 的 `test` 从 5 入口扩到 **13 入口**（另加三道新门），并补 8 个 `gate:*` 独立脚本。
+
+**测试账**：主套件 375 不变；`npm test` 串联入口 5 → 13；合计断言 375+65+53+33+11+5+9 = **551**（另有三道新门各带 selftest）；`tools/` 20 → 23 文件（机检脚本 11 → 14）；`docs/` 4 → 7 文件。
+
 **动态 provider 接入三档路由选择范围（xd pool / codex connect，2026-10-29）**
 
 - `lib/routing.js` 新增 `completeDynamicProviders()`：`listConfiguredRoutes` 原只读声明式 settings 的 `models` 数组，而 `dsh-xdpool`（xdpool / xdpool-global / xdpool-aggregate / xdpool-free）与 `dsh-codex-connect`（openai-codex）只调 `ctx.llm.registerAdapter()`、目录来自远端 catalog，因此被 `filterUsableCatalog` 按「无模型目录不列」整条丢弃——表现为设置页三档下拉与 `agent_roles` 体检里完全看不到这些 provider。现以宿主通用 API `llm.listModels(provider)` 补全该缺口，并自动惠及 advisor 面板目录、`resolveProviderForModel` 反查与配置端点（五处调用同源）。

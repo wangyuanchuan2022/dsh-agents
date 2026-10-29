@@ -75,18 +75,79 @@ export const EXIT_BUDGET_EXCEEDED = 3
 export const PROBE_LABEL = 'PROBE_LOAD_TIME_WRITE'
 
 /**
- * 探针落点（**工作区内、且是本门的快照根之一**）：`<FIXTURE_ROOT>/.isolation-gate-probe`。
- *
  * 为什么不直接落在真实 dataDir：**本机沙箱的 file policy 是 workspace-write**，
  * 对 `C:\Users\<user>\.dsh\...` 的写入被内核式拒绝（实测 `EPERM`）。探针改为落在
  * 工作区内的快照根上，机制完全等价——门对**每个快照根**跑同一段 snapshot/diff 代码，
  * 红/绿只取决于「窗口内有无写盘」，与根的物理位置无关。真实 dataDir 变体仍会尝试
  * 一次并把结果如实打印（全权限环境下两个根会同时红）。
+ *
+ * ⚠️ **并发边界（2026-10-29 实测，如实登记）**：本门的**探针**已做到同机并发安全
+ * （见下 PROBE_TARGET 与 adoptProbeTarget），但 `tests/run.mjs` 内部还有一批
+ * **固定路径夹具**（`tests/.fixture/`、`.fixture-minimal/`、`tests/.fixture-toolscope…` 等，
+ * 由 `fileURLToPath(new URL('./.fixture-…/', import.meta.url))` 硬编码），同一台机器
+ * 上两个 isolation-gate（或 npm test 与另一席的 run.mjs）并发时仍会互相踩到
+ * `ENOTEMPTY: Directory not empty`。这属于 **run.mjs 的既有设计限制**，本门无法在
+ * 不改 run.mjs 的前提下消除。因此：**本门不承诺并发安全**，并发跑请错峰。
+ * 单跑序列（npm test）不受影响。
  */
-export const PROBE_TARGET = join(FIXTURE_ROOT, '.isolation-gate-probe')
+/** 探针文件名前缀（**每个进程唯一**，见 PROBE_TARGET 注释）。 */
+const PROBE_BASENAME_PREFIX = '.isolation-gate-probe'
+
+/**
+ * 探针落点（**工作区内、且是本门的快照根之一**）。
+ *
+ * 为什么带 pid + 时间戳：本门与 `--selftest` 都可能**同机并发**跑（例如 npm test 与
+ * 另一席的 `node tests/isolation-gate.mjs --selftest` 同时执行）。固定文件名会让
+ * 两个实例互相污染对方的快照窗口——A 的 after 快照拍到 B 刚写的探针文件，判定为
+ * 「窗口内发生变化」⇒ **假红**（2026-10-29 实测：本席与 B7 席并发时两次假红，
+ * 单跑 3 次全绿）。这与 `PROBE_REAL_TARGET` 的 EPERM 是同类问题：不是门不灵，
+ * 是**门的测量环境被另一个测量者改动了**。
+ *
+ * 修法两条同时生效：
+ *   ① 探针名唯一（pid + 时间戳）——两个实例不再指向同一个文件；
+ *   ② 快照过滤：只把**本进程自己的**探针视为快照项，其他 instances 的探针名一律
+ *      从快照里剔除（见 snapshotTree 的 ignoreProbe 参数）。
+ * 独立性：本门仍然只认「自己的探针写盘」这条因果——selftest 的必红场景照旧成立
+ * （探针由本进程注入、本进程快照捕获），**判定没有被削弱**。
+ */
+export const PROBE_TARGET = join(FIXTURE_ROOT, `${PROBE_BASENAME_PREFIX}-${process.pid}-${Date.now()}`)
 
 /** 真实 dataDir 上的同一探针（沙箱下多半 EPERM；如实记录，不静默跳过）。 */
-export const PROBE_REAL_TARGET = join(REAL_DATA_DIR, '.isolation-gate-probe')
+export const PROBE_REAL_TARGET = join(REAL_DATA_DIR, `.isolation-gate-probe-real-${process.pid}-${Date.now()}`)
+
+/** 本进程自己的探针基名集合（快照里保留它们；其他实例的探针一律剔除）。 */
+const OWN_PROBE_BASENAMES = new Set([PROBE_TARGET, PROBE_REAL_TARGET].map((p) => p.split(/[\\/]/).pop()))
+
+/**
+ * 登记一个「由本进程注入、必须留在快照里」的探针落点。
+ *
+ * 为什么需要它（2026-10-29 实测踩到）：`--selftest` 的父进程把探针模块写到子进程去跑，
+ * 而探针模块里**硬编码的是父进程的 PROBE_TARGET**（父 pid + 父时间戳）。子进程 import
+ * 这个探针模块后，写的是父进程那个文件名；但子进程自己的 `OWN_PROBE_BASENAMES` 只含
+ * 「子 pid」，于是它把**父进程注入的探针**判成「别的实例的探针」剔出快照 ⇒ 场景 1
+ * 「注入加载期写盘 → 门必红」**再也不红**（实测 5/5 退化为 4/5）。这是并发防护
+ * 反咬判定力度的经典形态：剔除规则必须能认出「注入进来的那个」。
+ *
+ * 做法：探针模块导出 `PROBE_TARGET`，注入方在 import 成功后立刻把它登记进本进程的
+ * 白名单。未登记的探针仍会被剔除（并发防护照旧生效）。
+ */
+export function adoptProbeTarget(absPath) {
+  if (typeof absPath !== 'string' || absPath === '') return
+  const base = absPath.split(/[\\/]/).pop()
+  if (typeof base === 'string' && base !== '') OWN_PROBE_BASENAMES.add(base)
+}
+
+/**
+ * 是否为**别的实例**的探针文件（同机并发时剔除，防跨实例污染造成假红）。
+ *
+ * 只剔除「文件名以本门探针前缀开头、且不是本进程认领的」——本进程自己的探针（含
+ * 由 `--inject` 注入进来的那个，见 adoptProbeTarget）必须留在快照里，否则 selftest
+ * 的「必红」场景会失效（那才是真的把门弄瞎）。
+ */
+function isForeignProbe(name) {
+  if (!name.startsWith(PROBE_BASENAME_PREFIX)) return false
+  return !OWN_PROBE_BASENAMES.has(name)
+}
 
 /**
  * 递归快照（路径 + 大小 + mtime + SHA256）。
@@ -107,6 +168,8 @@ export function snapshotTree(dir) {
     let entries
     try { entries = readdirSync(current, { withFileTypes: true }) } catch { out.push(`${rel}/<unreadable>`); return }
     for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      // 同机并发防护：剔除别的 isolation-gate 实例的探针（本进程自己的保留，见 isForeignProbe）
+      if (entry.isFile() && isForeignProbe(entry.name)) continue
       const full = join(current, entry.name)
       const name = rel === '' ? entry.name : `${rel}/${entry.name}`
       if (entry.isDirectory()) { out.push(`${name}/`); walk(full, name); continue }
@@ -206,6 +269,10 @@ export async function runGate(options = {}) {
     lines.push(`[PROBE] 注入加载期写盘探针模块：${injectPath}`)
     try {
       probeNamespace = await import(pathToFileURL(injectPath).href)
+      // 关键：把「注入进来的探针落点」认领为本进程探针，否则它会被并发防护当外实例剔除，
+      // 场景 1「注入写盘 → 门必红」会出现假绿（2026-10-29 实测退化 5/5 → 4/5）。
+      adoptProbeTarget(probeNamespace?.PROBE_TARGET)
+      adoptProbeTarget(probeNamespace?.PROBE_REAL_TARGET)
     } catch (error) {
       lines.push(`[FAIL] 探针模块求值抛错：${error?.message ?? error}`)
     }

@@ -427,7 +427,26 @@ export function scanRepo(rootDir, opts = {}) {
       skipped.push({ item: `read:${rel}`, reason: `read failed: ${e.message.slice(0, 80)}`, rerun: 'check file permissions' });
       return;
     }
-    if (buf.length > maxFileBytes) { stats.skippedLarge++; return; }
+    // 输入超限 fail-closed（2026-10-29 B5 审计 D-2 实证缺陷修复）：
+    // 旧行为 = `stats.skippedLarge++; return;` —— 文件被静默跳过、不进 findings，
+    // 于是含真实密钥的 1.1MiB 文件判 **PASS**（实测复现：同内容 49B → FAIL / 1.1MB → PASS）。
+    // 这与全局闸门规范「输入超限按安全事件处理，绝不当降级或『看起来差不多』放过」正相反，
+    // 是本仓唯一一处对超限输入静默放行的安全门。
+    // 新行为 = 记一条 critical finding（category='limits'），使 verdict 必然 FAIL；
+    // 仍不回读内容（超限文件内容不扫，避免把大文件读进内存/报告），但**判定绝不静默通过**。
+    if (buf.length > maxFileBytes) {
+      stats.skippedLarge++;
+      pushFinding({
+        category: 'limits',
+        severity: 'critical',
+        rule: 'limit-file-too-large',
+        file: toRel(rel),
+        line: 0,
+        snippet: '',
+        reason: `file exceeds maxFileBytes (${maxFileBytes}); NOT scanned — input over limit must fail closed, raise --max-file-kb or exclude explicitly`,
+      });
+      return;
+    }
     const head = buf.subarray(0, 8192);
     if (head.includes(0)) { stats.skippedBinary++; return; }
     const bname = basename(rel).toLowerCase();
@@ -623,7 +642,7 @@ function printSummary(r) {
   out.push(`[PUBLISH-SCAN] v${r.version} target=${o(r.target)}`);
   out.push(`[STATS] files=${r.stats.filesScanned} ignored-dir-entries=${r.stats.ignoredDirEntries} binary-skip=${r.stats.skippedBinary} large-skip=${r.stats.skippedLarge} truncated=${r.stats.truncated} git-repos=${r.stats.gitTrackedRepos || 0} elapsedMs=${r.stats.elapsedMs}`);
   if (r.stats.truncated) out.push(`[WARN] MAX-FILES CAP REACHED (${r.stats.maxFilesCap}) - evidence incomplete, raise --max-files and re-run`);
-  for (const cat of ['secrets', 'pii', 'internal', 'dangerous-files', 'config', 'git-history']) {
+  for (const cat of ['secrets', 'pii', 'internal', 'dangerous-files', 'config', 'git-history', 'limits']) {
     const c = r.findings.filter((f) => f.category === cat);
     const crit = c.filter((f) => f.severity === 'critical' && f.status !== 'waived').length;
     const warn = c.filter((f) => f.severity === 'warning' && f.status !== 'waived').length;

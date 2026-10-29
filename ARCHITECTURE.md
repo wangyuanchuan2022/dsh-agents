@@ -1,24 +1,24 @@
 # ARCHITECTURE — dsh-agents 仓库全景（评审导览）
 
-> 本文面向**外部评审者**：逐部件说明本仓 157 个跟踪文件的职责、接线与质量账。
+> 本文面向**外部评审者**：逐部件说明本仓 164 个跟踪文件的职责、接线与质量账。
 > 使用向导（安装/快速开始/配置）见 [README.md](README.md)；上游许可见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
-> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 157 文件，本文自身与 CHANGELOG.md 计入；2026-10-28 R3-B2 批次后更新：新增 `tools/opt-b2-s3-gate.mjs` 与 `tests/fixtures/b2-help-archive.sha256.json` 两件）。
+> 本文由维护侧在 2026-09-30 公开化批次编写；部件清单以 `git ls-files` 实测为准（当前 164 文件，本文自身与 CHANGELOG.md 计入；2026-10-28 R3-B2 批次后更新：新增 `tools/opt-b2-s3-gate.mjs` 与 `tests/fixtures/b2-help-archive.sha256.json` 两件）。
 > 术语注：文中 IMP-xx / M-1 / 批次 N 为维护侧内部批次编号，仅作溯源标记不承载技术含义；A-full = 「干净 clone → npm install → 跑通全部可复现门」的可安装性验收模式。
 
 ---
 
 ## 0. 一句话与关键数字
 
-**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、20 个确定性机检与测量脚本、三层测试链、per-session 工具面收缩、极简派活/回复通道与独立预设装载器（R3-B1）。
+**dsh-agents 是一个 DSH 插件**：把「多智能体编排」固化为 **23 个专职角色 × 三档模型路由 × 一次调用合成完整任务书** 的机制，外加 25 件工作流技能、23 个确定性机检与测量脚本、三层测试链、per-session 工具面收缩、极简派活/回复通道与独立预设装载器（R3-B1）。
 
 | 维度 | 数值 | 验证入口 |
 |---|---|---|
-| 跟踪文件 | 157 | `git ls-files` 计数 |
+| 跟踪文件 | 164 | `git ls-files` 计数 |
 | 角色 / 泳道 | 23（build 10 · review 6 · domain 7） | `agent_roles action=list` |
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
-| 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 20（机检脚本 11 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 375 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
+| 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 23（机检脚本 14 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
+| 测试断言 | 主套件 375 + crgate 65 + publish-scan 53 + persona-gate 33 + taskbook-26a 11 + 隔离门自测 5 + LLM 回放 9 = 551（另有三道新门各带 selftest：注入面 7 / 别名 A1–A6 / 约束审计 G1–G5 / 可复核性 V1–V5） | `npm test` 串联 13 个入口 |
 | 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -34,9 +34,9 @@ dsh-agents/
 ├── personas/       (34)               23 份角色人格 + checklists/ 11 份评审清单
 ├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
 ├── policies/       (2)                toolscope 策略数据（roster 基表 + 23 角色引用表）
-├── tools/          (20)               独立 CLI 工具与机检脚本（不进宿主运行时）
+├── tools/          (23)               独立 CLI 工具与机检脚本（不进宿主运行时）
 ├── tests/          (13)               主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针 + 隔离门/回放设施
-├── docs/           (4)                任务书模板正本 + advisor 契约正本 + 开源复用账本 + 设计原则正本
+├── docs/           (7)                任务书模板正本 + advisor 契约正本 + 开源复用账本 + 设计原则正本 + 别名契约 + 约束审计 + 可复核性矩阵
 ├── README.md                          使用向导（安装 / 快速开始 / 配置 / 已知限制）
 ├── CHANGELOG.md                       变更记录（Keep a Changelog 风格，Unreleased 节，条目挂 commit 短哈希）
 ├── ARCHITECTURE.md                    本文
@@ -232,12 +232,12 @@ dsh-agents/
 
 ---
 
-## 5. tools/ — 独立 CLI 与机检（20 文件 = 机检脚本 11 + 测量/读取 6 + 负向自测 2 + 数据 1）
+## 5. tools/ — 独立 CLI 与机检（23 文件 = 机检脚本 14 + 测量/读取 6 + 负向自测 2 + 数据 1）
 
 | 文件 | 职责 | 自测 |
 |---|---|---|
 | `crgate.mjs` | 评审确定性证据链：`freeze`（覆盖分母冻结+身份哈希）/ `anchor`（发现逐条锚定，`--strict` 为交付前强制门）/ `finalize`（覆盖状态机：reviewed/skipped/blocked/waived） | `crgate.test.mjs` 65 断言 |
-| `publish-scan.mjs` | 发布前脱敏机检：六类扫描（secrets/PII/内部路径/危险文件/配置完整性/git 历史）+ 三值裁定（PASS / PASS-WITH-WARNINGS / FAIL，单 CRITICAL 即 FAIL）；`--strict-tracked` 放行门、`--allow` 豁免清单（waiver={id:规则名, glob, reason}，缺 reason 响亮报错，waived 仍列示） | `publish-scan.test.mjs` 47 断言（注入必红） |
+| `publish-scan.mjs` | 发布前脱敏机检：六类扫描（secrets/PII/内部路径/危险文件/配置完整性/git 历史）+ 三值裁定（PASS / PASS-WITH-WARNINGS / FAIL，单 CRITICAL 即 FAIL）；`--strict-tracked` 放行门、`--allow` 豁免清单（waiver={id:规则名, glob, reason}，缺 reason 响亮报错，waived 仍列示） | `publish-scan.test.mjs` 53 断言（注入必红；T16 组锁「超限输入 fail-closed」） |
 | `install-personas.mjs` | 人格批量安装到 DSH（默认跳过已有自定义版本）；**装配期两级断言**经 `lib/persona-gate.js`：非豁免角色缺注入基线 → exit 1 不落盘并报文件名；缺「不做什么」→ 警告非阻断 | `verify-imp26.mjs` 33 断言（含 fd-stdio 跑真安装器的 E2E 层） |
 | `assemble-review.mjs` | 评审材料装配（`tools/approved.json` 记录批准来源与时间——approve 记录的可审计形态）。**注**：依赖 `review/original` 与 `review/trans` 目录（OMC 英文原文与中文译文的对照底本，维护侧本地过程物，不随仓分发）——clone 后可运行但产出为空对照，属内部评审过程工具非对外工具 | — |
 | `publish-sync-check.ps1` | **公开仓同步幂等 diff 门**：本地 HEAD vs origin/master 零差异 exit 0；ahead 列文件 / behind 提示 pull（fetch 走 cmd /c 静默取退出码，避 PS5 stderr 陷阱） | 冒烟 in-sync exit 0 |
@@ -253,6 +253,9 @@ dsh-agents/
 | `opt-b2-s3-gate.mjs` | **B2 净注入门**：面A 前后对比（G0 前锚锁定 / G1 净增 ≤0 / G2 裁剪到位各 ≤90 合计 ≤255 / G4 参数级不缩水）+ 面D 不变式（G3 只码点）+ H 并列读数（G5 非门：H / H_static / H_action / H_struct / 回本轮数）；`--out` 生成读数档案；面D 文件冒充面A 基线 ⇒ G0 解析 fail-closed 红 | `--selftest` 7/7（原样全绿 + MUT-G0..G5 六变异必红；含「只裁 1 字符」与「面D 冒充基线」两条专属变异） |
 | `scan-role-toolrefs.mjs` | toolscope 构建期角色引用扫描（B1 S3）：23 角色全扫 → `policies/toolscope-roles.json` + G11 覆盖率报告 + M11 宿主版本构建期查一次；损坏 fail-closed 非零退出 | 漂移门（run.mjs：roles 文件 vs 内存重扫 deep-equal） |
 | `toolscope-efficiency.mjs` | V3-3 收缩生效率读数组消费器（B1 S5）：对账通过率/实际收缩占比/fail-open 原因分布三值；`efficiencyReadings` 纯函数（吃管线 audit 环）+ `replayEntries` 离线重放（同一决策核）；阈值 50%（低于 → verdict 触发表修复轮）；零样本如实 `no-sample` | run.mjs 消费核/重放/无样本如实申报 4 条 |
+| `alias-contract-gate.mjs` | **B6 档位别名契约门**：A1 双向一致（TIER_ALIASES ↔ normalizeTier ↔ TIERS）/ A2 角色字段一致（`normalizeTier(omcModel)===tier` **或**已登记带理由例外——现存 2 条：harness-optimizer、rag-reviewer）/ A3 人格 frontmatter `omc_model` 逐字一致 23/23 / A4 文档面未登记别名 / A5 契约两节正文 sha256 == fixture（改契约必同步改 fixture）/ A6 零命中防护 | `--selftest` 7/7（含「改契约不动 fixture」）；已挂 `npm test` |
+| `constraint-audit.mjs` | **B5 约束结构化审计门**：G1 覆盖完整（条款 108 行 + 四档/定级合法）/ G2 ENFORCED 必须可验证（引用的闸门文件存在 + 断言标识可寻）/ G3 N/A 占比 ≤ 40% / G4 P0 必有可落地整改 / G5 零命中防护 | `--selftest` 6/6；已挂 `npm test` |
+| `verifiability-check.mjs` | **B7 可复核性矩阵门**：V1 断言条数下限 + 分节一致 / V2 五列齐全 + 复现路径可执行形态 / V3 口径必标（实测或估算）/ V4 引用仓内路径 existsSync / V5 零命中防护 + 阳性对照；另有 X1 断言「矩阵声明的实测读数必须真出现在命令输出里」 | `--selftest` 6/6；已挂 `npm test` |
 | `approved.json` | assemble-review 的批准记录（数据文件） | — |
 
 **tools/ 面设计纪律**：全部机检脚本**注入必红**（把坏样本喂进去断言变红——只验证「好文件过门」的闸门是半成品）；输出排空后再退出；「无意见」唯一合法形态是空输出+exit 0。
@@ -284,11 +287,11 @@ node tests/run.mjs                 # 375/0（含独立门接线组 + B1 三特�
 node tests/isolation-gate.mjs      # 隔离门（进程边界双快照）exit 0
 node tests/advisor-llm-replay.mjs  # 录制/回放闭环 9/9
 node tools/crgate.test.mjs         # 65/0
-node tools/publish-scan.test.mjs   # 47/0
+node tools/publish-scan.test.mjs   # 53/0
 node tools/verify-imp26.mjs        # 33/0
 node tests/skill-sync-check.mjs    # 计数漂移门 + .gitattributes + eol 门（零依赖纯 fs）
 node tests/body-hash-check.mjs     # persona body_hash 一致性门（--selftest 函数级变异 7/7）
-npm test                           # 串联入口：主套件 + 隔离门 + 回放 + 计数门 + boot（见下组）
+npm test                           # 串联 13 个入口：主套件 + 隔离门 + 回放 + 计数门 + boot + crgate(65) + publish-scan(53) + persona-gate(33) + taskbook-26a(11) + 注入面门(7) + 别名门 + 约束审计门 + 可复核性门（2026-10-29 前仅串 5 个，其余靠人手动跑——B5 审计 D-1 实测暴露）
 ```
 
 **第二组——需本机已安装 DSH 宿主（安装态验证，外部评审者无宿主时跳过）：**
@@ -313,7 +316,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 | LLM 回放（advisor-llm-replay） | 9/9 |
 | 计数漂移门（skill-sync-check） | PASS（阳性对照 PASS + 变异体 16/16 变红 + eol 一致） |
 | crgate 自测 | 65/0 |
-| publish-scan 自测 | 47/0（注入必红） |
+| publish-scan 自测 | 53/0（注入必红） |
 | persona-gate 自测（verify-imp26） | **33/0**（2026-09-30 修复后首次全绿） |
 | boot-schema（宿主真实校验器） | 6/6 PASS（**需本机已安装 DSH 宿主**，非 clone 即可复现） |
 | 可安装性（A-full 验收） | 干净 clone → npm install → 第一组门全绿（boot-schema 需宿主环境，见 §6 分组） |

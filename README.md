@@ -245,7 +245,7 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 | 工具 | 作用 | 自测 |
 |---|---|---|
 | `tools/crgate.mjs` | 评审的确定性证据链：`freeze`（选择器）/ `anchor`（三级定位，`--strict` 为交付前强制门）/ `finalize`（覆盖状态机） | `node tools/crgate.test.mjs`（65 断言） |
-| `tools/publish-scan.mjs` | 发布前脱敏机检：六类扫描（secrets / PII / 内部路径 / 危险文件 / 配置完整性 / git 历史）+ 三值裁定（PASS / PASS-WITH-WARNINGS / FAIL，单条 CRITICAL 即 FAIL）；`--strict-tracked --git-history` 为单仓放行门 | `node tools/publish-scan.test.mjs`（47 断言） |
+| `tools/publish-scan.mjs` | 发布前脱敏机检：六类扫描（secrets / PII / 内部路径 / 危险文件 / 配置完整性 / git 历史）+ 三值裁定（PASS / PASS-WITH-WARNINGS / FAIL，单条 CRITICAL 即 FAIL）；`--strict-tracked --git-history` 为单仓放行门 | `node tools/publish-scan.test.mjs`（53 断言） |
 | `tools/install-personas.mjs` | 人格批量安装（默认跳过已有自定义版本的角色） | — |
 | `tools/assemble-review.mjs` | 评审材料装配（`tools/approved.json` 记录批准来源与时间） | — |
 
@@ -254,7 +254,7 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 ```bash
 node tests/run.mjs                    # 主测试（375 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ B2 注入面组（catalog 行/help 单源/allowTools 单授）+ 动态 provider 组（xd pool / codex connect 目录补全 + 按模型名反查）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
 node tools/crgate.test.mjs            # 65 断言
-node tools/publish-scan.test.mjs      # 47 断言
+node tools/publish-scan.test.mjs      # 53 断言
 node tests/skill-sync-check.mjs       # 计数漂移门 + .gitattributes 门（文档里的技能件数必须等于磁盘实测）
 node tests/skill-sync-check.mjs --selftest  # 上述判据的负向自测（变异体必须变红）
 node tests/boot-schema-check.mjs      # 宿主真实校验器验收门（装前必过）
@@ -298,6 +298,10 @@ dsh-agents/
   skills/                  25 件工作流技能（源副本；25 个 SKILL.md = 25 个技能目录）
   docs/task-brief-v3.md    任务书模板正本
   docs/advisor-contract.md advisor 契约正本（详设）
+  docs/design-principles.md 设计原则正本（跨模块判定纪律）
+  docs/alias-contract.md   档位别名契约正本（含带理由例外表）
+  docs/constraint-audit.md 约束结构化审计正本（108 条款 × 四档结构化程度）
+  docs/VERIFIABILITY.md    对外宣称数字的可复核性矩阵（44 条断言 × 可执行复现路径）
   docs/third-party-references.md 开源复用账本（AC-61：Aider / SWE-agent / OpenHands 三源六字段）
   tools/                   crgate / publish-scan / install-personas / assemble-review / scan-role-toolrefs / toolscope-efficiency / opt-r2-faced-probe 等机检与测量脚本
   tests/                   run.mjs + 宿主校验、烟测与探针

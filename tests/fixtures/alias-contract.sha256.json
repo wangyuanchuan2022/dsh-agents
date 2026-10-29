@@ -1,0 +1,8 @@
+{
+  "algorithm": "sha256",
+  "digestPrefix": 8,
+  "digestCase": "upper",
+  "note": "B6 档位别名契约指纹（docs/alias-contract.md 的「一、别名映射表」+「二、例外登记表」两节正文 sha256 前 8 位大写）。改契约正文必须显式改本文件——tools/alias-contract-gate.mjs 的 A5 门复算，禁止静默改契约。取新指纹：node tools/alias-contract-gate.mjs --print-hashes",
+  "aliasMappingTable": "36B99BE1",
+  "exceptionRegistry": "C6D788FD"
+}

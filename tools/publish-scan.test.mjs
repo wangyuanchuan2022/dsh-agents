@@ -253,6 +253,34 @@ try {
     const r = scanRepo(d, { user: USER, allowPath: allowFile, outPath: outFile });
     check('T15 allow/out artifacts self-exempted', r.findings.length === 0, JSON.stringify(r.findings.map((f) => [f.file, f.rule])));
   }
+
+  /* ---- T16 输入超限 fail-closed（2026-10-29 B5 审计 D-2 实证缺陷回归锁）----
+   * 旧行为：>maxFileBytes 的文件 `stats.skippedLarge++; return;` → 不进 findings →
+   * 含真实密钥的大文件判 **PASS**（实测：同内容 49B → FAIL / 1.1MB → PASS）。
+   * 这与全局闸门规范「输入超限按安全事件处理，绝不当降级放过」正相反。
+   * 新行为：记一条 category='limits' 的 critical finding → verdict 必然 FAIL。
+   * 下面两案成对：小文件（对照组，走正常扫描）与大文件（超限分支）都必须 FAIL。 */
+  {
+    const d = join(ROOT, 'v-limit');
+    const secret = 'sk-' + 'a'.repeat(40);
+    // 对照组：同样内容但体积正常（走正常扫描路径，命中 secrets）
+    fx(d, 'small.txt', `test ${secret}\n`);
+    const small = scanRepo(d, { user: USER });
+    check('T16a 对照组：小文件含密钥判 FAIL', small.verdict === 'FAIL', `got ${small.verdict}`);
+    check('T16a 对照组命中 secrets 类', small.findings.some((f) => f.category === 'secrets'), 'secrets 未命中');
+
+    // 超限分支：1.1MiB（> 缺省 1MiB），内容同样含密钥位置
+    const bigDir = join(ROOT, 'v-limit-big');
+    fx(bigDir, 'big.txt', `test ${secret}\n` + 'x'.repeat(1_100_000));
+    const big = scanRepo(bigDir, { user: USER });
+    check('T16b 超限文件必须计入 large-skip', big.stats.skippedLarge === 1, `got ${big.stats.skippedLarge}`);
+    check('T16c 超限文件必须判 FAIL（不得静默 PASS）', big.verdict === 'FAIL', `got ${big.verdict} —— 超限输入被静默放行`);
+    check('T16d 超限文件记 limits/critical finding',
+      big.findings.some((f) => f.category === 'limits' && f.severity === 'critical' && f.rule === 'limit-file-too-large'),
+      JSON.stringify(big.findings.map((f) => [f.category, f.severity, f.rule])));
+    check('T16e 超限不回读内容（snippet 空，防大文件入报告）',
+      (big.findings.find((f) => f.category === 'limits') ?? {}).snippet === '', 'limits finding 不应带内容片段');
+  }
 } finally {
   rmSync(ROOT, { recursive: true, force: true });
 }
