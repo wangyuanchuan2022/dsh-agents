@@ -12,6 +12,16 @@ B2 段（注入面裁剪 + 按需 help + 按会话单授，2026-10-28）条目�
 
 ### Added
 
+**动态 provider 接入三档路由选择范围（xd pool / codex connect，2026-10-29）**
+
+- `lib/routing.js` 新增 `completeDynamicProviders()`：`listConfiguredRoutes` 原只读声明式 settings 的 `models` 数组，而 `dsh-xdpool`（xdpool / xdpool-global / xdpool-aggregate / xdpool-free）与 `dsh-codex-connect`（openai-codex）只调 `ctx.llm.registerAdapter()`、目录来自远端 catalog，因此被 `filterUsableCatalog` 按「无模型目录不列」整条丢弃——表现为设置页三档下拉与 `agent_roles` 体检里完全看不到这些 provider。现以宿主通用 API `llm.listModels(provider)` 补全该缺口，并自动惠及 advisor 面板目录、`resolveProviderForModel` 反查与配置端点（五处调用同源）。
+- 补全的三条纪律：① 逐个容错（单个 provider 抛错/挂起只跳过它自己）；② `declared` 白名单——声明式 provider 一律不被远端覆盖，哪怕它读到空 `models`（空目录是「配置不全」的诊断信号，不该被远端结果掩盖）；③ 有界并发（缺省 4）+ 单项超时（缺省 1500ms，按「响应速度优先」裁定）——设置页是同步等它的，宁可少列几行也不让整页卡住。
+- 实现细节：超时计时器**不可 unref**——挂起的 `listModels` 永不 settle 时，若事件循环再无活动句柄，Node 会直接退出而 `await` 永远等不到（本次开发中实测踩到：整条链静默 exit 0）。
+- 回归测试 4 条（`tests/run.mjs`）：动态 provider 必须入目录 / 声明式不被覆盖（含空目录）/ 单点失败不连坐 + 挂起超时切断 / `completeDynamic=false` 退回纯声明式语义 + 并发上限生效。两个变异体（关闭补全、去掉 declared 白名单）各自精确变红，还原后字节 SHA256 一致。
+- `resolveProviderForModel` 同步两段查找（2026-10-29 补）：① 声明式目录优先（本地零远端调用，命中即返回）；② 本地未命中才补全动态目录，优先级=声明式胜出。否则会出现「下拉里选得到、派活时按模型名解析不到」的新静默不一致。新增回归断言 3 条（动态模型可反查 / 声明式命中不付远端延迟 / 解析不到回 undefined）。
+- `agent_spawn` 的模型可用性提示（`lib/index.js`，派活热路径）同样改两段：声明式目录命中即不补全远端，只有「档位指向声明式目录里没有的 provider」才补——避免每次 dispatch 都付 1.5s 级远端延迟（典型场景：档位指向 xd pool / codex connect）。
+- 变异体必红实测（3 个）：关闭动态补全 → 目录缺 xdpool 条目红；去掉 declared 白名单 → 声明式被远端覆盖红；反查不做动态兜底 → 动态模型反查不到红。实测后按内存原字节还原，`lib/routing.js` sha256 前后一致（A24091…071E）。
+
 **B1 ① 极简条件人格（minimal 派活形态）**
 
 - `6e31a51` — `agent_spawn` 新增 `personaMode='minimal'`：免角色、四行 brief（任务 / 产出落盘 / orgId / 完成标准）、provider+model 必填缺即拒（旁路档位路由后无回落链）、`minimalPreset` 预设路由、策略文件写失败 fail-fast（G8）、返回体披露已应用策略（G10）。
@@ -89,5 +99,5 @@ B2 段（注入面裁剪 + 按需 help + 按会话单授，2026-10-28）条目�
 
 - **四轮 fail-fast 拦截链（Phase B 端到端彩排，全程零孤儿会话）**：逐次拦截类型——① 缺省预设 `minimal` 本机不存在（列可用清单，防线正确）；② registry 与 `~/.dsh/.agent-presets/` 两套清单分裂拦「Unknown agent preset: minimal-eval」→ 转用户裁决（选项③）；③ 组件导入失败拦（→ `6000ab9`）；④ 用户手写预设 persona 行字段错（`text` ≠ schema 必填 `prefix`）被宿主 schema 校验拦；⑤ 存在性校验误拦 bundle 预设（→ `e522b9b`）。第四轮重派全链达标（2026-10-27，registry 兜底路 + bundle 挂载）：minimal 会话自持 write/edit 亲自完成三步产出、审计零 role-spawn 行、agent_reply 恰一条且 idle 唤醒、九门回归零扰动。
 - **宿主侧裁决性发现**：宿主官方技能文档明示 `~/.dsh/.agent-presets/` 为 legacy 格式（"Nothing reads that directory any more"）；正解 = 自建预设做成 bundle 安装（`dsh plugin add`）经宿主 registry 挂载。插件磁盘装载路保留为宿主服务缺失时的独立兜底。
-- **主套件计数演进**：346 → 347（`6a38224`）→ 350（`b4b8ee4`）→ 355（`40f5fad`）→ 356（`6000ab9`；`e522b9b` 维持）→ **368（B2 S2，2026-10-28，`b745068`）**，终态 368/0。
+- **主套件计数演进**：346 → 347（`6a38224`）→ 350（`b4b8ee4`）→ 355（`40f5fad`）→ 356（`6000ab9`；`e522b9b` 维持）→ 368（B2 S2，2026-10-28，`b745068`）→ **375（动态 provider 接入三档选择范围，2026-10-29，commit 待补）**，终态 375/0。
 - **静态注入面零增长**：净注入口径B 1993/2181/2183 历次实测与锚逐字一致（S1→S5 五次 + Phase B 彩排后复跑）；工具描述增量单独计量，合计 ≤400B 上界（严格口径 309B / 全口径 360B）——**B2 起该账为历史快照**：三工具工具级描述裁为 catalog 行后面A 由 2663 降至 2225 码点（工具级 783→255），面D 口径B 仍 1993/2181/2183 零变化，净门见 `tools/opt-b2-s3-gate.mjs`。

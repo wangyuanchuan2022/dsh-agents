@@ -18,7 +18,7 @@
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
 | 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 20（机检脚本 11 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 368 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
+| 测试断言 | 主套件 375 + crgate 65 + publish-scan 47 + persona-gate 33 + 隔离门自测 5 + LLM 回放 9 | `npm test` 串联全部入口 |
 | 运行时依赖 | **1**（@deepseek-ai/schemastery，公开 registry 可装） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -65,7 +65,7 @@ dsh-agents/
 |---|---|---|
 | `index.js` | 插件入口：`name` / `inject=['tools']` / `apply(ctx)`；注册 **3 个宿主工具**（agent_roles / agent_taskbook / agent_spawn） | fail-loud 约定：未知档位/角色/半个路由/非法 clarifyMode 一律抛错；`allowSpawn` 紧急刹车开关 |
 | `roles.js` | 23 角色注册表（id/泳道/档位/隔离模式/只读标记），模块级缓存 | 隔离映射 blind/isolated/shared 三者之和恒等于 23（测试钉值） |
-| `routing.js` | 档位路由解析：调用期显式 → roleOverrides → settings 用户层 → cordis 基底 → 内置默认；`tierSources` 记录每档来源 | 「档位是配置不是常量」——任何时刻可查解析值与来源 |
+| `routing.js` | 档位路由解析：调用期显式 → roleOverrides → settings 用户层 → cordis 基底 → 内置默认；`tierSources` 记录每档来源；provider 目录两源合流（声明式 settings `models` + 动态 adapter 经 `llm.listModels` 补全，xd pool / codex connect 由此可选；声明式永不被远端覆盖，单项超时 1500ms、并发 4）；`resolveProviderForModel` 声明式优先、本地未命中才补动态目录 | 「档位是配置不是常量」——任何时刻可查解析值与来源 |
 | `persona.js` | 人格加载（`personas/<id>.md` 剥 frontmatter 取正文；缺文件退化摘要模式并在任务书标注）+ body_hash 留档 | 哈希域说明：文件级 sha256 与正文 body_hash 是不同域，不可互比。body_hash 域口径（2026-10-25 R2 C-2 统一重算后）：23 文件全量 = `sha256(splitFrontmatter(body))` 前 8 位，仓内可复验；装机期 13 文件旧声明值经 C-1 tracer 实锤为装机时点快照值（baseline@9bc6c90 正文的 body 域复算值，正文演进后未同步重算），已按 body 域统一重写 frontmatter 单行（正文零改动） |
 | `taskbook.js` | **七节任务书合成**（R3-B0 删原 §八工具映射节，节号保留空洞）+ 派活前置三问（副作用关键词 fail-closed）+ 上下文隔离契约注入 + 泄漏机检 | 六参数 null 穿透守卫（`!= null`，防 `String(null)==='null'` 骗过 trim）；库层入参守卫四态 throws（role/route/task/clarifyMode）；**档位渲染差异化（D-1a）**：§五/§六/§七 按 route.tier 三档形态（LOW=指令化短句+分类决策表 / HIGH=spec 条款+few-shot / MEDIUM=v3.3 定稿（A2b+5ef5c7e R3 返工）逐字冻结），语义不变式见 docs/task-brief-v3.md §2b |
 | `spawn.js` | 会话创建：对齐宿主 `de_session` 的踩坑修复时序（WorkspaceRegistry 异步就绪 → 惰性 getter 用时解析；主名 workspace + 旧名兜底） | 「只按真名注册」回归门在 tests/run.mjs |
@@ -263,8 +263,8 @@ dsh-agents/
 
 | 文件 | 职责 | 当前账 |
 |---|---|---|
-| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + D-1a 档位差异化判别组 + **B1 三特性组**（AC1/AC2/AC3 断言 + spawn 决策并轨 + 生效率读数组 + M11 读取面 + 频控 config + 审计轮转 + 预设挂载/磁盘装载器）+ **B2 注入面组**（catalog 行/help 单源/PROMISES/Q1-Q3 漂移门/审计/allowTools 单授/面A 面D 边界）+ 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **368 passed / 0 failed** |
-| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 368 |
+| `run.mjs` | 主测试：纯逻辑 + 假宿主全链路 + 端点 + advisor 全链 + 浏览器半/manifest 门 + 26a 负向组 + V3 基线组 + V3 行为验收组 + D-1a 档位差异化判别组 + **B1 三特性组**（AC1/AC2/AC3 断言 + spawn 决策并轨 + 生效率读数组 + M11 读取面 + 频控 config + 审计轮转 + 预设挂载/磁盘装载器）+ **B2 注入面组**（catalog 行/help 单源/PROMISES/Q1-Q3 漂移门/审计/allowTools 单授/面A 面D 边界）+ **动态 provider 组**（xd pool / codex connect 目录补全：入目录/声明式不被覆盖/单点失败不连坐+超时/completeDynamic 开关/并发上限 + 按模型名反查的动态兜底）+ 独立门接线组（body-hash 真实门+自测 / usage-probe 自测 / session-guard 自测，子进程 stdio inherit 直跑、非零退出即入账） | **375 passed / 0 failed** |
+| `advisor.test.mjs` | advisor 专项：存储/端点/observer/runtime/检索/上下文/预筛/agentic/行为验收（主套件内的 advisor 分组来源） | 含于 375 |
 | `isolation-gate.mjs` | **进程边界双快照隔离门**：before 快照 → 动态 import 主套件 → after 快照 → 断言相等（防「加载期写盘被烘焙进基线」的假绿）；看门狗强制收口；`--selftest` 必红→必绿 | exit 0；selftest **5/5** |
 | `advisor-llm-replay.mjs` | **LLM 录制/回放设施**：录制端透明 passthrough → 落盘 fixture（不存请求正文）→ 回放逐块深比较；`ADVISOR_REPLAY_MISS`/`UNCONSUMED` 双侧 fail-closed | **9/9** |
 | `skill-sync-check.mjs` | **计数漂移门 + `.gitattributes` 门 + eol 一致性门**：README/ARCHITECTURE 里每处技能计数表述必须等于 `skills/**/SKILL.md` 实测件数；全跟踪文件 worktree==index 行尾一致；零命中 fail-closed + 阳性对照 + `--selftest` | PASS（变异体 **16/16** 达到期望） |
@@ -280,7 +280,7 @@ dsh-agents/
 
 ```bash
 npm install                        # 公开 registry 可装（1 个运行时依赖）
-node tests/run.mjs                 # 368/0（含独立门接线组 + B1 三特性组 + B2 注入面组）
+node tests/run.mjs                 # 375/0（含独立门接线组 + B1 三特性组 + B2 注入面组）
 node tests/isolation-gate.mjs      # 隔离门（进程边界双快照）exit 0
 node tests/advisor-llm-replay.mjs  # 录制/回放闭环 9/9
 node tools/crgate.test.mjs         # 65/0
@@ -308,7 +308,7 @@ node tests/installed-smoke.mjs     # 安装副本烟测
 
 | 门 | 账面 |
 |---|---|
-| 主套件 | 368/0（含独立门接线组 + B1 三特性组 + B2 注入面组） |
+| 主套件 | 375/0（含独立门接线组 + B1 三特性组 + B2 注入面组） |
 | 隔离门（isolation-gate） | exit 0（selftest 必红→必绿 5/5） |
 | LLM 回放（advisor-llm-replay） | 9/9 |
 | 计数漂移门（skill-sync-check） | PASS（阳性对照 PASS + 变异体 16/16 变红 + eol 一致） |

@@ -3651,6 +3651,110 @@ await testAsync('B2 S2 AC1.5-5 缺省零回归：不传 allowTools 时 role 轨�
   }
 })
 
+// ── 动态 provider 补全（xd pool / codex connect 接入三档选择范围）────────────
+// 回归锁：修复前 listConfiguredRoutes 只读声明式 settings 目录，xdpool* /
+// openai-codex 这类「只注册 adapter、目录来自远端」的 provider 全被丢掉，
+// 表现为三档下拉里根本选不到它们。下面四条断言把修复语义钉死。
+
+/** 构造「声明式 + 动态」混合宿主。 */
+function dynamicHost({ throwing = [], hanging = [] } = {}) {
+  const dynamicIds = ['xdpool-global', 'xdpool-free', 'openai-codex']
+  return {
+    listConfigurableProviders: () => [{ provider: 'glm-pro', displayName: 'GLM', settingsNs: 'llm-pi-ai', settingsPath: ['providers'] }],
+    listProviders: () => [{ id: 'glm-pro' }, ...dynamicIds.map((id) => ({ id }))],
+    listModels: async (provider) => {
+      if (hanging.includes(provider)) await new Promise(() => {}) // 永不 settle
+      if (throwing.includes(provider)) throw new Error(`cannot list ${provider}`)
+      if (provider === 'xdpool-global') return [{ provider, id: 'deepseek-v4.1-flash', name: 'DSF' }, { provider, id: 'glm-5.3', name: 'GLM' }]
+      if (provider === 'xdpool-free') return [{ provider, id: 'free-only', name: 'Free' }]
+      if (provider === 'openai-codex') return [{ provider, id: 'gpt-5.6-sol', name: 'Sol' }]
+      // 声明式 provider 若被问到，必须不覆盖（这里回一个哨兵值来检测）
+      return [{ provider, id: 'MUST-NOT-OVERRIDE', name: 'sentinel' }]
+    },
+  }
+}
+const declaredSettings = () => ({
+  describe: () => [{ ns: 'llm-pi-ai', value: { providers: { 'glm-pro': { models: [{ id: 'glm-5.3-flash' }] } } } }],
+})
+
+await testAsync('动态 provider：xdpool*/openai-codex 必须进入 catalog（修复前整体缺席）', async () => {
+  const catalog = await listConfiguredRoutes({ llm: dynamicHost(), settings: declaredSettings() })
+  const usable = filterUsableCatalog(catalog, ['glm-pro', 'xdpool-global', 'xdpool-free', 'openai-codex'])
+  assert.deepEqual(usable['xdpool-global'], ['deepseek-v4.1-flash', 'glm-5.3'], 'xdpool-global 的模型必须可列')
+  assert.deepEqual(usable['xdpool-free'], ['free-only'], 'xdpool-free 的模型必须可列')
+  assert.deepEqual(usable['openai-codex'], ['gpt-5.6-sol'], 'openai-codex 的模型必须可列')
+})
+
+await testAsync('动态 provider：声明式 provider 不被远端目录覆盖（含「读到空 models」也归声明式）', async () => {
+  const catalog = await listConfiguredRoutes({ llm: dynamicHost(), settings: declaredSettings() })
+  assert.deepEqual(catalog['glm-pro'], ['glm-5.3-flash'], '声明式非空目录必须原样保留，不得被 sentinel 覆盖')
+  // 声明式读到空 models 时同样不许远端填——空目录本身是「配置不全」的诊断信号
+  const emptyDeclared = { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { 'glm-pro': {} } } }] }
+  const catalog2 = await listConfiguredRoutes({ llm: dynamicHost(), settings: emptyDeclared })
+  assert.deepEqual(catalog2['glm-pro'], [], '声明式空目录不得被远端结果掩盖')
+})
+
+await testAsync('动态 provider：单个 provider 抛错/挂起只影响它自己，其余照常列出', async () => {
+  // 抛错不应连坐
+  const throwing = await listConfiguredRoutes({ llm: dynamicHost({ throwing: ['openai-codex'] }), settings: declaredSettings() })
+  assert.deepEqual(throwing['xdpool-global'], ['deepseek-v4.1-flash', 'glm-5.3'], '一个 provider 抛错不得影响其他 provider')
+  assert.equal(throwing['openai-codex'], undefined, '抛错的 provider 本身应缺席（不编造）')
+  // 挂起必须被单项超时切断，且不拖死整条链（计时器不可 unref，否则进程静默退出）
+  const startedAt = Date.now()
+  const hanging = await listConfiguredRoutes({
+    llm: dynamicHost({ hanging: ['openai-codex'] }),
+    settings: declaredSettings(),
+    dynamicOptions: { timeoutMs: 120 },
+  })
+  const elapsed = Date.now() - startedAt
+  assert.ok(elapsed < 3000, `挂起的 provider 必须被超时切断（实测 ${elapsed}ms）`)
+  assert.deepEqual(hanging['xdpool-global'], ['deepseek-v4.1-flash', 'glm-5.3'], '其余 provider 不得被挂起项拖累')
+})
+
+await testAsync('动态 provider：completeDynamic=false 保留纯声明式语义；并发上限生效', async () => {
+  const bare = await listConfiguredRoutes({ llm: dynamicHost(), settings: declaredSettings(), completeDynamic: false })
+  assert.deepEqual(Object.keys(bare), ['glm-pro'], '关闭补全时只应有声明式 provider')
+
+  let inFlight = 0
+  let peak = 0
+  const llm = {
+    listConfigurableProviders: () => [],
+    listProviders: () => ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'].map((id) => ({ id })),
+    listModels: async (provider) => {
+      inFlight += 1
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 20))
+      inFlight -= 1
+      return [{ provider, id: `m-${provider}`, name: provider }]
+    },
+  }
+  const catalog = await listConfiguredRoutes({ llm, settings: declaredSettings(), dynamicOptions: { concurrency: 2 } })
+  assert.equal(Object.keys(catalog).length, 6, '六个动态 provider 都应列出')
+  assert.ok(peak <= 2, `并发上限必须生效（实测峰值 ${peak}）`)
+})
+
+// ── 按模型名反查 provider：声明式优先 + 动态兜底（与三档下拉同源）──────────
+await testAsync('resolveProviderForModel：动态 provider 的模型也能反查（下拉选得到 ⇒ 派活解析得到）', async () => {
+  const llm = dynamicHost()
+  assert.equal(await resolveProviderForModel({ llm, settings: declaredSettings() }, 'deepseek-v4.1-flash'), 'xdpool-global')
+  assert.equal(await resolveProviderForModel({ llm, settings: declaredSettings() }, 'free-only'), 'xdpool-free')
+  assert.equal(await resolveProviderForModel({ llm, settings: declaredSettings() }, 'gpt-5.6-sol'), 'openai-codex')
+})
+
+await testAsync('resolveProviderForModel：声明式命中不付远端延迟（listModels 零调用）', async () => {
+  let dynamicCalls = 0
+  const base = dynamicHost()
+  const llm = { ...base, listModels: async (p) => { dynamicCalls += 1; return base.listModels(p) } }
+  assert.equal(await resolveProviderForModel({ llm, settings: declaredSettings() }, 'glm-5.3-flash'), 'glm-pro')
+  assert.equal(dynamicCalls, 0, '声明式命中时不得触发任何远端 listModels')
+})
+
+await testAsync('resolveProviderForModel：全目录都没有该模型 / 无 llm → undefined（不编造）', async () => {
+  const llm = dynamicHost()
+  assert.equal(await resolveProviderForModel({ llm, settings: declaredSettings() }, 'no-such-model-xyz'), undefined)
+  assert.equal(await resolveProviderForModel({ llm: null, settings: declaredSettings() }, 'glm-5.3-flash'), undefined)
+})
+
 // ── 汇总 ──────────────────────────────────────────────────────────────────
 console.log(`dsh-agents tests: ${passed} passed, ${failures.length} failed`)
 for (const failure of failures) console.log(`  FAIL ${failure}`)

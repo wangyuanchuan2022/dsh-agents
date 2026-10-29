@@ -43,7 +43,7 @@ complete task brief — plus 25 workflow skills that orchestrate them end to end
 ## 特性
 
 - **23 个专职角色，3 条泳道**——build（构建与分析 10）· review（评审与质量闸门 6）· domain（领域专家 7）；其中 19 个移植自 OMC，4 个为批次3 新建（rag-reviewer / silent-failure-hunter / spec-miner / harness-optimizer）。
-- **三档模型路由**（LOW / MEDIUM / HIGH ← haiku / sonnet / opus），档位可被用户层覆盖（设置页或 `agent_roles set`），解析优先级明确、可查来源。
+- **三档模型路由**（LOW / MEDIUM / HIGH ← haiku / sonnet / opus），档位可被用户层覆盖（设置页或 `agent_roles set`），解析优先级明确、可查来源。可选范围**不限于声明式 provider**：xd pool 与 codex connect 这类「只注册 adapter、模型目录来自远端 catalog」的 provider 也会被补全进三档下拉与 `agent_roles action=tiers` 体检（宿主通用 API `llm.listModels`，有界并发 + 单项超时，声明式 provider 永不被远端覆盖）。
 - **只读角色有明确边界**——上游标注 `disallowedTools: Write, Edit` 的 **9 个角色**（explore · analyst · architect · verifier · code-reviewer · security-reviewer · critic · document-specialist · scientist）在任务书里写成只读顾问条款，任务书同时注明这只是文字约束（见[已知限制](#已知限制)）。
 - **任务书七节结构** + **派活前置三问**（副作用关键词 fail-closed 告警）。
 - **评审/验证席的上下文隔离（两层机制）**——**会话层**：每席都是全新会话，不继承派活方对话历史；**材料层**：`blind` 席（code-reviewer / security-reviewer）不得获得作者自评**与其他席位产出**，`isolated` 席（critic / code-simplifier / verifier）不得获得作者自评；任务书自动写入「上下文隔离契约」，并对下发的材料做**泄漏机检**（命中「我已经实现并验证过」「另一席说没问题」这类文本时 fail-closed 告警并回传 `isolationLeaks`）。
@@ -121,6 +121,8 @@ agent_spawn(role="executor", task="实现 X，按 tests/ 现有风格补测试")
 1. **基底**：`cordis.patch.yml` 的 `config.tiers`（出厂默认，见[配置参考](#配置参考)）；
 2. **用户层覆盖**：设置页「Agents 三档模型路由」卡片，或 `agent_roles action=set`。
    解析优先级：调用期显式 `tier`/`provider`/`model` → `roleOverrides` → settings 用户层 → cordis 基底 → 内置默认表。
+
+> 设置页下拉/体检里的 provider 目录有两个来源：① settings 里带 `models` 数组的**声明式** provider；② 只注册了 adapter、目录来自远端的**动态** provider（xd pool 的 `xdpool`/`xdpool-global`/`xdpool-aggregate`/`xdpool-free`、codex connect 的 `openai-codex`）——后者经 `llm.listModels(provider)` 补全（逐个容错、单项 1500ms 超时、有界并发），所以「本机已登录的 provider」都能直接选到；声明式 provider 的目录永不被远端结果覆盖（读到空 `models` 时保留空，视为配置不全的诊断信号）。
 
 > ⚠️ 档位表是**配置**不是常量——派活前用 `agent_roles action=tiers` 查当次生效值与来源（`tierSources`），不要假设某个档位一定指向某个模型。
 
@@ -250,7 +252,7 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 ## 测试
 
 ```bash
-node tests/run.mjs                    # 主测试（368 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ B2 注入面组（catalog 行/help 单源/allowTools 单授）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
+node tests/run.mjs                    # 主测试（375 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ B2 注入面组（catalog 行/help 单源/allowTools 单授）+ 动态 provider 组（xd pool / codex connect 目录补全 + 按模型名反查）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
 node tools/crgate.test.mjs            # 65 断言
 node tools/publish-scan.test.mjs      # 47 断言
 node tests/skill-sync-check.mjs       # 计数漂移门 + .gitattributes 门（文档里的技能件数必须等于磁盘实测）
