@@ -42,7 +42,7 @@
 | 维度 | 值 | 怎么核 |
 |---|---|---|
 | 分支 / HEAD | `master` @ `a338eb5` | `git rev-parse --short HEAD` |
-| 提交 / 跟踪文件 | 178 / 169 | `git rev-list --count HEAD` / `git ls-files` |
+| 提交 / 跟踪文件 | 179 / 169 | `git rev-list --count HEAD` / `git ls-files` |
 | 角色 / 人格文件 | 23 / 34（23 人格 + 11 评审清单） | `Get-ChildItem personas -Recurse -Filter *.md` |
 | 工作流技能 | 25 个 `SKILL.md` | `Get-ChildItem skills -Recurse -Filter SKILL.md` |
 | 确定性工具 / 文档正本 | 25 / 8 | `Get-ChildItem tools -File` / `docs` |
