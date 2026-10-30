@@ -180,9 +180,22 @@ export function checkFactValues(text, facts) {
     rows.push({ label, docValue, actualValue, ok: String(docValue) === String(actualValue) })
   }
 
-  // 提交 / 跟踪文件：`| 提交 / 跟踪文件 | 176 / 165 |`
+  // 提交 / 跟踪文件：`| 提交 / 跟踪文件 | 179 / 169 |`
+  //
+  // ⚠️ **提交数用区间容差，不做精确对账**（2026-10-29 实测抓到的设计缺陷）：
+  // 「更新本文档」这个动作本身会产生一个新提交 ⇒ 文档里写的提交数**永远差 1**，
+  // 精确对账导致「越改越红、无法收敛」的死循环（实测 179 → 提交后 180 → 又红）。
+  // 故改为允许 `actual - doc ∈ [0, 1]`：滞后 0（尚未提交）或 1（本次提交自带）都算对。
+  // **超过 1 仍红**——那说明确实有多个批次没同步，判据的鉴别力保留。
   const commitRow = src.match(/提交\s*\/\s*跟踪文件\s*\|\s*(\d+)\s*\/\s*(\d+)/)
-  add('提交数', commitRow?.[1] ?? null, facts.count)
+  const docCommits = commitRow?.[1] === undefined ? null : Number(commitRow[1])
+  const commitLag = docCommits === null ? null : (facts.count - docCommits)
+  rows.push({
+    label: '提交数（容差 ≤1）',
+    docValue: docCommits,
+    actualValue: facts.count,
+    ok: commitLag !== null && commitLag >= 0 && commitLag <= 1,
+  })
   add('跟踪文件数', commitRow?.[2] ?? null, facts.tracked)
 
   // 确定性工具 / 文档正本：`| 确定性工具 / 文档正本 | 24 / 7 |`
@@ -472,6 +485,16 @@ export function selftest() {
     '| 主测试套件 / `npm test` 门数 | 全绿 / 14 道门 | `node tests/run.mjs` |',
   ].join('\n')
   expect('G6 阴性对照：数字与真值一致判绿', checkFactValues(goodFacts, factsSample).ok === true)
+  // 提交数容差：滞后 1 判绿（改文档本身会产生一个提交，实测的死循环根因）
+  const lag1 = goodFacts.replace('| 提交 / 跟踪文件 | 200 / 170 |', '| 提交 / 跟踪文件 | 199 / 170 |')
+  expect('G6 提交数滞后 1 ⇒ 绿（update 文档自带一个新提交，否则永不收敛）',
+    checkFactValues(lag1, factsSample).ok === true)
+  // 滞后 2 必须红（说明确实多个批次没同步，鉴别力保留）
+  const lag2 = goodFacts.replace('| 提交 / 跟踪文件 | 200 / 170 |', '| 提交 / 跟踪文件 | 198 / 170 |')
+  expect('G6 提交数滞后 2 ⇒ 红（真滞后必须抓出）', checkFactValues(lag2, factsSample).ok === false)
+  // 文档写多了（超前）也必须红
+  const ahead = goodFacts.replace('| 提交 / 跟踪文件 | 200 / 170 |', '| 提交 / 跟踪文件 | 201 / 170 |')
+  expect('G6 提交数超前（写了不存在的提交）⇒ 红', checkFactValues(ahead, factsSample).ok === false)
   // 阳性必红：模拟「只改日期、正文不动」——正文里的旧数字与真值不符
   const staleFacts = goodFacts.replace('200 / 170', '176 / 165')
   expect('G6 阳性必红：§3 数字过时（只改日期糊弄）⇒ 红', checkFactValues(staleFacts, factsSample).ok === false)
