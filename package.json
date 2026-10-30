@@ -11,7 +11,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node tests/run.mjs && node tests/isolation-gate.mjs && node tests/advisor-llm-replay.mjs && node tests/skill-sync-check.mjs && node tests/boot-schema-check.mjs && node tools/crgate.test.mjs && node tools/publish-scan.test.mjs && node tools/verify-imp26.mjs && node tools/taskbook-26a-negative.mjs && node tools/opt-b2-s3-gate.mjs --selftest && node tools/alias-contract-gate.mjs && node tools/constraint-audit.mjs && node tools/verifiability-check.mjs",
+    "test": "node tests/run.mjs && node tests/isolation-gate.mjs && node tests/advisor-llm-replay.mjs && node tests/skill-sync-check.mjs && node tests/boot-schema-check.mjs && node tools/crgate.test.mjs && node tools/publish-scan.test.mjs && node tools/verify-imp26.mjs && node tools/taskbook-26a-negative.mjs && node tools/opt-b2-s3-gate.mjs --selftest && node tools/alias-contract-gate.mjs && node tools/constraint-audit.mjs && node tools/verifiability-check.mjs && node tools/project-status-gate.mjs --execute",
     "test:unit": "node tests/run.mjs",
     "gate:isolation": "node tests/isolation-gate.mjs",
     "gate:isolation:selftest": "node tests/isolation-gate.mjs --selftest",
@@ -26,6 +26,8 @@
     "gate:alias": "node tools/alias-contract-gate.mjs",
     "gate:constraints": "node tools/constraint-audit.mjs",
     "gate:verifiability": "node tools/verifiability-check.mjs",
+    "gate:project-status": "node tools/project-status-gate.mjs --execute",
+    "gate:project-status:selftest": "node tools/project-status-gate.mjs --selftest",
     "gate:constraint-mutation": "node tools/constraint-mutation-verify.mjs",
     "gate:constraint-mutation:selftest": "node tools/constraint-mutation-verify.mjs --selftest"
   },

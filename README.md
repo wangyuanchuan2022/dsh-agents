@@ -248,13 +248,15 @@ DSH 设置 → 插件 → 「Agents 三档模型路由」卡片，三档各配 p
 | `tools/publish-scan.mjs` | 发布前脱敏机检：六类扫描（secrets / PII / 内部路径 / 危险文件 / 配置完整性 / git 历史）+ 三值裁定（PASS / PASS-WITH-WARNINGS / FAIL，单条 CRITICAL 即 FAIL）；`--strict-tracked --git-history` 为单仓放行门 | `node tools/publish-scan.test.mjs`（53 断言） |
 | `tools/install-personas.mjs` | 人格批量安装（默认跳过已有自定义版本的角色） | — |
 | `tools/assemble-review.mjs` | 评审材料装配（`tools/approved.json` 记录批准来源与时间） | — |
+| `tools/project-status-gate.mjs` | 项目全景保鲜门（`docs/PROJECT-STATUS.md`）：行数 ≤100（= advisor `read_file` 上限）/ 「最后更新」不早于最近 5 commit / §2 与 CHANGELOG 批次对齐 / §3 只读命令真能跑（`--execute`） | `node tools/project-status-gate.mjs --selftest`（14 例） |
 
 ## 测试
 
 ```bash
-node tests/run.mjs                    # 主测试（378 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ B2 注入面组（catalog 行/help 单源/allowTools 单授）+ 动态 provider 组（xd pool / codex connect 目录补全 + 按模型名反查）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
+node tests/run.mjs                    # 主测试（382 passed / 0 failed）：纯逻辑 + 假宿主全链路 + 端点 + advisor（含 V3 检索/上下文/agentic/行为验收 + 项目全景层）+ 浏览器半/manifest 门 + B1 三特性组（toolscope/reply/生效率读数组/预设挂载与磁盘装载器）+ B2 注入面组（catalog 行/help 单源/allowTools 单授）+ 动态 provider 组（xd pool / codex connect 目录补全 + 按模型名反查）+ 独立门接线组（body-hash 真实门+自测 / usage-probe / session-guard 自测）
 node tools/crgate.test.mjs            # 65 断言
 node tools/publish-scan.test.mjs      # 53 断言
+node tools/project-status-gate.mjs --execute  # 项目全景保鲜门（14 道门之一，已挂进 npm test）
 node tests/skill-sync-check.mjs       # 计数漂移门 + .gitattributes 门（文档里的技能件数必须等于磁盘实测）
 node tests/skill-sync-check.mjs --selftest  # 上述判据的负向自测（变异体必须变红）
 node tests/boot-schema-check.mjs      # 宿主真实校验器验收门（装前必过）

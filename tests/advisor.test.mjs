@@ -28,7 +28,10 @@ import {
   resolveAdvisorConfig, resolveAdvisorModel, installAdvisor, ADVISOR_ENDPOINT,
   resolveAdvisorDataDir, DEFAULT_ADVISOR_DATA_DIR, ADVISOR_DATA_DIR_ENV, ADVISOR_TRACE_ENV,
 } from '../lib/advisor/index.js'
-import { AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, renderVisibleSurface, SEEN_WINDOW_SIZE } from '../lib/advisor/observer.js'
+import {
+  AdvisorObserver, isRewriteEvent, isReviewableTurnEnd, isHumanInputEvent, renderVisibleSurface, SEEN_WINDOW_SIZE,
+  ADVISOR_STEP_TEXT_CHARS, ADVISOR_STEP_MAX_GAP, ADVISOR_MAX_REVIEWS_PER_TURN, visibleTextCharsOf,
+} from '../lib/advisor/observer.js'
 import { AdvisorRuntime, parseReviewOutput, AdvisorConversation, classifyCompletion, ADVISOR_MAX_TOKENS, ADVISOR_FINISH_KINDS, ADVISOR_CONVERSATION_MAX_CHARS, DEFAULT_ADVISOR_SYSTEM_PROMPT, enforceEvidenceFloor, ADVISOR_MIN_BLOCKER_CONFIDENCE, filterEchoNotes, ADVISOR_ECHO_MIN_CONTAIN_CHARS } from '../lib/advisor/runtime.js'
 import { AdvisorDelivery, buildAdvisorMessage, isAdvisorMessage, ADVISOR_COOLDOWN_EXEMPT, ADVISOR_MARKER } from '../lib/advisor/delivery.js'
 import { AdvisorStore, normalizeRecord, sessionConfigPath, sessionSeenPath, CONFIG_FILE } from '../lib/advisor/store.js'
@@ -3425,14 +3428,15 @@ export function testS1aRetrieval(t) {
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
-  t('S1a-6 AC-13：预算三项独立声明 + 唯一计量函数（Base 与 Repository 互不占用，总 ≤48KB）', () => {
+  t('S1a-6 AC-13：预算三项独立声明 + 唯一计量函数（Base 与 Repository 互不占用，总 ≤49KB）', () => {
     // ① 三项独立声明（值由幂运算表达 ⇒ 本文件不含被禁字面量）
     assert.equal(typeof BASE_CONTEXT_BYTES, 'number')
-    assert.equal(BASE_CONTEXT_BYTES, 2 ** 13, 'Base Context 必须独立声明为 8KB')
+    // 2026-10-29：Base 由 8KB 上调至 9KB（用户授权；依据见 budget.js 注释与 CHANGELOG）
+    assert.equal(BASE_CONTEXT_BYTES, 2 ** 10 * 9, 'Base Context 必须独立声明为 9KB')
     assert.equal(RETRIEVAL_CALL_BYTES, 2 ** 12 * 5, '单次 retrieval 必须独立声明为 20KB')
     assert.equal(RETRIEVAL_TOTAL_BYTES, 2 ** 13 * 5, '检索段合计必须独立声明为 40KB')
     assert.equal(TOTAL_INJECTION_BYTES, BASE_CONTEXT_BYTES + RETRIEVAL_TOTAL_BYTES, '总注入 = Base + Repository（并列相加）')
-    assert.equal(TOTAL_INJECTION_BYTES, 2 ** 13 * 6, '总注入上限 = 48KB')
+    assert.equal(TOTAL_INJECTION_BYTES, 2 ** 10 * 9 + 2 ** 13 * 5, '总注入上限 = 49KB（Base 9 + Repository 40）')
     // 结构化声明：两项互相 excludes（防「第二种读法」复活）
     assert.equal(BUDGET_ITEMS.base.bytes, BASE_CONTEXT_BYTES)
     assert.equal(BUDGET_ITEMS.repository.bytes, RETRIEVAL_TOTAL_BYTES)
@@ -3518,15 +3522,16 @@ export function testS1aRetrieval(t) {
     // 源级常量锁 + 变异必红（把常量调小）
     const budgetRel = 'lib/advisor/retrieval/budget.js'
     const budgetText = readFileSync(fileURLToPath(new URL(`../${budgetRel}`, import.meta.url)), 'utf8')
+    // 2026-10-29：Base 由 8KB 上调至 9KB（用户授权；见 budget.js 注释 / CHANGELOG）
     const locks = [
-      /export const BASE_CONTEXT_BYTES = 8 \* KB/,
+      /export const BASE_CONTEXT_BYTES = 9 \* KB/,
       /export const RETRIEVAL_CALL_BYTES = 20 \* KB/,
       /export const RETRIEVAL_TOTAL_BYTES = 40 \* KB/,
     ]
     const violationsOf = (src) => locks.filter((re) => !re.test(src)).length
-    assert.equal(violationsOf(budgetText), 0, 'AC-15：三项常量必须逐字独立声明（8/20/40 × KB）')
+    assert.equal(violationsOf(budgetText), 0, 'AC-15：三项常量必须逐字独立声明（9/20/40 × KB）')
     for (const [label, re, repl] of [
-      ['Base 调小', /BASE_CONTEXT_BYTES = 8 \* KB/, 'BASE_CONTEXT_BYTES = 4 * KB'],
+      ['Base 调小', /BASE_CONTEXT_BYTES = 9 \* KB/, 'BASE_CONTEXT_BYTES = 4 * KB'],
       ['单次 retrieval 调小', /RETRIEVAL_CALL_BYTES = 20 \* KB/, 'RETRIEVAL_CALL_BYTES = 10 * KB'],
       ['合计调小', /RETRIEVAL_TOTAL_BYTES = 40 \* KB/, 'RETRIEVAL_TOTAL_BYTES = 20 * KB'],
     ]) {
@@ -3535,7 +3540,7 @@ export function testS1aRetrieval(t) {
       assert.ok(violationsOf(mutated) > 0, `AC-15 变异必红：${label}`)
     }
     // 真文件变异（跑完还原 + SHA256 校验）：调小常量 → 真源码锁必红
-    const mutated = withMutatedFile(budgetRel, (src) => src.replace(/BASE_CONTEXT_BYTES = 8 \* KB/, 'BASE_CONTEXT_BYTES = 4 * KB'))
+    const mutated = withMutatedFile(budgetRel, (src) => src.replace(/BASE_CONTEXT_BYTES = 9 \* KB/, 'BASE_CONTEXT_BYTES = 4 * KB'))
     assert.ok(violationsOf(mutated.mutatedText) > 0, 'AC-15：真文件变异后源码锁必须变红')
   })
 
@@ -3782,6 +3787,10 @@ import {
   DECISION_STATES, DECISION_CLASSES, UNAVAILABLE_MARK as DEC_UNAVAILABLE,
 } from '../lib/advisor/context/decisions.js'
 import { buildProjectState, heuristicPhase, assertPhase, PROJECT_PHASES } from '../lib/advisor/context/project.js'
+import {
+  loadProjectStatus, renderProjectStatus, PROJECT_STATUS_REL_PATH,
+  PROJECT_STATUS_MAX_LINES, PROJECT_STATUS_TITLE, UNAVAILABLE_MARK as STATUS_UNAVAILABLE,
+} from '../lib/advisor/context/project-status.js'
 import { buildRepositoryContext, extractSymbolRanges, L3_NOT_IMPLEMENTED_NOTE, mentionedPaths, LEVEL_L1 } from '../lib/advisor/context/repository.js'
 import {
   screen, classifyMessage, shouldRunRepoAnalysis, isPureAck, isNoInformation, resolveTier,
@@ -6846,5 +6855,258 @@ export function testS5Closeout(t) {
       assert.ok(steerRaw.includes('src/ratelimit.js'), 'E-1e：steer 内容 = 真意见')
       assert.ok(!steerRaw.includes('请评审这个方向'), 'E-1e：steer 内容不得含回显原文')
     } finally { run.cleanup() }
+  })
+}
+
+
+// ── 项目全景层（PROJECT-STATUS，2026-10-29）────────────────────────────────────
+export function testProjectStatus(t) {
+  t('PS-1 项目全景：不可用必须显式标注（不存在/抛错/空文件三态）', () => {
+    const missing = loadProjectStatus({ readText: () => { throw Object.assign(new Error('nope'), { code: 'missing' }) } })
+    assert.equal(missing.available, false)
+    assert.ok(String(missing.reason).includes('missing'))
+    const rm2 = renderProjectStatus(missing)
+    assert.ok(rm2.includes(PROJECT_STATUS_TITLE))
+    assert.ok(rm2.includes(STATUS_UNAVAILABLE))
+    const noFacet = loadProjectStatus({})
+    assert.equal(noFacet.available, false)
+    assert.ok(renderProjectStatus(noFacet).includes(STATUS_UNAVAILABLE))
+    const empty = loadProjectStatus({ readText: () => ({ text: '   \n\n  ' }) })
+    assert.equal(empty.available, false)
+    assert.ok(renderProjectStatus(empty).includes(STATUS_UNAVAILABLE))
+    assert.equal(renderProjectStatus(null), '')
+  })
+
+  t('PS-2 项目全景：行数上限与 ACI read_file 同口径（100 行），超限显式截断', () => {
+    assert.equal(PROJECT_STATUS_MAX_LINES, MAX_TOOL_OUTPUT_LINES)
+    assert.equal(PROJECT_STATUS_MAX_LINES, 100)
+    const exact = Array.from({ length: 100 }, (_, i) => `行 ${i + 1}`).join('\n')
+    const atLimit = loadProjectStatus({ readText: () => ({ text: exact }) })
+    assert.equal(atLimit.truncated, false)
+    const over = Array.from({ length: 101 }, (_, i) => `行 ${i + 1}`).join('\n')
+    const overLimit = loadProjectStatus({ readText: () => ({ text: over }) })
+    assert.equal(overLimit.truncated, true)
+    assert.equal(overLimit.droppedLines, 1)
+    assert.ok(overLimit.text.includes('已截断'))
+  })
+
+  t('PS-3 项目全景：并入 Repository 池（不动 Base 8KB），且 AC-62 门挡不住它', async () => {
+    const dir = buildS2Fixture()
+    const { retrieval, scratch } = s2Retrieval(dir)
+    try {
+      await initFixtureRepo(dir)
+      const statusText = '# 全景\n- 当前在做：PS_STATUS_MARK 批次\n- 下一步：PS_NEXT_MARK'
+      const status = loadProjectStatus({ readText: () => ({ text: statusText }) })
+      const noStatus = buildContext({ retrieval, messageText: '继续', systemPrompt: 'S' })
+      const withStatus = buildContext({ retrieval, messageText: '继续', systemPrompt: 'S', projectStatus: status })
+      assert.equal(withStatus.repository.available, false)
+      assert.ok(withStatus.text.includes(PROJECT_STATUS_TITLE))
+      assert.ok(withStatus.text.includes('PS_STATUS_MARK'))
+      assert.equal(withStatus.projectStatusBytes > 0, true)
+      assert.equal(withStatus.baseBytes, noStatus.baseBytes)
+      assert.ok(withStatus.baseBytes <= BASE_CONTEXT_BYTES)
+      assert.ok(withStatus.repositoryBytes > noStatus.repositoryBytes)
+      assert.ok(withStatus.repositoryBytes <= RETRIEVAL_TOTAL_BYTES)
+      assert.ok(withStatus.bytes <= TOTAL_INJECTION_BYTES)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  t('PS-4 项目全景：来源路径唯一、仓库内真实存在且 ≤100 行（防腐烂）', () => {
+    assert.equal(PROJECT_STATUS_REL_PATH, 'docs/PROJECT-STATUS.md')
+    const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+    const abs = join(repoRoot, PROJECT_STATUS_REL_PATH)
+    assert.equal(existsSync(abs), true)
+    const lines = readFileSync(abs, 'utf8').replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n')
+    assert.ok(lines.length <= PROJECT_STATUS_MAX_LINES,
+      `PS-4③：必须 ≤ ${PROJECT_STATUS_MAX_LINES} 行，实得 ${lines.length}`)
+    assert.ok(/最后更新：\d{4}-\d{2}-\d{2}/.test(lines.join('\n')))
+    const retrieval = createRetrieval({ root: repoRoot, dataDir: repoRoot })
+    const loaded = loadProjectStatus({ readText: (rel) => retrieval.readFile(rel) })
+    assert.equal(loaded.available, true)
+    assert.equal(loaded.truncated, false)
+  })
+}
+
+// ── 方案 B：step 级增量触发 + 长 turn 保底（2026-10-29）────────────────────────
+export function testStepCadence(t) {
+  function cadenceHarness(options = {}) {
+    const sessionId = options.sessionId ?? 's-cadence'
+    const deltas = []
+    const stepReviews = []
+    let messages = options.messages ?? [msg('user', '做 X'), msg('assistant', '开始')]
+    const session = { id: sessionId, ownEvents: () => [], deriveMessages: () => messages }
+    let seqNo = 100
+    const nextSeq = () => { seqNo += 1; return seqNo }
+    const observer = new AdvisorObserver({
+      getSession: () => session,
+      sessionMeta: () => ({ sessionId, sessionName: sessionId }),
+      loadSeen: options.loadSeen,
+      saveSeen: options.saveSeen,
+      onDelta: (id, delta) => { deltas.push(delta) },
+      onStepReview: (id, info) => { stepReviews.push(info) },
+      logger: { warn: () => {}, error: () => {} },
+    })
+    const feed = (e) => { observer.handleEvent(sessionId, [], e) }
+    const assistantText = (text) => {
+      messages = [...messages, msg('assistant', text)]
+      feed({ type: 'assistant/message', seq: nextSeq(), data: { message: { role: 'assistant', content: [{ type: 'text', text }] } } })
+    }
+    const step = (turn, text) => {
+      feed({ type: 'step/start', seq: nextSeq(), data: { turn } })
+      if (text !== undefined) assistantText(text)
+      feed({ type: 'step/end', seq: nextSeq(), data: { turn } })
+    }
+    const latch = () => {
+      feed({ type: 'turn/start', seq: nextSeq(), data: { turn: 't0' } })
+      step('t0', '起始产出')
+      feed({ type: 'turn/end', seq: nextSeq(), data: { turn: 't0', reason: { kind: 'completed' } } })
+    }
+    return { observer, deltas, stepReviews, feed, step, latch, session }
+  }
+
+  t('V2 增量触发：单 turn 内新增可见文本 ≥ 阈值 ⇒ 触发；触发后计数归零', () => {
+    const h = cadenceHarness()
+    h.latch()
+    const before = h.stepReviews.length
+    const half = '甲'.repeat(Math.ceil(ADVISOR_STEP_TEXT_CHARS / 2) + 10)
+    h.step('t1', half)
+    assert.equal(h.stepReviews.length, before, 'V2a：单条未达阈值不触发')
+    h.step('t1', half)
+    assert.equal(h.stepReviews.length, before + 1, 'V2b：累计达阈值必须触发')
+    assert.equal(h.stepReviews[before].trigger, 'text-increment')
+    assert.ok(h.stepReviews[before].textChars >= ADVISOR_STEP_TEXT_CHARS)
+  })
+
+  t('V1 必红负向：文本增量不足 且 step 间隔未到 ⇒ 不触发', () => {
+    const h = cadenceHarness()
+    h.latch()
+    const before = h.stepReviews.length
+    for (let i = 0; i < 3; i += 1) h.step('t1', '短文本')
+    assert.equal(h.stepReviews.length, before)
+  })
+
+  t('V3 必红负向：step 间隔已到但**无新可见文本** ⇒ 不触发（空评防护）', () => {
+    const h = cadenceHarness()
+    h.latch()
+    const before = h.stepReviews.length
+    for (let i = 0; i < ADVISOR_STEP_MAX_GAP + 5; i += 1) h.step('t1', undefined)
+    assert.equal(h.stepReviews.length, before)
+  })
+
+  t('V3b 正向：间隔已到**且**有新可见文本 ⇒ 按 step-gap 触发', () => {
+    const h = cadenceHarness()
+    h.latch()
+    const before = h.stepReviews.length
+    h.step('t1', '一点点文本')
+    for (let i = 0; i < ADVISOR_STEP_MAX_GAP; i += 1) h.step('t1', undefined)
+    assert.equal(h.stepReviews.length, before + 1)
+    assert.equal(h.stepReviews[before].trigger, 'step-gap')
+  })
+
+  t('V4 必红负向：同 turn 触发达硬上限后不再触发', () => {
+    const h = cadenceHarness()
+    h.latch()
+    const before = h.stepReviews.length
+    const big = '乙'.repeat(ADVISOR_STEP_TEXT_CHARS + 50)
+    for (let i = 0; i < ADVISOR_MAX_REVIEWS_PER_TURN; i += 1) h.step('t1', big)
+    assert.equal(h.stepReviews.length, before + ADVISOR_MAX_REVIEWS_PER_TURN)
+    h.step('t1', big)
+    assert.equal(h.stepReviews.length, before + ADVISOR_MAX_REVIEWS_PER_TURN)
+  })
+
+  t('V5 turn/end 仍必评一次，且键不含第三段（与历史 seen 兼容）', () => {
+    const seenWrites = []
+    const h = cadenceHarness({ sessionId: 's-v5', saveSeen: (id, st) => { seenWrites.push(st) } })
+    h.latch()
+    h.feed({ type: 'turn/start', seq: 200, data: { turn: 'tX' } })
+    h.step('tX', '甲'.repeat(ADVISOR_STEP_TEXT_CHARS + 50))
+    h.feed({ type: 'turn/end', seq: 210, data: { turn: 'tX', reason: { kind: 'completed' } } })
+    const keys = [...new Set(seenWrites.flatMap((w) => w.reviewed))]
+    assert.ok(keys.some((k) => /::s\d+$/.test(k)), `V5a：step 触发必须用带第三段的键（${JSON.stringify(keys)}）`)
+    assert.ok(keys.some((k) => k === 's-v5::tX'), `V5b：turn/end 必须用旧键 s-v5::tX（${JSON.stringify(keys)}）`)
+  })
+
+  t('V6 兼容：旧格式 seen（仅 sid::turn 键）可加载且不重复计费', () => {
+    const h = cadenceHarness({ sessionId: 's-v6', loadSeen: () => ({ reviewed: ['s-v6::tA'], lastReviewedSeq: 5 }) })
+    h.latch()
+    const before = h.deltas.length
+    h.feed({ type: 'turn/start', seq: 300, data: { turn: 'tA' } })
+    h.step('tA', '产出')
+    h.feed({ type: 'turn/end', seq: 310, data: { turn: 'tA', reason: { kind: 'completed' } } })
+    assert.equal(h.deltas.length, before)
+  })
+
+  t('V7 必红负向：step 触发**不得**推进 lastReviewedSeq（否则后续触发被水位挡）', () => {
+    const writes = []
+    const h = cadenceHarness({ sessionId: 's-v7', saveSeen: (id, st) => { writes.push(st.lastReviewedSeq) } })
+    h.latch()
+    const baseWatermark = writes.length > 0 ? writes[writes.length - 1] : -1
+    const beforeWrites = writes.length
+    h.step('t1', '丙'.repeat(ADVISOR_STEP_TEXT_CHARS + 50))
+    assert.ok(writes.length > beforeWrites, 'V7：前置——step 触发必须真的发生')
+    const newWm = writes.slice(beforeWrites)
+    assert.deepEqual(newWm.filter((w) => w !== baseWatermark), [],
+      `V7：水位必须不变（基线 ${baseWatermark}，实得 ${JSON.stringify(newWm)}）`)
+  })
+}
+
+// ── 提示词字节预算门（2026-10-29）──────────────────────────────────────────────
+export function testPromptBudget(t) {
+  t('PB-1 必红门：内置提示词进 Base 后**不得触发任何裁剪**', () => {
+    const fakeGit = {
+      branch: 'master', headSha: '0123456789abcdef', statusSummary: { total: 1, modified: 1, untracked: 0 },
+      statusPaths: ['lib/x.js'], recent: [{ sha: '0123456', subject: 'x' }],
+    }
+    const project = buildProjectState({ gitFacts: fakeGit })
+    const noDecisions = buildBaseContext({ systemPrompt: DEFAULT_ADVISOR_SYSTEM_PROMPT, decisions: null, project })
+    assert.equal(noDecisions.trimmed, false,
+      `PB-1a：内置提示词不得触发裁剪（Base ${noDecisions.bytes}/${BASE_CONTEXT_BYTES}，${JSON.stringify(noDecisions.unresolved)}）`)
+    const threeDecisions = {
+      available: true,
+      entries: Array.from({ length: 3 }, (_, i) => ({ id: 'D-00' + (i + 1), state: 'active', klass: '已确认决策', text: '一条典型决策正文', reason: '理由', rejected: '—', phase: 'S2' })),
+      errors: [], relPath: 'docs/DECISIONS.md', bytes: 0,
+      byClass: { 已确认决策: [], 不可违反约束: [], 已知技术债: [], 已否决方案: [], 当前阶段目标: [] },
+    }
+    const withDecisions = buildBaseContext({ systemPrompt: DEFAULT_ADVISOR_SYSTEM_PROMPT, decisions: threeDecisions, project })
+    assert.equal(withDecisions.trimmed, false,
+      `PB-1b：3 条决策也不得触发裁剪（${withDecisions.bytes}/${BASE_CONTEXT_BYTES}，${JSON.stringify(withDecisions.unresolved)}）`)
+  })
+
+  t('PB-2 必红门：关键段必须逐字在场（防「被裁掉但没人发现」）', () => {
+    const fakeGit = { branch: 'master', headSha: '0123456789abcdef', statusSummary: { total: 0, modified: 0, untracked: 0 }, statusPaths: [], recent: [] }
+    const project = buildProjectState({ gitFacts: fakeGit })
+    const r = buildBaseContext({ systemPrompt: DEFAULT_ADVISOR_SYSTEM_PROMPT, decisions: null, project })
+    for (const [label, anchor] of [
+      ['输出格式契约', '## 输出格式（严格契约）'],
+      ['输出锚点', '## 输出锚点'],
+      ['时机纪律', '## 时机纪律'],
+      ['blocker 继续成本句', 'blocker 必带继续成本'],
+      ['数据隔离安全条款', '<repository-data>'],
+    ]) {
+      assert.ok(r.text.includes(anchor), `PB-2：**${label}** 必须逐字在场（锚 \`${anchor}\`）`)
+    }
+  })
+
+  t('PB-3 双路比对：提示词导出值 == runtime.js 源码字面量（防只改一处静默漂移）', () => {
+    const src = readFileSync(fileURLToPath(new URL('../lib/advisor/runtime.js', import.meta.url)), 'utf8')
+    const MARK = 'export const DEFAULT_ADVISOR_SYSTEM_PROMPT = '
+    const start = src.indexOf(MARK)
+    assert.ok(start >= 0, 'PB-3：必须能定位字面量起点')
+    const bt = String.fromCharCode(96)
+    const literalStart = start + MARK.length
+    assert.equal(src[literalStart], bt, 'PB-3：字面量必须以反引号开头')
+    const end = src.indexOf(bt, literalStart + 1)
+    assert.ok(end > literalStart, 'PB-3：必须能定位字面量终点')
+    const inline = src.slice(literalStart + 1, end)
+    assert.equal(inline, DEFAULT_ADVISOR_SYSTEM_PROMPT,
+      'PB-3：导出值必须与源码字面量**逐字一致**（只改一处会造成审查件拿错基准）')
+  })
+
+  t('PB-4 上限：提示词不得超过 advisorSystemPrompt 契约上限', () => {
+    const bytes = measureInjection(DEFAULT_ADVISOR_SYSTEM_PROMPT).bytes
+    assert.ok(bytes <= 8 * 1024, `PB-4：${bytes} B 不得超过 8KB 契约上限`)
   })
 }

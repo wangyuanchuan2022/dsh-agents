@@ -17,8 +17,8 @@
 | 角色 / 泳道 | 23（build 10 · review 6 · domain 7） | `agent_roles action=list` |
 | 工作流技能 | 25（入口 2 · 流水线 4 · 协作 5 · 方法论 13 · 顾问 1） | `skills/` |
 | 评审清单 | 11（语言 7 + 专项 4） | `personas/checklists/` |
-| 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 24（机检脚本 15 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
-| 测试断言 | 主套件 382 + crgate 65 + publish-scan 53 + persona-gate 33 + taskbook-26a 11 + 隔离门自测 5 + LLM 回放 9 = 558（另有三道新门各带 selftest：注入面 7 / 别名 A1–A6 / 约束审计 G1–G5 / 可复核性 V1–V5） | `npm test` 串联 13 个入口 |
+| 确定性工具 | 宿主注册 3（+own 层 agent_reply）+ `tools/` 共 25（机检脚本 16 · 测量/读取 6 · 负向自测 2 · 数据 1） | `lib/index.js` + `tools/` |
+| 测试断言 | 主套件 394 + crgate 65 + publish-scan 53 + persona-gate 33 + taskbook-26a 11 + 隔离门自测 5 + LLM 回放 9 = 570（另有三道新门各带 selftest：注入面 7 / 别名 A1–A6 / 约束审计 G1–G5 / 可复核性 V1–V5） | `npm test` 串联 14 个入口 |
 | 运行时依赖 | **2**（@deepseek-ai/schemastery + web-tree-sitter@0.27.0，均公开 registry 可装；后者为 B4 符号级检索引入，MIT） | `package.json` |
 | 上游许可 | MIT ×3（OMC / ECC / MACAE），声明全文随仓分发 | `THIRD-PARTY-NOTICES.md` |
 
@@ -34,7 +34,7 @@ dsh-agents/
 ├── personas/       (34)               23 份角色人格 + checklists/ 11 份评审清单
 ├── skills/         (28)               25 个 SKILL.md + README + 2 references（replica-map.json 未跟踪）
 ├── policies/       (2)                toolscope 策略数据（roster 基表 + 23 角色引用表）
-├── tools/          (24)               独立 CLI 工具与机检脚本（不进宿主运行时）
+├── tools/          (25)               独立 CLI 工具与机检脚本（不进宿主运行时）
 ├── tests/          (13)               主测试 + 计数/工程卫生门 + 安装验收门 + 重启探针 + 隔离门/回放设施
 ├── docs/           (8)                任务书模板正本 + advisor 契约正本 + 开源复用账本 + 设计原则正本 + 别名契约 + 约束审计 + 可复核性矩阵 + 项目全景
 ├── README.md                          使用向导（安装 / 快速开始 / 配置 / 已知限制）
