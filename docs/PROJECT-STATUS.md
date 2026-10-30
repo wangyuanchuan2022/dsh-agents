@@ -79,8 +79,8 @@
 | 每批改了什么（挂 commit 哈希） | `CHANGELOG.md`（Unreleased 节） |
 | advisor 行为契约（**改 advisor 前必读**） | `docs/advisor-contract.md` |
 | 任务书七节模板 / 提示词纪律 → 闸门对照（108 条款） | `docs/task-brief-v3.md` / `docs/constraint-audit.md` |
-| 对外宣称 × 五列证据矩阵 / 档位别名契约 + 例外登记 | `docs/VERIFIABILITY.md` / `docs/alias-contract.md` |
-| 今后写代码的判定纪律 | `docs/design-principles.md` |
+| 证据矩阵 / 别名契约 / 判定纪律 | `docs/VERIFIABILITY.md` / `docs/alias-contract.md` / `docs/design-principles.md` |
+| **codegraph 代码图用法与初始方式** | `~/.dsh/AGENTS.md` 的「codegraph 代码图」节 |
 | **R3 路线图与全部待办** / 开放的决策点 | `agent-out/opt-r3-goals.md` / `agent-out/open-questions.md` |
 
 > `agent-out/`、`review/`、`backup/` 在 advisor 的 walk **排除表**内 ⇒ `list_files`/`search` **看不见**，
